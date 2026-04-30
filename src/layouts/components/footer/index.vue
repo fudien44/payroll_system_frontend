@@ -2,25 +2,18 @@
   <VFooter class="v-layout-footer">
     <div class="v-footer-content d-flex align-center flex-wrap">
       <span>
-        Crafted with
+        Developed 
         <VIcon
-          icon="mdi-heart"
-          color="error"
-        /> by <strong>iCreator Studio</strong> © 2023
+          icon="mdi-language-typescript"
+          color="success"
+        />
+        by:<strong> ICT Unit</strong> <span style="color: #285c4d">Department of Health - CHD XII</span>
       </span>
 
       <VSpacer />
 
       <div class="d-none d-md-block">
-        <VBtn
-          color="primary"
-          variant="text"
-          href="https://docs.icreatorstudio.com/"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Documentation
-        </VBtn>
+        <span style="color: #285c4d">Version 1.0</span>
       </div>
     </div>
   </VFooter>
