@@ -82,6 +82,16 @@ const router = createRouter({
       },
     },
     {
+      path: '/engas',
+      name: 'Engas',
+      component: () => import('@/views/Engas.vue'),
+      meta: {
+        title: 'ENGAS Reference',
+        layout: 'content',
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/register',
       name: 'register',
       component: () => import('@/views/Register.vue'),
