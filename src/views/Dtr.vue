@@ -2,6 +2,8 @@
 import BaseAlert from '@/components/base/BaseAlert.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
+import { usePayrollCalendar } from '@/composable/usePayrollCalendar'
+import { useWeekSchedule } from '@/composable/useWeekSchedule'
 import axios from '@axios'
 
 /* ─────────────────────────────────────────
@@ -48,6 +50,12 @@ interface AttendanceDay {
   undertime_minutes_am:    number
   undertime_minutes_pm:    number
   total_undertime_minutes: number
+  // ── New ──────────────────────────────────
+  is_holiday:              boolean
+  holiday_type:            'regular' | 'special' | null
+  holiday_label:           string | null
+  is_suspension:           boolean
+  suspension_label:        string | null
 }
 
 interface DtrData {
@@ -60,7 +68,9 @@ interface DtrData {
   total_undertime_hours:   number
   regdays:                 number
   sat:                     number
-  name:                    string | null
+  // ── New ──────────────────────────────────
+  total_holidays:          number
+  total_suspensions:       number
   monthno:                 number
   month:                   string
   year:                    number
@@ -68,11 +78,14 @@ interface DtrData {
 
 // Enriched row with computed calendar fields
 interface AttendanceRow extends AttendanceDay {
-  day:        number
-  dayName:    string
-  isWeekend:  boolean
-  isSaturday: boolean
-  isSunday:   boolean
+  day:          number
+  dayName:      string
+  isWeekend:    boolean
+  isSaturday:   boolean
+  isSunday:     boolean
+  isFriday:     boolean                        
+  scheduleType: 'compressed' | 'standard'      
+  isRestFriday: boolean                        
 }
 
 type AlertType = 'success' | 'error' | 'warning' | 'info'
@@ -120,6 +133,10 @@ const dtrData       = ref<DtrData | null>(null)
 const alertVisible = ref(false)
 const alertMessage = ref('')
 const alertType    = ref<AlertType>('success')
+  
+// ── ADD — gives access to calendar cache for schedule detection ─────────────────────────────
+const { fetchMonth: fetchCalendarMonth } = usePayrollCalendar()
+const { getWeekScheduleType }            = useWeekSchedule()
 
 /* ─────────────────────────────────────────
    COMPUTED
@@ -142,17 +159,27 @@ const attendanceRows = computed<AttendanceRow[]>(() => {
 
   return Object.entries(dtrData.value.attendance)
     .map(([dayStr, data]) => {
-      const day       = Number(dayStr)
-      const date      = new Date(dtrData.value!.year, dtrData.value!.monthno - 1, day)
-      const dayOfWeek = date.getDay() // 0 = Sun, 6 = Sat
+      const day          = Number(dayStr)
+      const date         = new Date(dtrData.value!.year, dtrData.value!.monthno - 1, day)
+      const dayOfWeek    = date.getDay()
+      const isFriday     = dayOfWeek === 5
+      const scheduleType = isFriday ? getWeekScheduleType(date) : 'standard'
+      const isRestFriday = isFriday && scheduleType === 'compressed' && data.entry_count === 0
 
       return {
         ...data,
         day,
-        dayName:    DAY_NAMES[dayOfWeek],
-        isWeekend:  dayOfWeek === 0 || dayOfWeek === 6,
-        isSaturday: dayOfWeek === 6,
-        isSunday:   dayOfWeek === 0,
+        dayName:      DAY_NAMES[dayOfWeek],
+        isWeekend:    dayOfWeek === 0 || dayOfWeek === 6,
+        isSaturday:   dayOfWeek === 6,
+        isSunday:     dayOfWeek === 0,
+        isFriday,
+        scheduleType,
+        isRestFriday,
+        // ── Override backend's is_absent for rest Fridays ──────────────
+        // Backend doesn't know about compressed schedule, so it marks
+        // Fridays with no biometric record as absent. We correct that here.
+        is_absent: isRestFriday ? false : data.is_absent,
       }
     })
     .sort((a, b) => a.day - b.day)
@@ -189,13 +216,16 @@ function fmtMinutes(mins: number): string {
 
 // Determines row highlight class for each attendance day
 function getRowClass(row: AttendanceRow): string {
-  if (row.isSunday)           return 'dtr-row--sunday'
-  if (row.isSaturday)         return 'dtr-row--saturday'
-  if (row.is_absent)          return 'dtr-row--absent'
-  if (row.is_half_day_absent) return 'dtr-row--halfday'
+  if (row.is_holiday)                   return 'dtr-row--holiday'
+  if (row.is_suspension)                return 'dtr-row--suspension'
+  if (row.isSunday)                     return 'dtr-row--sunday'
+  if (row.isSaturday)                   return 'dtr-row--saturday'
+  if (row.isRestFriday)                 return 'dtr-row--fri-cmp'   // ADD — before absent check
+  if (row.is_absent)                    return 'dtr-row--absent'
+  if (row.is_half_day_absent)           return 'dtr-row--halfday'
   if (row.is_late_am || row.is_late_pm) return 'dtr-row--late'
   if (row.total_undertime_minutes > 0)  return 'dtr-row--undertime'
-  if (row.entry_count > 0)    return 'dtr-row--present'
+  if (row.entry_count > 0)              return 'dtr-row--present'
   return ''
 }
 
@@ -218,12 +248,16 @@ async function fetchData() {
 async function fetchDtr() {
   if (!selectedEmp.value) return
   modalLoading.value = true
-  dtrData.value      = null // clear previous result while loading
+  dtrData.value      = null
 
   try {
-    const { data } = await axios.get(
-      `/api/dtr/${selectedEmp.value.id}/${selectedMonth.value}/${selectedYear.value}`
-    )
+    // ── Fetch calendar data in parallel with DTR records ────────────────
+    // usePayrollCalendar caches per month, so this is a no-op if already loaded.
+    // getWeekScheduleType() in attendanceRows depends on this cache being warm.
+    const [{ data }] = await Promise.all([
+      axios.get(`/api/dtr/${selectedEmp.value.id}/${selectedMonth.value}/${selectedYear.value}`),
+      fetchCalendarMonth(selectedYear.value, selectedMonth.value),   // ADD
+    ])
     dtrData.value = data
   } catch {
     showAlert('error', 'Failed to load DTR records.')
@@ -479,11 +513,20 @@ onMounted(fetchData)
           <!-- ── Working days breakdown ── -->
           <VCol cols="12">
             <div class="d-flex gap-4 flex-wrap">
+
+              <!-- Before: "Regular Days" → After: "Working Days" -->
               <div class="text-caption text-medium-emphasis">
-                Regular Days: <strong class="text-high-emphasis">{{ dtrData.regdays }}</strong>
+                Working Days: <strong class="text-high-emphasis">{{ dtrData.regdays }}</strong>
               </div>
+
               <div class="text-caption text-medium-emphasis">
                 Saturdays: <strong class="text-high-emphasis">{{ dtrData.sat }}</strong>
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                Holidays: <strong class="text-purple">{{ dtrData.total_holidays }}</strong>
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                Suspensions: <strong class="text-teal">{{ dtrData.total_suspensions }}</strong>
               </div>
               <div class="text-caption text-medium-emphasis">
                 Late Hours: <strong class="text-warning">{{ dtrData.total_late_hours }}h</strong>
@@ -491,6 +534,7 @@ onMounted(fetchData)
               <div class="text-caption text-medium-emphasis">
                 Undertime Hours: <strong class="text-info">{{ dtrData.total_undertime_hours }}h</strong>
               </div>
+
             </div>
           </VCol>
 
@@ -518,6 +562,18 @@ onMounted(fetchData)
               <div class="d-flex align-center gap-1">
                 <div class="dtr-legend dtr-legend--undertime" />
                 <span class="text-caption">Undertime</span>
+              </div>
+              <div class="d-flex align-center gap-1">
+                <div class="dtr-legend dtr-legend--holiday" />
+                <span class="text-caption">Holiday</span>
+              </div>
+              <div class="d-flex align-center gap-1">
+                <div class="dtr-legend dtr-legend--suspension" />
+                <span class="text-caption">Suspension</span>
+              </div>
+              <div class="d-flex align-center gap-1">
+                <div class="dtr-legend dtr-legend--fri-cmp" />
+                <span class="text-caption">Compressed Rest (Fri)</span>
               </div>
               <div class="d-flex align-center gap-1">
                 <div class="dtr-legend dtr-legend--weekend" />
@@ -551,22 +607,66 @@ onMounted(fetchData)
                       <span class="text-caption text-medium-emphasis ms-1">{{ row.dayName }}</span>
                     </td>
 
-                    <!-- Time columns — blank for weekends -->
-                    <template v-if="row.isSunday">
-                      <td colspan="5" class="text-center text-caption text-disabled">Sunday</td>
-                    </template>
-                    <template v-else-if="row.isSaturday">
+                    <!-- ── Holiday ── -->
+                    <template v-if="row.is_holiday">
                       <td class="col-time text-caption">{{ row.in_am  || '—' }}</td>
                       <td class="col-time text-caption">{{ row.out_am || '—' }}</td>
                       <td class="col-time text-caption">{{ row.in_pm  || '—' }}</td>
                       <td class="col-time text-caption">{{ row.out_pm || '—' }}</td>
-                      <td class="col-hours text-caption">{{ row.total_hours || '—' }}</td>
+                      <td class="col-hours text-caption">{{ row.total_hours ? `${row.total_hours}h` : '—' }}</td>
                       <td class="col-status">
-                        <VChip v-if="row.entry_count > 0" color="secondary" size="x-small" variant="tonal" label>
-                          Saturday
+                        <VChip
+                          :color="row.holiday_type === 'regular' ? 'purple' : 'deep-purple'"
+                          size="x-small"
+                          variant="tonal"
+                          label
+                        >
+                          {{ row.holiday_type === 'regular' ? 'Regular Holiday' : 'Special Holiday' }}
+                          <span v-if="row.holiday_label" class="ms-1">— {{ row.holiday_label }}</span>
                         </VChip>
                       </td>
                     </template>
+
+                    <!-- ── Suspension ── -->
+                    <template v-else-if="row.is_suspension">
+                      <td class="col-time text-caption">{{ row.in_am  || '—' }}</td>
+                      <td class="col-time text-caption">{{ row.out_am || '—' }}</td>
+                      <td class="col-time text-caption">{{ row.in_pm  || '—' }}</td>
+                      <td class="col-time text-caption">{{ row.out_pm || '—' }}</td>
+                      <td class="col-hours text-caption">{{ row.total_hours ? `${row.total_hours}h` : '—' }}</td>
+                      <td class="col-status">
+                        <VChip color="teal" size="x-small" variant="tonal" label>
+                          Suspension
+                          <span v-if="row.suspension_label" class="ms-1">— {{ row.suspension_label }}</span>
+                        </VChip>
+                      </td>
+                    </template>
+
+                    <!-- ── Sunday ── -->
+                    <template v-else-if="row.isSunday">
+                      <td colspan="5" class="text-center text-caption text-disabled">Happy Weekend 🎉</td>
+                      <td class="col-status"></td>
+                    </template>
+
+                    <!-- ── Saturday ── -->
+                    <template v-else-if="row.isSaturday">
+                      <td colspan="5" class="text-center text-caption text-disabled">Happy Weekend 🎉</td>
+                      <td class="col-status"></td>
+                    </template>
+
+                    <!-- ── Compressed Friday (Rest Day) ── ADD THIS BLOCK -->
+                    <template v-else-if="row.isRestFriday">
+                      <td colspan="5" class="text-center text-caption text-disabled">
+                        Rest Day <span class="text-caption">(Compressed Week)</span>
+                      </td>
+                      <td class="col-status">
+                        <VChip color="purple" size="x-small" variant="tonal" label>
+                          Compressed Rest
+                        </VChip>
+                      </td>
+                    </template>
+
+                    <!-- ── Regular weekday ── -->
                     <template v-else>
                       <td class="col-time text-caption" :class="{ 'text-warning': row.is_late_am }">
                         {{ row.in_am  || '—' }}
@@ -579,8 +679,6 @@ onMounted(fetchData)
                       <td class="col-hours text-caption font-weight-medium">
                         {{ row.total_hours ? `${row.total_hours}h` : '—' }}
                       </td>
-
-                      <!-- Status chips -->
                       <td class="col-status">
                         <div class="d-flex flex-wrap gap-1">
                           <VChip v-if="row.is_absent" color="error" size="x-small" variant="tonal" label>
@@ -589,22 +687,10 @@ onMounted(fetchData)
                           <VChip v-if="row.is_half_day_absent" color="warning" size="x-small" variant="tonal" label>
                             ½ Day
                           </VChip>
-                          <VChip
-                            v-if="row.total_late_minutes > 0"
-                            color="warning"
-                            size="x-small"
-                            variant="tonal"
-                            label
-                          >
+                          <VChip v-if="row.total_late_minutes > 0" color="warning" size="x-small" variant="tonal" label>
                             Late {{ fmtMinutes(row.total_late_minutes) }}
                           </VChip>
-                          <VChip
-                            v-if="row.total_undertime_minutes > 0"
-                            color="info"
-                            size="x-small"
-                            variant="tonal"
-                            label
-                          >
+                          <VChip v-if="row.total_undertime_minutes > 0" color="info" size="x-small" variant="tonal" label>
                             UT {{ fmtMinutes(row.total_undertime_minutes) }}
                           </VChip>
                           <VChip
@@ -692,23 +778,26 @@ onMounted(fetchData)
 .col-status { width: 200px; }
 
 /* ── Row highlight states ───────────────────────── */
-.dtr-row--sunday    { background: rgba(var(--v-theme-on-surface), 0.035); color: rgba(var(--v-theme-on-surface), 0.38); }
-.dtr-row--saturday  { background: rgba(var(--v-theme-on-surface), 0.02); }
-.dtr-row--absent    { background: rgba(var(--v-theme-error),   0.08); }
-.dtr-row--halfday   { background: rgba(var(--v-theme-warning), 0.08); }
-.dtr-row--late      { background: rgba(var(--v-theme-warning), 0.04); }
-.dtr-row--undertime { background: rgba(var(--v-theme-info),    0.06); }
-.dtr-row--present   {}
+.dtr-row--holiday    { background: rgba(var(--v-theme-purple),  0.08); }
+.dtr-row--suspension { background: rgba(var(--v-theme-teal),    0.08); }
+.dtr-row--sunday     { background: rgba(var(--v-theme-on-surface), 0.035); color: rgba(var(--v-theme-on-surface), 0.38); }
+.dtr-row--saturday   { background: rgba(var(--v-theme-on-surface), 0.02); }
+.dtr-row--absent     { background: rgba(var(--v-theme-error),   0.08); }
+.dtr-row--halfday    { background: rgba(var(--v-theme-warning), 0.08); }
+.dtr-row--late       { background: rgba(var(--v-theme-warning), 0.04); }
+.dtr-row--undertime  { background: rgba(var(--v-theme-info),    0.06); }
+.dtr-row--present    {}
 
 /* ── Legend dots ────────────────────────────────── */
-.dtr-legend {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-}
-.dtr-legend--absent    { background: rgba(var(--v-theme-error),         0.5); }
-.dtr-legend--halfday   { background: rgba(var(--v-theme-warning),       0.5); }
-.dtr-legend--late      { background: rgba(var(--v-theme-warning),       0.3); }
-.dtr-legend--undertime { background: rgba(var(--v-theme-info),          0.4); }
-.dtr-legend--weekend   { background: rgba(var(--v-theme-on-surface),    0.15); }
+.dtr-legend--absent     { background: rgba(var(--v-theme-error),      0.5); }
+.dtr-legend--halfday    { background: rgba(var(--v-theme-warning),    0.5); }
+.dtr-legend--late       { background: rgba(var(--v-theme-warning),    0.3); }
+.dtr-legend--undertime  { background: rgba(var(--v-theme-info),       0.4); }
+.dtr-legend--holiday    { background: rgba(128, 0, 128,               0.4); }
+.dtr-legend--suspension { background: rgba(0,   128, 128,             0.4); }
+.dtr-legend--weekend    { background: rgba(var(--v-theme-on-surface), 0.15); }
+
+/* ADD to <style scoped> */
+.dtr-row--fri-cmp    { background: rgba(128, 0, 128, 0.05); color: rgba(var(--v-theme-on-surface), 0.45); }
+.dtr-legend--fri-cmp { background: rgba(128, 0, 128, 0.25); }
 </style>
