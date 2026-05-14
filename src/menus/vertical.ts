@@ -26,6 +26,11 @@ export default [
     icon: 'mdi-minus-box-outline',
     to: { name: 'Deductions' },
   },
+  {
+    name: 'ENGAS',
+    icon: 'mdi-database-search-outline',
+    to: { name: 'Engas' },
+  },
   // {
   //   name: 'Blank Page',
   //   icon: 'mdi-file-outline',

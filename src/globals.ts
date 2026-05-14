@@ -3,5 +3,6 @@ interface Globals {
 }
 
 export const globals: Globals = {
-  api: 'http://10.10.120.96:8000',
+  api: 'http://10.10.122.29:8000'
+  // api: 'http://10.10.120.96:8000',
 }

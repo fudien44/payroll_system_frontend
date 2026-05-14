@@ -1,16 +1,23 @@
 <script lang="ts" setup>
-import avatar from '@images/avatars/avatar-6.png'
 import { useAuthStore } from '@/stores/auth'
-import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { storeToRefs } from 'pinia'
 import { nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 
 const authStore = useAuthStore()
 const router = useRouter()
 const userStore = useUserStore()
 
 const { user } = storeToRefs(userStore)
+
+const initials = computed(() => {
+  if (!user.value?.name) return '?'
+  const parts = user.value.name.trim().split(/\s+/)
+  const first = parts[0]?.[0] ?? ''
+  const second = parts[1]?.[0] ?? ''
+  return (first + second).toUpperCase()
+})
 
 async function handleLogout() {
   await authStore.logout()
@@ -20,29 +27,23 @@ async function handleLogout() {
 </script>
 
 <template>
-  <VAvatar class="cursor-pointer">
-    <VImg :src="avatar" />
+  <VAvatar
+    class="cursor-pointer"
+    color="primary"
+  >
+    <span class="text-white font-weight-bold">{{ initials }}</span>
 
     <VMenu activator="parent">
       <VList>
-        <VListItem
-          v-if="user"
-          :append-avatar="avatar"
-        >
+        <VListItem v-if="user">
+          <template #append>
+            <VAvatar color="primary" size="36">
+              <span class="text-white text-caption font-weight-bold">{{ initials }}</span>
+            </VAvatar>
+          </template>
           <VListItemTitle>{{ user?.name }}</VListItemTitle>
         </VListItem>
         <VDivider class="mt-2" />
-        <!-- <VListItem
-          v-for="item in [{ title: 'Home', icon: 'mdi-home-outline' },
-                          { title: 'Profile', icon: 'mdi-account-outline' },
-                          { title: 'Settings', icon: 'mdi-cog-outline' }]"
-          :key="item.title"
-          :value="item.title"
-          :append-icon="item.icon"
-        >
-          <VListItemTitle>{{ item.title }}</VListItemTitle>
-        </VListItem>
-        <VDivider /> -->
         <VListItem
           append-icon="mdi-logout"
           @click="handleLogout"

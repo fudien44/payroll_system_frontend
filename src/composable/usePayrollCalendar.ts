@@ -1,5 +1,6 @@
 // composables/usePayrollCalendar.ts
-import { ref, computed } from 'vue'
+import axiosInstance from '@/plugins/axios'
+import { computed, ref } from 'vue'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -8,16 +9,17 @@ import { ref, computed } from 'vue'
 export type HolidayType = 'regular' | 'special'
 
 export interface Holiday {
+  id: number
   date: string       // ISO: YYYY-MM-DD
   label: string
   type: HolidayType
 }
 
 export interface SuspensionDay {
-  id: string
+  id: number
   date: string       // ISO: YYYY-MM-DD
   label: string
-  createdAt: string  // ISO timestamp
+  created_at: string
 }
 
 export interface MonthSummary {
@@ -27,54 +29,10 @@ export interface MonthSummary {
   totalNonWorkingDays: number
 }
 
-// ---------------------------------------------------------------------------
-// Philippine Public Holidays Data
-// Update these each year or replace with an API call.
-// ---------------------------------------------------------------------------
-
-const PH_HOLIDAYS: Holiday[] = [
-  // ── 2025 ──────────────────────────────────────────────────────────────
-  { date: '2025-01-01', label: "New Year's Day",                         type: 'regular' },
-  { date: '2025-01-29', label: 'Chinese New Year',                        type: 'special' },
-  { date: '2025-02-25', label: 'EDSA People Power Revolution Anniversary', type: 'special' },
-  { date: '2025-04-09', label: 'Araw ng Kagitingan (Day of Valor)',        type: 'regular' },
-  { date: '2025-04-17', label: 'Maundy Thursday',                         type: 'regular' },
-  { date: '2025-04-18', label: 'Good Friday',                             type: 'regular' },
-  { date: '2025-04-19', label: 'Black Saturday',                          type: 'special' },
-  { date: '2025-05-01', label: 'Labor Day',                               type: 'regular' },
-  { date: '2025-06-12', label: 'Independence Day',                        type: 'regular' },
-  { date: '2025-08-21', label: 'Ninoy Aquino Day',                        type: 'special' },
-  { date: '2025-08-25', label: 'National Heroes Day',                     type: 'regular' },
-  { date: '2025-11-01', label: "All Saints' Day",                         type: 'special' },
-  { date: '2025-11-02', label: "All Souls' Day",                          type: 'special' },
-  { date: '2025-11-30', label: 'Bonifacio Day',                           type: 'regular' },
-  { date: '2025-12-08', label: 'Feast of the Immaculate Conception',      type: 'special' },
-  { date: '2025-12-24', label: 'Christmas Eve',                           type: 'special' },
-  { date: '2025-12-25', label: 'Christmas Day',                           type: 'regular' },
-  { date: '2025-12-30', label: 'Rizal Day',                               type: 'regular' },
-  { date: '2025-12-31', label: "New Year's Eve",                          type: 'special' },
-
-  // ── 2026 ──────────────────────────────────────────────────────────────
-  { date: '2026-01-01', label: "New Year's Day",                          type: 'regular' },
-  { date: '2026-02-17', label: 'Chinese New Year',                        type: 'special' },
-  { date: '2026-02-25', label: 'EDSA People Power Revolution Anniversary', type: 'special' },
-  { date: '2026-04-02', label: 'Maundy Thursday',                         type: 'regular' },
-  { date: '2026-04-03', label: 'Good Friday',                             type: 'regular' },
-  { date: '2026-04-04', label: 'Black Saturday',                          type: 'special' },
-  { date: '2026-04-09', label: 'Araw ng Kagitingan (Day of Valor)',        type: 'regular' },
-  { date: '2026-05-01', label: 'Labor Day',                               type: 'regular' },
-  { date: '2026-06-12', label: 'Independence Day',                        type: 'regular' },
-  { date: '2026-08-21', label: 'Ninoy Aquino Day',                        type: 'special' },
-  { date: '2026-08-31', label: 'National Heroes Day',                     type: 'regular' },
-  { date: '2026-11-01', label: "All Saints' Day",                         type: 'special' },
-  { date: '2026-11-02', label: "All Souls' Day",                          type: 'special' },
-  { date: '2026-11-30', label: 'Bonifacio Day',                           type: 'regular' },
-  { date: '2026-12-08', label: 'Feast of the Immaculate Conception',      type: 'special' },
-  { date: '2026-12-24', label: 'Christmas Eve',                           type: 'special' },
-  { date: '2026-12-25', label: 'Christmas Day',                           type: 'regular' },
-  { date: '2026-12-30', label: 'Rizal Day',                               type: 'regular' },
-  { date: '2026-12-31', label: "New Year's Eve",                          type: 'special' },
-]
+export interface DateInfo {
+  holiday?: Holiday
+  suspension?: SuspensionDay
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -94,135 +52,235 @@ export function formatDisplayDate(isoDate: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Module-level cache — shared across all component instances
+// ---------------------------------------------------------------------------
+
+const holidays    = ref<Holiday[]>([])
+const suspensions = ref<SuspensionDay[]>([])
+const loading     = ref(false)
+const error       = ref<string | null>(null)
+
+// Tracks which year-month keys have already been fetched
+const fetchedKeys = new Set<string>()
+
+// ---------------------------------------------------------------------------
 // Composable
 // ---------------------------------------------------------------------------
 
 export function usePayrollCalendar() {
-  const suspensionDays = ref<SuspensionDay[]>([])
 
-  // ------------------------------------------------------------------
-  // Holiday queries
-  // ------------------------------------------------------------------
+  // ── #1 Cache invalidation ────────────────────────────────────────────────
+  // Call this after any mutation so the next fetchMonth re-hits the API.
+
+  function invalidateMonth(year: number, month: number): void {
+    const key = `${year}-${month}`
+    fetchedKeys.delete(key)
+
+    // Also evict cached records for this month so stale data isn't shown
+    // while the re-fetch is in flight.
+    const prefix = `${year}-${String(month).padStart(2, '0')}-`
+    holidays.value    = holidays.value.filter(h => !h.date.startsWith(prefix))
+    suspensions.value = suspensions.value.filter(s => !s.date.startsWith(prefix))
+  }
+
+  // ── Fetch ────────────────────────────────────────────────────────────────
+
+  async function fetchMonth(year: number, month: number): Promise<void> {
+    const key = `${year}-${month}`
+    if (fetchedKeys.has(key)) return
+
+    loading.value = true
+    error.value   = null
+
+    try {
+      const [holidayRes, suspensionRes] = await Promise.all([
+        axiosInstance.get('/api/calendar/holidays', { params: { year, month } }),
+        axiosInstance.get('/api/calendar/suspensions', { params: { year, month } }),
+      ])
+
+      if (holidayRes.data.success) {
+        const incoming: Holiday[] = holidayRes.data.data
+        const existingIds = new Set(holidays.value.map(h => h.id))
+        incoming.forEach(h => {
+          if (!existingIds.has(h.id)) holidays.value.push(h)
+        })
+      }
+
+      if (suspensionRes.data.success) {
+        const incoming: SuspensionDay[] = suspensionRes.data.data
+        const existingIds = new Set(suspensions.value.map(s => s.id))
+        incoming.forEach(s => {
+          if (!existingIds.has(s.id)) suspensions.value.push(s)
+        })
+      }
+
+      fetchedKeys.add(key)
+    }
+    catch (err: any) {
+      error.value = err?.response?.data?.message ?? 'Failed to load calendar data.'
+    }
+    finally {
+      loading.value = false
+    }
+  }
+
+  // ── Holiday queries ──────────────────────────────────────────────────────
 
   function getHolidaysForMonth(year: number, month: number): Holiday[] {
     const prefix = `${year}-${String(month).padStart(2, '0')}-`
-    return PH_HOLIDAYS.filter(h => h.date.startsWith(prefix))
-  }
-
-  function getRegularHolidaysForMonth(year: number, month: number): Holiday[] {
-    return getHolidaysForMonth(year, month).filter(h => h.type === 'regular')
-  }
-
-  function getSpecialHolidaysForMonth(year: number, month: number): Holiday[] {
-    return getHolidaysForMonth(year, month).filter(h => h.type === 'special')
+    return holidays.value.filter(h => h.date.startsWith(prefix))
   }
 
   function getHolidayByDate(isoDate: string): Holiday | undefined {
-    return PH_HOLIDAYS.find(h => h.date === isoDate)
+    return holidays.value.find(h => h.date === isoDate)
   }
 
-  // ------------------------------------------------------------------
-  // Suspension day queries
-  // ------------------------------------------------------------------
+  // ── Suspension queries ───────────────────────────────────────────────────
 
-  function getSuspensionDaysForMonth(year: number, month: number): SuspensionDay[] {
+  function getSuspensionsForMonth(year: number, month: number): SuspensionDay[] {
     const prefix = `${year}-${String(month).padStart(2, '0')}-`
-    return suspensionDays.value.filter(s => s.date.startsWith(prefix))
+    return suspensions.value.filter(s => s.date.startsWith(prefix))
   }
 
   function getSuspensionByDate(isoDate: string): SuspensionDay | undefined {
-    return suspensionDays.value.find(s => s.date === isoDate)
+    return suspensions.value.find(s => s.date === isoDate)
   }
 
-  // ------------------------------------------------------------------
-  // Mutation
-  // ------------------------------------------------------------------
-
-  /**
-   * Returns true on success, or an error message string on failure.
-   */
-  function addSuspensionDay(isoDate: string, label: string): true | string {
-    if (!isoDate) return 'Please select a date.'
-    if (!label.trim()) return 'Please enter a label / reason.'
-
-    const duplicate = suspensionDays.value.some(s => s.date === isoDate)
-    if (duplicate) return `A suspension day already exists for ${formatDisplayDate(isoDate)}.`
-
-    suspensionDays.value.push({
-      id: crypto.randomUUID(),
-      date: isoDate,
-      label: label.trim(),
-      createdAt: new Date().toISOString(),
-    })
-    return true
-  }
-
-  function removeSuspensionDay(id: string): void {
-    suspensionDays.value = suspensionDays.value.filter(s => s.id !== id)
-  }
-
-  // ------------------------------------------------------------------
-  // Unified date info (used by calendar cells)
-  // ------------------------------------------------------------------
-
-  interface DateInfo {
-    holiday?: Holiday
-    suspension?: SuspensionDay
-  }
+  // ── Date info ────────────────────────────────────────────────────────────
 
   function getDateInfo(isoDate: string): DateInfo {
     return {
-      holiday: getHolidayByDate(isoDate),
+      holiday:    getHolidayByDate(isoDate),
       suspension: getSuspensionByDate(isoDate),
     }
   }
 
-  // ------------------------------------------------------------------
-  // Month summary
-  // ------------------------------------------------------------------
+  // ── Month summary ────────────────────────────────────────────────────────
 
   function getMonthSummary(year: number, month: number): MonthSummary {
-    const regularHolidays = getRegularHolidaysForMonth(year, month)
-    const specialHolidays = getSpecialHolidaysForMonth(year, month)
-    const suspensions = getSuspensionDaysForMonth(year, month)
+    const monthHolidays    = getHolidaysForMonth(year, month)
+    const regularHolidays  = monthHolidays.filter(h => h.type === 'regular')
+    const specialHolidays  = monthHolidays.filter(h => h.type === 'special')
+    const monthSuspensions = getSuspensionsForMonth(year, month)
 
-    // Unique non-working dates (union of holidays + suspensions)
     const allDates = new Set([
-      ...regularHolidays.map(h => h.date),
-      ...specialHolidays.map(h => h.date),
-      ...suspensions.map(s => s.date),
+      ...monthHolidays.map(h => h.date),
+      ...monthSuspensions.map(s => s.date),
     ])
 
-    return {
-      regularHolidays,
-      specialHolidays,
-      suspensions,
-      totalNonWorkingDays: allDates.size,
+    return { regularHolidays, specialHolidays, suspensions: monthSuspensions, totalNonWorkingDays: allDates.size }
+  }
+
+  // ── Holiday CRUD ─────────────────────────────────────────────────────────
+
+  async function addHoliday(isoDate: string, label: string, type: HolidayType): Promise<true | string> {
+    try {
+      const res = await axiosInstance.post('/api/calendar/holidays', { date: isoDate, label: label.trim(), type })
+      if (res.data.success) { holidays.value.push(res.data.data); return true }
+      return res.data.message ?? 'Failed to add holiday.'
+    }
+    catch (err: any) {
+      const errors = err?.response?.data?.errors
+      if (errors) return Object.values(errors).flat().join(' ')
+      return err?.response?.data?.message ?? 'Failed to add holiday.'
     }
   }
 
-  // ------------------------------------------------------------------
-  // Expose
-  // ------------------------------------------------------------------
+  async function updateHoliday(id: number, isoDate: string, label: string, type: HolidayType): Promise<true | string> {
+    try {
+      const res = await axiosInstance.post(`/api/calendar/holidays/update/${id}`, { date: isoDate, label: label.trim(), type })
+      if (res.data.success) {
+        const idx = holidays.value.findIndex(h => h.id === id)
+        if (idx !== -1) holidays.value[idx] = res.data.data
+        return true
+      }
+      return res.data.message ?? 'Failed to update holiday.'
+    }
+    catch (err: any) {
+      const errors = err?.response?.data?.errors
+      if (errors) return Object.values(errors).flat().join(' ')
+      return err?.response?.data?.message ?? 'Failed to update holiday.'
+    }
+  }
+
+  async function removeHoliday(id: number): Promise<true | string> {
+    try {
+      const res = await axiosInstance.post(`/api/calendar/holidays/delete/${id}`)
+      if (res.data.success) { holidays.value = holidays.value.filter(h => h.id !== id); return true }
+      return res.data.message ?? 'Failed to remove holiday.'
+    }
+    catch (err: any) {
+      return err?.response?.data?.message ?? 'Failed to remove holiday.'
+    }
+  }
+
+  // ── Suspension CRUD ──────────────────────────────────────────────────────
+
+  async function addSuspensionDay(isoDate: string, label: string): Promise<true | string> {
+    try {
+      const res = await axiosInstance.post('/api/calendar/suspensions', { date: isoDate, label: label.trim() })
+      if (res.data.success) { suspensions.value.push(res.data.data); return true }
+      return res.data.message ?? 'Failed to add suspension day.'
+    }
+    catch (err: any) {
+      const errors = err?.response?.data?.errors
+      if (errors) return Object.values(errors).flat().join(' ')
+      return err?.response?.data?.message ?? 'Failed to add suspension day.'
+    }
+  }
+
+  async function updateSuspensionDay(id: number, isoDate: string, label: string): Promise<true | string> {
+    try {
+      const res = await axiosInstance.post(`/api/calendar/suspensions/update/${id}`, { date: isoDate, label: label.trim() })
+      if (res.data.success) {
+        const idx = suspensions.value.findIndex(s => s.id === id)
+        if (idx !== -1) suspensions.value[idx] = res.data.data
+        return true
+      }
+      return res.data.message ?? 'Failed to update suspension day.'
+    }
+    catch (err: any) {
+      const errors = err?.response?.data?.errors
+      if (errors) return Object.values(errors).flat().join(' ')
+      return err?.response?.data?.message ?? 'Failed to update suspension day.'
+    }
+  }
+
+  async function removeSuspensionDay(id: number): Promise<true | string> {
+    try {
+      const res = await axiosInstance.post(`/api/calendar/suspensions/delete/${id}`)
+      if (res.data.success) { suspensions.value = suspensions.value.filter(s => s.id !== id); return true }
+      return res.data.message ?? 'Failed to remove suspension day.'
+    }
+    catch (err: any) {
+      return err?.response?.data?.message ?? 'Failed to remove suspension day.'
+    }
+  }
+
+  // ── Expose ───────────────────────────────────────────────────────────────
 
   return {
-    suspensionDays: computed(() => suspensionDays.value),
+    loading:        computed(() => loading.value),
+    error:          computed(() => error.value),
+    allHolidays:    computed(() => holidays.value),
+    allSuspensions: computed(() => suspensions.value),
+
+    fetchMonth,
+    invalidateMonth,   // ← new: exposed for cache busting after mutations
 
     getHolidaysForMonth,
-    getRegularHolidaysForMonth,
-    getSpecialHolidaysForMonth,
     getHolidayByDate,
-
-    getSuspensionDaysForMonth,
+    getSuspensionsForMonth,
     getSuspensionByDate,
-
-    addSuspensionDay,
-    removeSuspensionDay,
-
     getDateInfo,
     getMonthSummary,
 
-    // expose raw data for advanced use
-    allHolidays: PH_HOLIDAYS,
+    addHoliday,
+    updateHoliday,
+    removeHoliday,
+
+    addSuspensionDay,
+    updateSuspensionDay,
+    removeSuspensionDay,
   }
 }

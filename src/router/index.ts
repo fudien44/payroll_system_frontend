@@ -1,6 +1,5 @@
-import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { fetchUser } from '@/stores/user'
+import { createRouter, createWebHistory } from 'vue-router'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -78,6 +77,16 @@ const router = createRouter({
       component: () => import('@/views/Deductions.vue'),
       meta: {
         title: 'Deductions',
+        layout: 'content',
+        requiresAuth: true,
+      },
+    },
+    {
+      path: '/engas',
+      name: 'Engas',
+      component: () => import('@/views/Engas.vue'),
+      meta: {
+        title: 'ENGAS Reference',
         layout: 'content',
         requiresAuth: true,
       },
