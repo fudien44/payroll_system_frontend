@@ -11,10 +11,15 @@ export default [
     icon: 'mdi-cash-multiple',
     to: { name: 'payroll' },
   },
+  // {
+  //   name: 'Employees',
+  //   icon: 'mdi-account-group-outline',
+  //   to: { name: 'employees' },
+  // },
   {
-    name: 'Employees',
-    icon: 'mdi-account-group-outline',
-    to: { name: 'employees' },
+    name: 'DTR',
+    icon: 'mdi mdi-fingerprint',
+    to: { name: 'DTR' },
   },
   {
     name: 'Calendar',

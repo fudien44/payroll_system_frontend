@@ -52,15 +52,15 @@ const router = createRouter({
         requiresAuth: true,
       },
     },
-    {
-      path: '/employees',
-      name: 'employees',
-      component: () => import('@/views/Employees.vue'),
-      meta: {
-        layout: 'content',
-        requiresAuth: true,
-      },
-    },
+    // {
+    //   path: '/employees',
+    //   name: 'employees',
+    //   component: () => import('@/views/Employees.vue'),
+    //   meta: {
+    //     layout: 'content',
+    //     requiresAuth: true,
+    //   },
+    // },
     {
       path: '/calendar',
       name: 'CalendarManagement',
@@ -89,6 +89,16 @@ const router = createRouter({
         title: 'ENGAS Reference',
         layout: 'content',
         requiresAuth: true,
+      },
+    },
+    {
+      path: '/dtr',
+      name: 'DTR',
+      component: () => import('@/views/Dtr.vue'),
+      meta: {
+        title: 'DTR Reference',
+        layout: 'content',
+        requiresAuth:true,
       },
     },
     {

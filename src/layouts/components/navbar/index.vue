@@ -1,7 +1,6 @@
 <script lang="ts" setup>
 import Logo from '@/components/Logo.vue'
 import NavUserProfileMenu from '@/components/NavUserProfileMenu.vue'
-import Notifications from '@/components/Notifications.vue'
 import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
 import { useAppConfig } from '@/composable/useAppConfig'
 import { appConfig } from '@appConfig'
@@ -42,20 +41,10 @@ const { navigationMenu, isNavbarFixed } = useAppConfig()
         </h6>
       </RouterLink>
 
-      <template v-if="navigationMenu === 'vertical'">
-        <!-- ThemeSwitcher -->
-        <ThemeSwitcher />
-      </template>
-
       <VSpacer />
 
-      <template v-if="navigationMenu === 'horizontal'">
-        <!-- ThemeSwitcher -->
+      <!-- ThemeSwitcher -->
         <ThemeSwitcher />
-      </template>
-
-      <!-- Notifications -->
-      <Notifications />
 
       <!-- user menu -->
       <NavUserProfileMenu />
