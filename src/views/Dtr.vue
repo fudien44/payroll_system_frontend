@@ -2,9 +2,11 @@
 import BaseAlert from '@/components/base/BaseAlert.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
-import { usePayrollCalendar } from '@/composable/usePayrollCalendar'
-import { useWeekSchedule } from '@/composable/useWeekSchedule'
 import axios from '@axios'
+
+// REMOVED: usePayrollCalendar and useWeekSchedule are no longer needed here.
+// The backend now computes schedule_type, am_official_time, pm_official_time,
+// and is_rest_day per day and returns them in the attendance payload.
 
 /* ─────────────────────────────────────────
    TYPES
@@ -50,12 +52,37 @@ interface AttendanceDay {
   undertime_minutes_am:    number
   undertime_minutes_pm:    number
   total_undertime_minutes: number
-  // ── New ──────────────────────────────────
+  // Calendar flags
   is_holiday:              boolean
   holiday_type:            'regular' | 'special' | null
   holiday_label:           string | null
   is_suspension:           boolean
   suspension_label:        string | null
+  // NEW: schedule fields returned by the backend
+  is_rest_day:             boolean                          // Friday on a compressed week
+  schedule_type:           'compressed' | 'standard' | null // null for weekends
+  am_official_time:        string | null                   // '07:00 AM' | '08:00 AM' | null
+  pm_official_time:        string | null                   // '06:00 PM' | '05:00 PM' | null
+}
+
+interface WeeklyAttendanceDay {
+  date:           string
+  schedule_type:  'compressed' | 'standard'
+  required_hours: number
+  rendered_hours: number
+  credited_hours: number
+  is_complete:    boolean
+}
+
+interface WeeklyAttendance {
+  week:                   number
+  week_start:             string
+  week_end:               string
+  schedule_type:          'compressed' | 'standard'
+  required_weekly_hours:  number
+  rendered_weekly_hours:  number
+  is_complete_week:       boolean
+  days:                   WeeklyAttendanceDay[]
 }
 
 interface DtrData {
@@ -67,25 +94,23 @@ interface DtrData {
   total_undertime_minutes: number
   total_undertime_hours:   number
   regdays:                 number
-  sat:                     number
-  // ── New ──────────────────────────────────
+  weekends:                number
   total_holidays:          number
   total_suspensions:       number
   monthno:                 number
   month:                   string
   year:                    number
+  weekly_attendance:       WeeklyAttendance[]
 }
 
-// Enriched row with computed calendar fields
+// Enriched row with display-only computed fields
 interface AttendanceRow extends AttendanceDay {
   day:          number
   dayName:      string
   isWeekend:    boolean
   isSaturday:   boolean
   isSunday:     boolean
-  isFriday:     boolean                        
-  scheduleType: 'compressed' | 'standard'      
-  isRestFriday: boolean                        
+  isFriday:     boolean
 }
 
 type AlertType = 'success' | 'error' | 'warning' | 'info'
@@ -96,10 +121,10 @@ type AlertType = 'success' | 'error' | 'warning' | 'info'
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 const TABLE_HEADERS = [
-  { title: 'Employee', key: 'full_name', sortable: true                          },
-  { title: 'Position', key: 'position',  sortable: true                          },
-  { title: 'Division', key: 'division',  sortable: true                          },
-  { title: 'Section',  key: 'section',   sortable: true                          },
+  { title: 'Employee', key: 'full_name', sortable: true                            },
+  { title: 'Position', key: 'position',  sortable: true                            },
+  { title: 'Division', key: 'division',  sortable: true                            },
+  { title: 'Section',  key: 'section',   sortable: true                            },
   { title: 'Actions',  key: 'actions',   sortable: false, align: 'center' as const },
 ]
 
@@ -122,7 +147,6 @@ const employees    = ref<Employee[]>([])
 const deviceStatus = ref<DeviceStatus[]>([])
 const loading      = ref(false)
 
-// ── DTR Modal ─────────────────────────────
 const modalOpen     = ref(false)
 const modalLoading  = ref(false)
 const selectedEmp   = ref<Employee | null>(null)
@@ -133,10 +157,6 @@ const dtrData       = ref<DtrData | null>(null)
 const alertVisible = ref(false)
 const alertMessage = ref('')
 const alertType    = ref<AlertType>('success')
-  
-// ── ADD — gives access to calendar cache for schedule detection ─────────────────────────────
-const { fetchMonth: fetchCalendarMonth } = usePayrollCalendar()
-const { getWeekScheduleType }            = useWeekSchedule()
 
 /* ─────────────────────────────────────────
    COMPUTED
@@ -144,7 +164,6 @@ const { getWeekScheduleType }            = useWeekSchedule()
 const connectedDevices    = computed(() => deviceStatus.value.filter(d => d.status === 'connected').length)
 const disconnectedDevices = computed(() => deviceStatus.value.filter(d => d.status !== 'connected').length)
 
-// ── Modal adapts its width and title based on whether DTR is loaded ──
 const modalWidth = computed(() => dtrData.value ? '1150' : '520')
 
 const modalTitle = computed(() => {
@@ -153,33 +172,28 @@ const modalTitle = computed(() => {
   return `DTR — ${selectedEmp.value.full_name} — ${dtrData.value.month} ${dtrData.value.year}`
 })
 
-// ── Convert attendance object { "1": {...}, "2": {...} } → sorted array ──
+// Convert attendance object { "1": {...}, "2": {...} } → sorted array.
+// CHANGED: scheduleType and isRestFriday now come directly from the backend
+// fields (schedule_type and is_rest_day) — no client-side schedule inference.
 const attendanceRows = computed<AttendanceRow[]>(() => {
   if (!dtrData.value) return []
 
   return Object.entries(dtrData.value.attendance)
     .map(([dayStr, data]) => {
-      const day          = Number(dayStr)
-      const date         = new Date(dtrData.value!.year, dtrData.value!.monthno - 1, day)
-      const dayOfWeek    = date.getDay()
-      const isFriday     = dayOfWeek === 5
-      const scheduleType = isFriday ? getWeekScheduleType(date) : 'standard'
-      const isRestFriday = isFriday && scheduleType === 'compressed' && data.entry_count === 0
+      const day       = Number(dayStr)
+      const date      = new Date(dtrData.value!.year, dtrData.value!.monthno - 1, day)
+      const dayOfWeek = date.getDay()
 
       return {
         ...data,
         day,
-        dayName:      DAY_NAMES[dayOfWeek],
-        isWeekend:    dayOfWeek === 0 || dayOfWeek === 6,
-        isSaturday:   dayOfWeek === 6,
-        isSunday:     dayOfWeek === 0,
-        isFriday,
-        scheduleType,
-        isRestFriday,
-        // ── Override backend's is_absent for rest Fridays ──────────────
-        // Backend doesn't know about compressed schedule, so it marks
-        // Fridays with no biometric record as absent. We correct that here.
-        is_absent: isRestFriday ? false : data.is_absent,
+        dayName:    DAY_NAMES[dayOfWeek],
+        isWeekend:  dayOfWeek === 0 || dayOfWeek === 6,
+        isSaturday: dayOfWeek === 6,
+        isSunday:   dayOfWeek === 0,
+        isFriday:   dayOfWeek === 5,
+        // schedule_type and is_rest_day come straight from the backend —
+        // no need to call useWeekSchedule or warm the calendar cache.
       }
     })
     .sort((a, b) => a.day - b.day)
@@ -206,7 +220,6 @@ function showAlert(type: AlertType, message: string) {
   alertVisible.value = true
 }
 
-// "90" → "1h 30m" | "45" → "45m" | "0" → "—"
 function fmtMinutes(mins: number): string {
   if (!mins) return '—'
   const h = Math.floor(mins / 60)
@@ -214,18 +227,16 @@ function fmtMinutes(mins: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
-// Determines row highlight class for each attendance day
 function getRowClass(row: AttendanceRow): string {
   if (row.is_holiday)                   return 'dtr-row--holiday'
   if (row.is_suspension)                return 'dtr-row--suspension'
+  if (row.is_rest_day)                  return 'dtr-row--fri-cmp'   // CHANGED: use backend flag
   if (row.isSunday)                     return 'dtr-row--sunday'
   if (row.isSaturday)                   return 'dtr-row--saturday'
-  if (row.isRestFriday)                 return 'dtr-row--fri-cmp'   // ADD — before absent check
   if (row.is_absent)                    return 'dtr-row--absent'
   if (row.is_half_day_absent)           return 'dtr-row--halfday'
   if (row.is_late_am || row.is_late_pm) return 'dtr-row--late'
   if (row.total_undertime_minutes > 0)  return 'dtr-row--undertime'
-  if (row.entry_count > 0)              return 'dtr-row--present'
   return ''
 }
 
@@ -245,19 +256,19 @@ async function fetchData() {
   }
 }
 
+// CHANGED: removed the parallel fetchCalendarMonth call.
+// The backend now returns all schedule information (schedule_type,
+// is_rest_day, am_official_time, pm_official_time) inside the DTR
+// payload — no need to pre-warm the calendar cache on the client.
 async function fetchDtr() {
   if (!selectedEmp.value) return
   modalLoading.value = true
   dtrData.value      = null
 
   try {
-    // ── Fetch calendar data in parallel with DTR records ────────────────
-    // usePayrollCalendar caches per month, so this is a no-op if already loaded.
-    // getWeekScheduleType() in attendanceRows depends on this cache being warm.
-    const [{ data }] = await Promise.all([
-      axios.get(`/api/dtr/${selectedEmp.value.id}/${selectedMonth.value}/${selectedYear.value}`),
-      fetchCalendarMonth(selectedYear.value, selectedMonth.value),   // ADD
-    ])
+    const { data } = await axios.get(
+      `/api/dtr/${selectedEmp.value.id}/${selectedMonth.value}/${selectedYear.value}`,
+    )
     dtrData.value = data
   } catch {
     showAlert('error', 'Failed to load DTR records.')
@@ -352,7 +363,6 @@ onMounted(fetchData)
             <VCardText class="d-flex align-center justify-space-between pa-4">
               <div>
                 <div class="text-body-1 font-weight-medium">{{ device.floor }}</div>
-                <!-- <div class="text-caption text-medium-emphasis">{{ device.ip }}:{{ device.port }}</div> -->
                 <div class="text-caption mt-1">{{ device.message }}</div>
               </div>
               <VChip :color="deviceChipColor(device.status)" size="small" variant="tonal" label>
@@ -434,7 +444,7 @@ onMounted(fetchData)
           </VCard>
         </VCol>
 
-        <!-- ── Period selectors (always visible so user can change and reload) ── -->
+        <!-- ── Period selectors ── -->
         <VCol cols="12" class="mt-3">
           <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
             Select Period
@@ -466,10 +476,10 @@ onMounted(fetchData)
           />
         </VCol>
 
-        <!-- ── DTR results (only rendered after fetchDtr succeeds) ── -->
+        <!-- ── DTR results ── -->
         <template v-if="dtrData">
 
-          <!-- ── Computation Summary ── -->
+          <!-- ── Monthly Summary ── -->
           <VCol cols="12" class="mt-4">
             <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
               Monthly Summary — {{ dtrData.month }} {{ dtrData.year }}
@@ -496,8 +506,8 @@ onMounted(fetchData)
           <VCol cols="6" sm="3">
             <VCard variant="tonal" color="warning" rounded="lg">
               <VCardText class="pa-3 text-center">
-                <div class="text-h6 font-weight-bold">{{ fmtMinutes(dtrData.total_late_minutes) }}</div>
-                <div class="text-caption">Total Late</div>
+                <div class="text-h6 font-weight-bold">{{ dtrData.total_late_minutes }} mins</div>
+                <div class="text-caption">Late Minutes</div>
               </VCardText>
             </VCard>
           </VCol>
@@ -513,14 +523,11 @@ onMounted(fetchData)
           <!-- ── Working days breakdown ── -->
           <VCol cols="12">
             <div class="d-flex gap-4 flex-wrap">
-
-              <!-- Before: "Regular Days" → After: "Working Days" -->
               <div class="text-caption text-medium-emphasis">
                 Working Days: <strong class="text-high-emphasis">{{ dtrData.regdays }}</strong>
               </div>
-
               <div class="text-caption text-medium-emphasis">
-                Saturdays: <strong class="text-high-emphasis">{{ dtrData.sat }}</strong>
+                Weekends: <strong class="text-high-emphasis">{{ dtrData.weekends }}</strong>
               </div>
               <div class="text-caption text-medium-emphasis">
                 Holidays: <strong class="text-purple">{{ dtrData.total_holidays }}</strong>
@@ -534,7 +541,6 @@ onMounted(fetchData)
               <div class="text-caption text-medium-emphasis">
                 Undertime Hours: <strong class="text-info">{{ dtrData.total_undertime_hours }}h</strong>
               </div>
-
             </div>
           </VCol>
 
@@ -581,7 +587,7 @@ onMounted(fetchData)
               </div>
             </div>
 
-            <!-- Scrollable table wrapper -->
+            <!-- Scrollable table -->
             <div class="dtr-table-wrapper">
               <table class="dtr-table">
                 <thead>
@@ -645,19 +651,22 @@ onMounted(fetchData)
                     <!-- ── Sunday ── -->
                     <template v-else-if="row.isSunday">
                       <td colspan="5" class="text-center text-caption text-disabled">Happy Weekend 🎉</td>
-                      <td class="col-status"></td>
+                      <td />
                     </template>
 
                     <!-- ── Saturday ── -->
                     <template v-else-if="row.isSaturday">
                       <td colspan="5" class="text-center text-caption text-disabled">Happy Weekend 🎉</td>
-                      <td class="col-status"></td>
+                      <td />
                     </template>
 
-                    <!-- ── Compressed Friday (Rest Day) ── ADD THIS BLOCK -->
-                    <template v-else-if="row.isRestFriday">
+                    <!-- ── Compressed Friday (Rest Day) ── -->
+                    <!-- CHANGED: uses row.is_rest_day (from backend) instead of the
+                         old client-side isRestFriday derived from useWeekSchedule -->
+                    <template v-else-if="row.is_rest_day">
                       <td colspan="5" class="text-center text-caption text-disabled">
-                        Rest Day <span class="text-caption">(Compressed Week)</span>
+                        Rest Day
+                        <span class="text-caption">(Compressed Week)</span>
                       </td>
                       <td class="col-status">
                         <VChip color="purple" size="x-small" variant="tonal" label>
@@ -701,6 +710,15 @@ onMounted(fetchData)
                             label
                           >
                             Present
+                          </VChip>
+                          <VChip
+                            v-if="row.schedule_type"
+                            :color="row.schedule_type === 'compressed' ? 'purple' : 'primary'"
+                            size="x-small"
+                            variant="tonal"
+                            label
+                          >
+                            {{ row.schedule_type === 'compressed' ? 'CMP' : 'STD' }}
                           </VChip>
                         </div>
                       </td>
@@ -775,20 +793,27 @@ onMounted(fetchData)
 .col-day    { width: 80px;  }
 .col-time   { width: 90px;  }
 .col-hours  { width: 70px;  }
-.col-status { width: 200px; }
+.col-status { width: 240px; }
 
 /* ── Row highlight states ───────────────────────── */
-.dtr-row--holiday    { background: rgba(var(--v-theme-purple),  0.08); }
-.dtr-row--suspension { background: rgba(var(--v-theme-teal),    0.08); }
+.dtr-row--holiday    { background: rgba(var(--v-theme-purple),        0.08); }
+.dtr-row--suspension { background: rgba(var(--v-theme-teal),          0.08); }
 .dtr-row--sunday     { background: rgba(var(--v-theme-on-surface), 0.035); color: rgba(var(--v-theme-on-surface), 0.38); }
-.dtr-row--saturday   { background: rgba(var(--v-theme-on-surface), 0.02); }
-.dtr-row--absent     { background: rgba(var(--v-theme-error),   0.08); }
-.dtr-row--halfday    { background: rgba(var(--v-theme-warning), 0.08); }
-.dtr-row--late       { background: rgba(var(--v-theme-warning), 0.04); }
-.dtr-row--undertime  { background: rgba(var(--v-theme-info),    0.06); }
-.dtr-row--present    {}
+.dtr-row--saturday   { background: rgba(var(--v-theme-on-surface),    0.02); }
+.dtr-row--absent     { background: rgba(var(--v-theme-error),         0.08); }
+.dtr-row--halfday    { background: rgba(var(--v-theme-warning),       0.08); }
+.dtr-row--late       { background: rgba(var(--v-theme-warning),       0.04); }
+.dtr-row--undertime  { background: rgba(var(--v-theme-info),          0.06); }
+.dtr-row--fri-cmp    { background: rgba(128, 0, 128,                  0.05); color: rgba(var(--v-theme-on-surface), 0.45); }
 
 /* ── Legend dots ────────────────────────────────── */
+.dtr-legend {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
 .dtr-legend--absent     { background: rgba(var(--v-theme-error),      0.5); }
 .dtr-legend--halfday    { background: rgba(var(--v-theme-warning),    0.5); }
 .dtr-legend--late       { background: rgba(var(--v-theme-warning),    0.3); }
@@ -796,8 +821,5 @@ onMounted(fetchData)
 .dtr-legend--holiday    { background: rgba(128, 0, 128,               0.4); }
 .dtr-legend--suspension { background: rgba(0,   128, 128,             0.4); }
 .dtr-legend--weekend    { background: rgba(var(--v-theme-on-surface), 0.15); }
-
-/* ADD to <style scoped> */
-.dtr-row--fri-cmp    { background: rgba(128, 0, 128, 0.05); color: rgba(var(--v-theme-on-surface), 0.45); }
-.dtr-legend--fri-cmp { background: rgba(128, 0, 128, 0.25); }
+.dtr-legend--fri-cmp    { background: rgba(128, 0, 128,               0.25); }
 </style>
