@@ -47,6 +47,43 @@
           <VBtn icon="mdi-chevron-right" variant="text" :disabled="loading" @click="nextMonth" />
         </div>
 
+        <!-- ── Legend (between month nav and day headers) ────────────────── -->
+        <div class="cm-legend">
+          <span class="cm-legend-item">
+            <span class="cm-legend-dot cm-legend-dot--rh" />
+            Regular Holiday
+          </span>
+          <span class="cm-legend-item">
+            <span class="cm-legend-dot cm-legend-dot--sh" />
+            Special Holiday
+          </span>
+          <span class="cm-legend-item">
+            <span class="cm-legend-dot cm-legend-dot--susp" />
+            Suspension
+          </span>
+          <span class="cm-legend-item">
+            <span class="cm-legend-dot cm-legend-dot--today" />
+            Today
+          </span>
+          <span class="cm-legend-item">
+            <span class="cm-legend-dot cm-legend-dot--weekend" />
+            Weekend
+          </span>
+          <span class="cm-legend-item">
+            <span class="cm-legend-dot cm-legend-dot--fri-cmp" />
+            Fri (Compressed)
+          </span>
+          <span class="cm-legend-item cm-legend-item--divider" />
+          <span class="cm-legend-item">
+            <span class="cm-legend-pill cm-legend-pill--std">STD</span>
+            Mon–Fri 8am–5pm
+          </span>
+          <span class="cm-legend-item">
+            <span class="cm-legend-pill cm-legend-pill--cmp">CMP</span>
+            Mon–Thu 7am–6pm
+          </span>
+        </div>
+
         <!-- Loading -->
         <div v-if="loading" class="cm-loading">
           <VProgressLinear indeterminate color="primary" class="mb-3" />
@@ -66,16 +103,35 @@
               :key="wIdx"
               class="cm-week-row"
             >
-              <!-- Week label -->
+              <!-- Week label — only shown for rows that contain a Monday.
+                   Partial edge rows (e.g. May1-2 only) are skipped to prevent
+                   accidental toggling of the wrong ISO week. -->
               <div
+                v-if="week.hasMonday"
                 class="cm-week-label"
-                :class="week.isCompressed ? 'cm-week-label--cmp' : 'cm-week-label--std'"
-                :title="week.isCompressed
-                  ? 'Compressed: Mon–Thu, 10hrs/day'
-                  : 'Standard: Mon–Fri, 8hrs/day'"
+                :class="[
+                  week.isCompressed ? 'cm-week-label--cmp' : 'cm-week-label--std',
+                  scheduleOverrideLoading === week.weekStart ? 'cm-week-label--saving' : '',
+                  weekScheduleMap[week.weekStart]?.is_manual_override ? 'cm-week-label--override' : '',
+                ]"
+                :title="(week.isCompressed ? 'Compressed: Mon–Thu, 7am–6pm' : 'Standard: Mon–Fri, 8am–5pm')
+                  + '\nClick to toggle. Right-click to reset to auto.'
+                  + (weekScheduleMap[week.weekStart]?.is_manual_override ? '\n⚠ Manual override active' : '')"
+                @click="week.weekStart && toggleWeekSchedule(week.weekStart, week.isCompressed)"
+                @contextmenu.prevent="week.weekStart && weekScheduleMap[week.weekStart]?.is_manual_override && clearWeekOverride(week.weekStart)"
               >
-                {{ week.isCompressed ? 'CMP' : 'STD' }}
+                <span v-if="scheduleOverrideLoading === week.weekStart" class="cm-week-saving">…</span>
+                <template v-else>
+                  {{ week.isCompressed ? 'CMP' : 'STD' }}
+                  <span
+                    v-if="weekScheduleMap[week.weekStart]?.is_manual_override"
+                    class="cm-week-override-dot"
+                    title="Manual override active"
+                  />
+                </template>
               </div>
+              <!-- Empty gutter for partial rows with no Monday -->
+              <div v-else class="cm-week-label-empty" />
 
               <!-- 7 cells -->
               <div
@@ -83,7 +139,7 @@
                 :key="cIdx"
                 class="cm-cell"
                 :class="cellClasses(cell, week.isCompressed)"
-                @click="cell.date && onCellClick(cell)"
+                @click="cell.date && !cell.isWeekend && onCellClick(cell)"
               >
                 <template v-if="cell.date">
                   <span class="cm-cell-num">{{ cell.date.getDate() }}</span>
@@ -111,22 +167,6 @@
               </div>
             </div>
           </div>
-
-          <!-- Legend -->
-          <div class="cm-legend">
-            <span class="cm-legend-item"><span class="cm-legend-dot cm-legend-dot--rh" /> Regular Holiday</span>
-            <span class="cm-legend-item"><span class="cm-legend-dot cm-legend-dot--sh" /> Special Holiday</span>
-            <span class="cm-legend-item"><span class="cm-legend-dot cm-legend-dot--susp" /> Suspension</span>
-            <span class="cm-legend-item"><span class="cm-legend-dot cm-legend-dot--today" /> Today</span>
-            <span class="cm-legend-item"><span class="cm-legend-dot cm-legend-dot--weekend" /> Weekend</span>
-            <span class="cm-legend-item"><span class="cm-legend-dot cm-legend-dot--fri-cmp" /> Fri (Compressed)</span>
-            <span class="cm-legend-item">
-              <span class="cm-legend-pill cm-legend-pill--std">STD</span> Standard Week
-            </span>
-            <span class="cm-legend-item">
-              <span class="cm-legend-pill cm-legend-pill--cmp">CMP</span> Compressed Week
-            </span>
-          </div>
         </template>
       </div>
 
@@ -141,17 +181,17 @@
               <span class="cm-stat-value">{{ summary.regularHolidays.length }}</span>
               <span class="cm-stat-label">Regular Holidays</span>
             </div>
-            <div class="cm-stat cm-stat--sh">
-              <span class="cm-stat-value">{{ summary.specialHolidays.length }}</span>
-              <span class="cm-stat-label">Special Holidays</span>
+            <div class="cm-stat cm-stat--working">
+              <span class="cm-stat-value">{{ summary.totalWorkingDays }}</span>
+              <span class="cm-stat-label">Total Working Days</span>
             </div>
             <div class="cm-stat cm-stat--susp">
               <span class="cm-stat-value">{{ summary.suspensions.length }}</span>
               <span class="cm-stat-label">Suspensions</span>
             </div>
-            <div class="cm-stat cm-stat--total">
-              <span class="cm-stat-value">{{ summary.totalNonWorkingDays }}</span>
-              <span class="cm-stat-label">Total Non-Working</span>
+            <div class="cm-stat cm-stat--sh">
+              <span class="cm-stat-value">{{ summary.specialHolidays.length }}</span>
+              <span class="cm-stat-label">Special Non-Working</span>
             </div>
           </div>
         </div>
@@ -241,7 +281,6 @@
         </VCardTitle>
 
         <VCardText class="px-5">
-          <!-- Date warning when editing a seeded holiday -->
           <VAlert
             v-if="holidayDialog.editId && holidayDialog.dateChanged"
             type="warning"
@@ -394,6 +433,7 @@ import {
   type HolidayType,
   type SuspensionDay,
 } from '@/composable/usePayrollCalendar'
+import axios from '@axios'
 import { computed, reactive, ref, watch } from 'vue'
 
 const {
@@ -410,6 +450,92 @@ const {
   updateSuspensionDay,
   removeSuspensionDay,
 } = usePayrollCalendar()
+
+// ---------------------------------------------------------------------------
+// Week Schedules (DB-persisted STD/CMP per week)
+// ---------------------------------------------------------------------------
+
+// Map of "YYYY-MM-DD" (Monday) → { is_compressed, is_manual_override }
+const weekScheduleMap = ref<Record<string, { is_compressed: boolean; is_manual_override: boolean }>>({})
+const scheduleOverrideLoading = ref<string | null>(null) // week_start being saved
+
+async function fetchWeekSchedules(year: number, month: number) {
+  try {
+    const { data } = await axios.get('/api/week-schedules', { params: { year, month } })
+    const map: Record<string, { is_compressed: boolean; is_manual_override: boolean }> = {}
+    for (const row of data.data ?? []) {
+      map[row.week_start] = {
+        is_compressed:      row.is_compressed,
+        is_manual_override: row.is_manual_override,
+      }
+    }
+    weekScheduleMap.value = map
+  } catch {
+    // non-fatal — fall back to frontend computation
+  }
+}
+
+// Resolve is_compressed for a given Monday date string.
+// Falls back to STD (false) if no DB row exists — admin must explicitly
+// set a week as Compressed. The fridayHasEvent param is kept for
+// compatibility but no longer used as the default.
+function isWeekCompressed(weekStart: string, fridayHasEvent: boolean): boolean {
+  const row = weekScheduleMap.value[weekStart]
+  if (row !== undefined) return row.is_compressed
+  return false // default: Standard — Compressed must be manually set
+}
+
+async function toggleWeekSchedule(weekStart: string, currentIsCompressed: boolean) {
+  if (scheduleOverrideLoading.value) return
+  scheduleOverrideLoading.value = weekStart
+
+  try {
+    await axios.post(`/api/week-schedules/override/${weekStart}`, {
+      is_compressed: !currentIsCompressed,
+    })
+    weekScheduleMap.value = {
+      ...weekScheduleMap.value,
+      [weekStart]: {
+        is_compressed:      !currentIsCompressed,
+        is_manual_override: true,
+      },
+    }
+    const label = new Date(weekStart + 'T00:00:00').toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })
+    showToast(`Week of ${label} set to ${!currentIsCompressed ? 'Compressed' : 'Standard'}.`)
+  } catch {
+    showToast('Failed to update week schedule.', 'error')
+  } finally {
+    scheduleOverrideLoading.value = null
+  }
+}
+
+async function clearWeekOverride(weekStart: string) {
+  if (scheduleOverrideLoading.value) return
+  if (!weekScheduleMap.value[weekStart]?.is_manual_override) return  // no override to clear
+  scheduleOverrideLoading.value = weekStart
+  try {
+    const { data } = await axios.post(`/api/week-schedules/clear-override/${weekStart}`)
+    if (data.data) {
+      // Row still exists (e.g. Friday has an event — forced STD)
+      weekScheduleMap.value = {
+        ...weekScheduleMap.value,
+        [weekStart]: {
+          is_compressed:      data.data.is_compressed,
+          is_manual_override: false,
+        },
+      }
+    } else {
+      // Row was deleted — remove from map so frontend falls back to STD default
+      const { [weekStart]: _removed, ...rest } = weekScheduleMap.value
+      weekScheduleMap.value = rest
+    }
+    showToast('Override cleared — schedule reset to Standard.')
+  } catch {
+    showToast('Failed to clear override.', 'error')
+  } finally {
+    scheduleOverrideLoading.value = null
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -444,10 +570,17 @@ function nextMonth() {
   else viewMonth.value++
 }
 
-watch([viewYear, viewMonth], ([y, m]) => fetchMonth(y, m), { immediate: true })
+watch([viewYear, viewMonth], async ([y, m]) => {
+  // Await both in parallel so weekScheduleMap is populated
+  // before the calendar renders — prevents the fallback-to-CMP flash.
+  await Promise.all([
+    fetchMonth(y, m),
+    fetchWeekSchedules(y, m),
+  ])
+}, { immediate: true })
 
 // ---------------------------------------------------------------------------
-// Snackbar (#4 — success / error feedback)
+// Snackbar
 // ---------------------------------------------------------------------------
 
 const snackbar = reactive({
@@ -477,28 +610,13 @@ interface CalendarCell {
 
 interface CalendarWeek {
   cells: CalendarCell[]
-  isCompressed: boolean // true = Mon–Thu 10hrs, false = Mon–Fri 8hrs
+  isCompressed: boolean
+  weekStart: string    // Monday date string YYYY-MM-DD
+  hasMonday: boolean   // false for partial edge rows — pill is hidden
 }
 
 // ---------------------------------------------------------------------------
-// Week schedule resolver (#8, #9 — compressed/standard per week)
-// A week is STANDARD if any Mon–Fri day in it has a regular holiday.
-// Otherwise it is COMPRESSED.
-// ---------------------------------------------------------------------------
-
-function resolveWeekSchedule(weekCells: CalendarCell[]): boolean {
-  // Returns true if compressed
-  const monToFri = weekCells.filter(c => {
-    if (!c.date) return false
-    const dow = c.date.getDay()
-    return dow >= 1 && dow <= 5
-  })
-  const hasRegularHoliday = monToFri.some(c => c.info.holiday?.type === 'regular')
-  return !hasRegularHoliday
-}
-
-// ---------------------------------------------------------------------------
-// Build weeks array (replaces flat calendarCells)
+// Build weeks array
 // ---------------------------------------------------------------------------
 
 const calendarWeeks = computed<CalendarWeek[]>(() => {
@@ -512,7 +630,6 @@ const calendarWeeks = computed<CalendarWeek[]>(() => {
 
   const allCells: CalendarCell[] = []
 
-  // Padding before the 1st
   for (let i = 0; i < startDow; i++) {
     allCells.push({ date: null, isoDate: '', isToday: false, isWeekend: false, isFriday: false, info: {} })
   }
@@ -535,37 +652,96 @@ const calendarWeeks = computed<CalendarWeek[]>(() => {
     allCells.push({ date: null, isoDate: '', isToday: false, isWeekend: false, isFriday: false, info: {} })
   }
 
-  // Slice into rows of 7
   const weeks: CalendarWeek[] = []
   for (let i = 0; i < allCells.length; i += 7) {
     const cells = allCells.slice(i, i + 7)
-    weeks.push({ cells, isCompressed: resolveWeekSchedule(cells) })
+
+    // Determine the Monday (week_start) for this row.
+    // IMPORTANT: always anchor on a Mon–Sat cell, never Sunday.
+    // A Sunday cell (getDay=0) belongs to the PREVIOUS ISO week, so using
+    // it as the anchor would compute a weekStart one week too early.
+    // e.g. the row [May24(Sun), May25(Mon)...May30(Sat)] must resolve to
+    // weekStart=May25, not May18.
+    let weekStart = ''
+    const anchorCell = cells.find(c => c.date && c.date.getDay() !== 0)
+      ?? cells.find(c => c.date) // fallback: Sunday-only row (very rare)
+    if (anchorCell?.date) {
+      const d   = new Date(anchorCell.date)
+      const dow = d.getDay() // 0=Sun,1=Mon...6=Sat; anchor is never 0 here
+      d.setDate(d.getDate() - (dow - 1))
+      // Use local timezone date parts — toISOString() shifts to UTC and
+      // produces the wrong date in UTC+ timezones (e.g. Asia/Manila UTC+8).
+      const yy = d.getFullYear()
+      const mm = String(d.getMonth() + 1).padStart(2, '0')
+      const dd = String(d.getDate()).padStart(2, '0')
+      weekStart = `${yy}-${mm}-${dd}`
+    }
+
+    // Friday-event fallback rule (used when no DB row exists)
+    const fridayHasEvent = !!cells.find(c => c.date?.getDay() === 5 && (c.info.holiday || c.info.suspension))
+    const isCompressed   = weekStart
+      ? isWeekCompressed(weekStart, fridayHasEvent)
+      : false // no weekStart = partial edge row, default STD
+
+    // Only show the STD/CMP pill when the row has a Monday cell.
+    // Partial edge rows (e.g. [null*5, May1, May2]) have no Monday and
+    // cannot be meaningfully toggled — they belong to the previous month's week.
+    const hasMonday = cells.some(c => c.date && c.date.getDay() === 1)
+
+    weeks.push({ cells, isCompressed, weekStart, hasMonday })
   }
 
   return weeks
 })
 
 // ---------------------------------------------------------------------------
-// Cell CSS classes (#9 — dim Friday on compressed weeks)
+// Cell CSS classes
 // ---------------------------------------------------------------------------
 
 function cellClasses(cell: CalendarCell, isCompressed: boolean) {
   if (!cell.date) return { 'cm-cell--empty': true }
+
+  const fridayIsCompressedOff =
+    cell.isFriday && isCompressed && !cell.info.holiday && !cell.info.suspension
+
   return {
-    'cm-cell--today':       cell.isToday,
-    'cm-cell--weekend':     cell.isWeekend && !cell.info.holiday,
-    'cm-cell--fri-cmp':     cell.isFriday && isCompressed && !cell.info.holiday,
-    'cm-cell--rh':          cell.info.holiday?.type === 'regular',
-    'cm-cell--sh':          cell.info.holiday?.type === 'special',
-    'cm-cell--susp':        !!cell.info.suspension,
-    'cm-cell--clickable':   true,
+    'cm-cell--today':     cell.isToday,
+    'cm-cell--weekend':   cell.isWeekend && !cell.info.holiday,
+    'cm-cell--fri-cmp':   fridayIsCompressedOff,
+    'cm-cell--rh':        cell.info.holiday?.type === 'regular',
+    'cm-cell--sh':        cell.info.holiday?.type === 'special',
+    'cm-cell--susp':      !!cell.info.suspension,
+    'cm-cell--clickable': true,
   }
 }
 
-const summary = computed(() => getMonthSummary(viewYear.value, viewMonth.value))
+const summary = computed(() => {
+  const base = getMonthSummary(viewYear.value, viewMonth.value)
+
+  // Count actual working days based on schedule type per week,
+  // excluding holidays and suspensions that land on working days.
+  let workingDays = 0
+  for (const week of calendarWeeks.value) {
+    for (const cell of week.cells) {
+      if (!cell.date) continue
+      const dow = cell.date.getDay()
+      const isHolidayOrSusp = !!cell.info.holiday || !!cell.info.suspension
+
+      if (week.isCompressed) {
+        // Compressed: Mon–Thu are working days (Fri is off)
+        if (dow >= 1 && dow <= 4 && !isHolidayOrSusp) workingDays++
+      } else {
+        // Standard: Mon–Fri are working days
+        if (dow >= 1 && dow <= 5 && !isHolidayOrSusp) workingDays++
+      }
+    }
+  }
+
+  return { ...base, totalWorkingDays: workingDays }
+})
 
 // ---------------------------------------------------------------------------
-// Cell click (#5 — right dialog based on what's on that date)
+// Cell click
 // ---------------------------------------------------------------------------
 
 function onCellClick(cell: CalendarCell) {
@@ -575,14 +751,12 @@ function onCellClick(cell: CalendarCell) {
   } else if (cell.info.holiday) {
     openHolidayDialog(cell.info.holiday)
   } else {
-    // Empty weekday: ask via a small choice — for now open suspension
-    // (holiday button in header is always available for holiday-on-empty-date)
     openSuspensionDialog(undefined, cell.date)
   }
 }
 
 // ---------------------------------------------------------------------------
-// Holiday dialog (#6 — date-change warning, #7 — year-scoped date input)
+// Holiday dialog
 // ---------------------------------------------------------------------------
 
 const holidayDialog = reactive({
@@ -628,9 +802,11 @@ async function submitHoliday() {
   holidayDialog.loading = false
 
   if (result === true) {
-    // #1 — invalidate cache so re-fetch picks up changes
     invalidateMonth(viewYear.value, viewMonth.value)
-    await fetchMonth(viewYear.value, viewMonth.value)
+    await Promise.all([
+      fetchMonth(viewYear.value, viewMonth.value),
+      fetchWeekSchedules(viewYear.value, viewMonth.value),
+    ])
     closeHolidayDialog()
     showToast(holidayDialog.editId ? 'Holiday updated successfully.' : 'Holiday added successfully.')
   } else {
@@ -678,9 +854,11 @@ async function submitSuspension() {
   suspensionDialog.loading = false
 
   if (result === true) {
-    // #1 — invalidate cache
     invalidateMonth(viewYear.value, viewMonth.value)
-    await fetchMonth(viewYear.value, viewMonth.value)
+    await Promise.all([
+      fetchMonth(viewYear.value, viewMonth.value),
+      fetchWeekSchedules(viewYear.value, viewMonth.value),
+    ])
     closeSuspensionDialog()
     showToast(suspensionDialog.editId ? 'Suspension day updated.' : 'Suspension day added.')
   } else {
@@ -732,9 +910,11 @@ async function executeDelete() {
   deleteDialog.loading = false
 
   if (result === true) {
-    // #1 — invalidate cache
     invalidateMonth(viewYear.value, viewMonth.value)
-    await fetchMonth(viewYear.value, viewMonth.value)
+    await Promise.all([
+      fetchMonth(viewYear.value, viewMonth.value),
+      fetchWeekSchedules(viewYear.value, viewMonth.value),
+    ])
     deleteDialog.visible = false
     showToast(`${deleteDialog.type === 'holiday' ? 'Holiday' : 'Suspension day'} removed.`)
   } else {
@@ -821,6 +1001,70 @@ async function executeDelete() {
 
 .cm-loading { padding: 2rem 0; }
 
+/* ── Legend (compact, between month nav and day headers) ─────────────── */
+.cm-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.85rem;
+  margin-top: 0.75rem;
+  margin-bottom: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--surface-ground);
+  border-radius: 8px;
+  border: 1px solid var(--surface-border);
+}
+
+.cm-legend-item {
+  font-size: 0.72rem;
+  color: var(--text-color-secondary);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+/* Vertical divider between color items and schedule items */
+.cm-legend-item--divider {
+  width: 1px;
+  height: 14px;
+  background: var(--surface-border);
+  padding: 0;
+  margin: 0 0.1rem;
+}
+
+.cm-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.cm-legend-dot--rh      { background: var(--red-400); }
+.cm-legend-dot--sh      { background: var(--orange-400); }
+.cm-legend-dot--susp    { background: var(--green-400); }
+.cm-legend-dot--today   { background: var(--primary-color); border-radius: 50%; }
+.cm-legend-dot--weekend { background: var(--surface-border); }
+.cm-legend-dot--fri-cmp { background: color-mix(in srgb, var(--purple-500, #9c27b0) 40%, transparent); }
+
+.cm-legend-pill {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}
+
+.cm-legend-pill--std {
+  background: color-mix(in srgb, var(--primary-color) 15%, transparent);
+  color: var(--primary-color);
+}
+
+.cm-legend-pill--cmp {
+  background: color-mix(in srgb, var(--purple-500, #9c27b0) 15%, transparent);
+  color: var(--purple-500, #9c27b0);
+}
+
 /* ── Day Headers (with gutter column for week labels) ───────────────── */
 .cm-day-headers {
   display: grid;
@@ -828,9 +1072,7 @@ async function executeDelete() {
   margin-top: 0.75rem;
 }
 
-.cm-week-gutter-header {
-  /* empty space above week labels */
-}
+.cm-week-gutter-header { /* empty space above week labels */ }
 
 .cm-day-name {
   text-align: center;
@@ -854,7 +1096,7 @@ async function executeDelete() {
   align-items: stretch;
 }
 
-/* ── Week Label (#8) ────────────────────────────────────────────────── */
+/* ── Week Label ─────────────────────────────────────────────────────── */
 .cm-week-label {
   display: flex;
   align-items: center;
@@ -863,7 +1105,6 @@ async function executeDelete() {
   font-weight: 700;
   letter-spacing: 0.04em;
   border-radius: 6px;
-  cursor: default;
   user-select: none;
 }
 
@@ -895,7 +1136,6 @@ async function executeDelete() {
 .cm-cell--clickable:hover   { background: var(--surface-hover); }
 .cm-cell--weekend           { background: var(--surface-ground); }
 
-/* #9 — Friday dimmed on compressed weeks */
 .cm-cell--fri-cmp {
   background: color-mix(in srgb, var(--purple-500, #9c27b0) 8%, transparent);
   opacity: 0.6;
@@ -936,56 +1176,6 @@ async function executeDelete() {
 .cm-badge {
   font-size: 0.6rem !important;
   height: 16px !important;
-}
-
-/* ── Legend ─────────────────────────────────────────────────────────── */
-.cm-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 1rem;
-  margin-top: 1rem;
-  border-top: 1px solid var(--surface-border);
-  padding-top: 1rem;
-}
-
-.cm-legend-item {
-  font-size: 0.75rem;
-  color: var(--text-color-secondary);
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.cm-legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
-
-.cm-legend-dot--rh      { background: var(--red-400); }
-.cm-legend-dot--sh      { background: var(--orange-400); }
-.cm-legend-dot--susp    { background: var(--green-400); }
-.cm-legend-dot--today   { background: var(--primary-color); border-radius: 50%; }
-.cm-legend-dot--weekend { background: var(--surface-border); }
-.cm-legend-dot--fri-cmp { background: color-mix(in srgb, var(--purple-500, #9c27b0) 40%, transparent); }
-
-.cm-legend-pill {
-  font-size: 0.6rem;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 4px;
-  letter-spacing: 0.04em;
-}
-
-.cm-legend-pill--std {
-  background: color-mix(in srgb, var(--primary-color) 15%, transparent);
-  color: var(--primary-color);
-}
-
-.cm-legend-pill--cmp {
-  background: color-mix(in srgb, var(--purple-500, #9c27b0) 15%, transparent);
-  color: var(--purple-500, #9c27b0);
 }
 
 /* ── Sidebar ────────────────────────────────────────────────────────── */
@@ -1029,7 +1219,7 @@ async function executeDelete() {
 .cm-stat--rh    { background: color-mix(in srgb, var(--red-500) 10%, var(--surface-card)); }
 .cm-stat--sh    { background: color-mix(in srgb, var(--orange-500) 10%, var(--surface-card)); }
 .cm-stat--susp  { background: color-mix(in srgb, var(--green-500) 10%, var(--surface-card)); }
-.cm-stat--total { background: var(--surface-hover); }
+.cm-stat--working { background: color-mix(in srgb, var(--blue-500, #2196f3) 10%, var(--surface-card)); }
 
 .cm-stat-value {
   font-size: 1.5rem;
@@ -1104,4 +1294,47 @@ async function executeDelete() {
 }
 
 .cm-required { color: var(--red-500); }
+
+/* ── Week label interactive states ─────────────────────────────────────── */
+.cm-week-label {
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.cm-week-label:hover {
+  opacity: 0.8;
+  transform: scale(1.05);
+}
+
+.cm-week-label--saving {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Orange ring = manual override active */
+.cm-week-label--override {
+  outline: 2px solid var(--orange-400, #fb8c00);
+  outline-offset: 1px;
+}
+
+.cm-week-saving {
+  font-size: 0.7rem;
+  color: var(--text-color-secondary);
+}
+
+/* Small dot indicator for manual override */
+.cm-week-override-dot {
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--orange-400, #fb8c00);
+  margin: 1px auto 0;
+  flex-shrink: 0;
+}
+
+/* Empty gutter for partial edge rows that have no Monday */
+.cm-week-label-empty {
+  border-radius: 6px;
+}
 </style>

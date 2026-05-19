@@ -3,6 +3,7 @@ import BaseAlert from '@/components/base/BaseAlert.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
 import axios from '@axios'
+import * as XLSX from 'xlsx'
 
 /* ─────────────────────────────────────────
    TYPES
@@ -13,6 +14,7 @@ interface Deductions {
   pag_ibig:   number
   sss:        number
   ewt_rate:   number
+  updated_at?: string
 }
 
 interface Employee {
@@ -32,7 +34,7 @@ type AlertType = 'success' | 'error' | 'warning' | 'info'
    CONSTANTS
 ───────────────────────────────────────── */
 const PAGIBIG_MIN = 400
-const SSS_MIN     = 760     // minimum if employee opts in; ₱0 = opted out
+const SSS_MIN     = 760
 const SG_CUTOFF   = 16
 
 const TABLE_HEADERS = [
@@ -67,19 +69,23 @@ const selectedEmp  = ref<Employee | null>(null)
 const form         = ref<Deductions>(BLANK_FORM())
 const formErrors   = ref<Partial<Record<keyof Deductions, string>>>({})
 const filterStatus = ref<'All' | 'Set' | 'Not Set'>('All')
-const isEditing    = ref(false) // true when employee already has deductions
-const sssOptIn     = ref(false) // true = employee wants SSS deducted this period
+const isEditing    = ref(false)
+const sssOptIn     = ref(false)
 
 const alertVisible = ref(false)
 const alertMessage = ref('')
 const alertType    = ref<AlertType>('success')
 
-// ── #3 Save confirmation dialog ──────────────────────────────────────────────
-const confirmSaveDialog = ref(false)
+const confirmSaveDialog  = ref(false)
+const confirmResetDialog = ref(false)
+const resetLoading       = ref(false)
 
-// ── #4 Reset confirmation dialog ─────────────────────────────────────────────
-const confirmResetDialog  = ref(false)
-const resetLoading        = ref(false)
+// ── Export state ─────────────────────────────────────────────────────────────
+const exportDialog   = ref(false)
+const exportDateFrom = ref('')
+const exportDateTo   = ref('')
+const exportLoading  = ref(false)
+const exportFormat   = ref<'excel' | 'pdf'>('excel')
 
 /* ─────────────────────────────────────────
    COMPUTED
@@ -124,15 +130,27 @@ const totalNotSet = computed(() => employees.value.filter(e => !e.has_deductions
 
 const preview = computed(() => {
   if (!selectedEmp.value || !form.value.wage) return null
-  const wage       = Number(form.value.wage)       || 0
-  const philhealth = Number(form.value.philhealth) || 0
-  const pag_ibig   = Number(form.value.pag_ibig)   || 0
-  const sss        = Number(form.value.sss)        || 0
+  const wage        = Number(form.value.wage)       || 0
+  const philhealth  = Number(form.value.philhealth) || 0
+  const pag_ibig    = Number(form.value.pag_ibig)   || 0
+  const sss         = Number(form.value.sss)        || 0
   const totalDeduct = philhealth + pag_ibig + sss
   return {
     totalDeductions: fmt(totalDeduct),
     estimatedNet:    fmt(wage - totalDeduct),
   }
+})
+
+const exportDateValid = computed(() => {
+  if (!exportDateFrom.value || !exportDateTo.value) return false
+  return new Date(exportDateFrom.value) <= new Date(exportDateTo.value)
+})
+
+const exportPeriodLabel = computed(() => {
+  if (!exportDateFrom.value || !exportDateTo.value) return ''
+  const from = new Date(exportDateFrom.value).toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })
+  const to   = new Date(exportDateTo.value).toLocaleDateString('en-PH',   { month: 'long', day: 'numeric', year: 'numeric' })
+  return `${from} – ${to}`
 })
 
 /* ─────────────────────────────────────────
@@ -154,13 +172,15 @@ const fmt = (v: number) =>
     style: 'currency', currency: 'PHP', minimumFractionDigits: 2,
   }).format(v)
 
+const fmtNum = (v: number) =>
+  new Intl.NumberFormat('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)
+
 function showAlert(type: AlertType, message: string) {
   alertType.value    = type
   alertMessage.value = message
   alertVisible.value = true
 }
 
-// #5 — wage must be > 0; v-model.number returns 0 on empty input
 function validate(): boolean {
   const errs: Partial<Record<keyof Deductions, string>> = {}
 
@@ -173,7 +193,6 @@ function validate(): boolean {
   if (Number(form.value.pag_ibig) < PAGIBIG_MIN)
     errs.pag_ibig = `Pag-IBIG must be at least ${fmt(PAGIBIG_MIN)}.`
 
-  // SSS: if opted in, must be at least ₱760; if opted out, force to 0
   if (sssOptIn.value && Number(form.value.sss) < SSS_MIN)
     errs.sss = `SSS must be at least ${fmt(SSS_MIN)} if deducting.`
 
@@ -182,6 +201,420 @@ function validate(): boolean {
 
   formErrors.value = errs
   return Object.keys(errs).length === 0
+}
+
+/* ─────────────────────────────────────────
+   EXPORT HELPERS
+───────────────────────────────────────── */
+
+/**
+ * Fetch filtered employees from the API using date_from / date_to.
+ * The backend filters by wages.updated_at within the range.
+ */
+async function fetchExportData(): Promise<Employee[]> {
+  const params: Record<string, string> = {}
+  if (exportDateFrom.value) params.date_from = exportDateFrom.value
+  if (exportDateTo.value)   params.date_to   = exportDateTo.value
+
+  const { data } = await axios.get('/api/wage', { params })
+  return (data.data ?? []) as Employee[]
+}
+
+/**
+ * Build the flat row array used by both Excel and PDF exports.
+ */
+function buildExportRows(data: Employee[]) {
+  return data
+    .filter(e => e.has_deductions && e.deductions)
+    .map(e => {
+      const d             = e.deductions!
+      const wage          = Number(d.wage)
+      const philhealth    = Number(d.philhealth)
+      const pagibig       = Number(d.pag_ibig)
+      const sss           = Number(d.sss)
+      const totalDeduct   = philhealth + pagibig + sss
+      const netPay        = wage - totalDeduct
+
+      return {
+        name:         e.name,
+        position:     e.position,
+        sg:           e.salary_grade || '—',
+        wage,
+        philhealth,
+        pagibig,
+        sss:          sss > 0 ? sss : 0,
+        sssLabel:     sss > 0 ? fmtNum(sss) : 'Opted out',
+        ewtRate:      `${d.ewt_rate}%`,
+        totalDeduct,
+        netPay,
+      }
+    })
+}
+
+/* ── Excel export ────────────────────────────────────────────────────────── */
+async function handleExportExcel() {
+  exportLoading.value = true
+  try {
+    const raw  = await fetchExportData()
+    const rows = buildExportRows(raw)
+
+    if (!rows.length) {
+      showAlert('warning', 'No employees with deductions found for the selected period.')
+      return
+    }
+
+    const periodLabel = exportPeriodLabel.value
+
+    // ── Header rows ──────────────────────────────────────────────────────────
+    const headerRows = [
+      ['DEPARTMENT OF HEALTH — REGION XII (SOCCSKSARGEN)'],
+      ['JO Employee Government Remittances'],
+      [`Period Covered: ${periodLabel}`],
+      [`Generated: ${new Date().toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })}`],
+      [], // blank spacer
+      [
+        'Name',
+        'Position',
+        'SG',
+        'Monthly Wage',
+        'PhilHealth',
+        'Pag-IBIG',
+        'SSS',
+        'EWT Rate',
+        'Total Deductions',
+        'Est. Net Pay',
+      ],
+    ]
+
+    const dataRows = rows.map(r => [
+      r.name,
+      r.position,
+      r.sg,
+      r.wage,
+      r.philhealth,
+      r.pagibig,
+      r.sss,
+      r.ewtRate,
+      r.totalDeduct,
+      r.netPay,
+    ])
+
+    // ── Totals row ───────────────────────────────────────────────────────────
+    const totalsRow = [
+      'TOTAL',
+      '',
+      '',
+      rows.reduce((s, r) => s + r.wage,        0),
+      rows.reduce((s, r) => s + r.philhealth,  0),
+      rows.reduce((s, r) => s + r.pagibig,     0),
+      rows.reduce((s, r) => s + r.sss,         0),
+      '',
+      rows.reduce((s, r) => s + r.totalDeduct, 0),
+      rows.reduce((s, r) => s + r.netPay,      0),
+    ]
+
+    const allRows = [...headerRows, ...dataRows, [], totalsRow]
+
+    const ws = XLSX.utils.aoa_to_sheet(allRows)
+
+    // ── Column widths ────────────────────────────────────────────────────────
+    ws['!cols'] = [
+      { wch: 36 }, // Name
+      { wch: 28 }, // Position
+      { wch: 6  }, // SG
+      { wch: 16 }, // Wage
+      { wch: 14 }, // PhilHealth
+      { wch: 12 }, // Pag-IBIG
+      { wch: 14 }, // SSS
+      { wch: 10 }, // EWT Rate
+      { wch: 18 }, // Total Deductions
+      { wch: 16 }, // Net Pay
+    ]
+
+    // ── Merge title rows across all 10 columns ───────────────────────────────
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 9 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 9 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 9 } },
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 9 } },
+    ]
+
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Remittances')
+
+    const fileName = `DOH_R12_Remittances_${exportDateFrom.value}_to_${exportDateTo.value}.xlsx`
+    XLSX.writeFile(wb, fileName)
+
+    showAlert('success', `Excel exported: ${fileName}`)
+    exportDialog.value = false
+  } catch (err: any) {
+    showAlert('error', err.message ?? 'Export failed.')
+  } finally {
+    exportLoading.value = false
+  }
+}
+
+/* ── PDF export (jsPDF + AutoTable → real .pdf blob in a new tab) ────────── */
+async function handleExportPdf() {
+  exportLoading.value = true
+  try {
+    const raw  = await fetchExportData()
+    const rows = buildExportRows(raw)
+
+    if (!rows.length) {
+      showAlert('warning', 'No employees with deductions found for the selected period.')
+      return
+    }
+
+    // ── Lazy-load jsPDF + AutoTable from CDN ─────────────────────────────────
+    // We load once and cache on window to avoid re-fetching on repeated exports.
+    if (!(window as any).jspdf) {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement('script')
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
+        s.onload  = () => resolve()
+        s.onerror = () => reject(new Error('Failed to load jsPDF.'))
+        document.head.appendChild(s)
+      })
+    }
+    if (!(window as any).jspdfAutotable) {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement('script')
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'
+        s.onload  = () => resolve()
+        s.onerror = () => reject(new Error('Failed to load AutoTable.'))
+        document.head.appendChild(s)
+        ;(window as any).jspdfAutotable = true
+      })
+    }
+
+    const { jsPDF } = (window as any).jspdf
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+
+    const periodLabel = exportPeriodLabel.value
+    const generated   = new Date().toLocaleDateString('en-PH', {
+      month: 'long', day: 'numeric', year: 'numeric',
+    })
+
+    const totals = {
+      wage:        rows.reduce((s, r) => s + r.wage,        0),
+      philhealth:  rows.reduce((s, r) => s + r.philhealth,  0),
+      pagibig:     rows.reduce((s, r) => s + r.pagibig,     0),
+      sss:         rows.reduce((s, r) => s + r.sss,         0),
+      totalDeduct: rows.reduce((s, r) => s + r.totalDeduct, 0),
+      netPay:      rows.reduce((s, r) => s + r.netPay,      0),
+    }
+
+    const pageW  = doc.internal.pageSize.getWidth()
+    const pageH  = doc.internal.pageSize.getHeight()
+
+    // ── DOH 2025–2028 Official Brand Palette ─────────────────────────────────
+    // Primary Institutional (Neutrals)
+    const DEEP_NAVY      = [31,  42,  69] as [number,number,number]  // #1F2A45
+    const CHARCOAL_GRAY  = [51,  51,  51] as [number,number,number]  // #333333
+    const MINT_CREAM     = [238,250, 246] as [number,number,number]  // #EEFAF6
+    const HONEYDEW       = [222,240, 233] as [number,number,number]  // #DEF0E9
+    const FROSTED_MINT   = [230,246, 216] as [number,number,number]  // #E6F6D8
+    // Secondary Support
+    const SOFT_NAVY      = [54,  81, 117] as [number,number,number]  // #365175
+    const STEEL_BLUE     = [88, 124, 165] as [number,number,number]  // #587CA5
+    const BLUE_SLATE     = [76, 107, 117] as [number,number,number]  // #4C6B75
+    // Accent
+    const HERITAGE_YELLOW = [255,215,  0] as [number,number,number]  // #FFD700
+    const HEALTH_BLUE     = [11,  75, 170] as [number,number,number] // #0B4BAA
+    const WHITE           = [255,255, 255] as [number,number,number]
+    const LIGHT_GRAY      = [140,140, 140] as [number,number,number]
+
+    // ── Header band: Deep Navy (primary institutional) ────────────────────────
+    doc.setFillColor(...DEEP_NAVY)
+    doc.rect(0, 0, pageW, 32, 'F')
+
+    // Heritage Yellow accent strip below header
+    doc.setFillColor(...HERITAGE_YELLOW)
+    doc.rect(0, 32, pageW, 2, 'F')
+
+    // Left vertical accent bar (Soft Navy) — subtle brand mark
+    doc.setFillColor(...SOFT_NAVY)
+    doc.rect(0, 0, 3, 34, 'F')
+
+    // Agency name — upper weight in white
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.setTextColor(...WHITE)
+    doc.text('DEPARTMENT OF HEALTH — REGION XII (SOCCSKSARGEN)', pageW / 2, 11, { align: 'center' })
+
+    // Report title — larger, still white
+    doc.setFontSize(13.5)
+    doc.text('JO Employee Government Remittances', pageW / 2, 20, { align: 'center' })
+
+    // Meta line — subdued, light blue-white
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(7.5)
+    doc.setTextColor(196, 214, 230)
+    doc.text(
+      `Period Covered: ${periodLabel}   ·   Generated: ${generated}   ·   Total Employees: ${rows.length}`,
+      pageW / 2, 28, { align: 'center' },
+    )
+
+    // ── Summary chips row ─────────────────────────────────────────────────────
+    const summaryY = 43
+    const summaries = [
+      { label: 'Total Wage',       value: `PHP ${fmtNum(totals.wage)}`,        accent: false },
+      { label: 'PhilHealth',       value: `PHP ${fmtNum(totals.philhealth)}`,  accent: false },
+      { label: 'Pag-IBIG',         value: `PHP ${fmtNum(totals.pagibig)}`,     accent: false },
+      { label: 'SSS',              value: `PHP ${fmtNum(totals.sss)}`,         accent: false },
+      { label: 'Total Deductions', value: `PHP ${fmtNum(totals.totalDeduct)}`, accent: false },
+      { label: 'Est. Net Pay',     value: `PHP ${fmtNum(totals.netPay)}`,      accent: true  },
+    ]
+    const chipW = (pageW - 28) / summaries.length
+
+    summaries.forEach(({ label, value, accent }, i) => {
+      const x = 14 + i * chipW
+
+      // Chip: Heritage Yellow for Net Pay, Mint Cream for others
+      doc.setFillColor(...(accent ? [255, 248, 200] as [number,number,number] : MINT_CREAM))
+      doc.setDrawColor(...(accent ? HERITAGE_YELLOW : HONEYDEW))
+      doc.setLineWidth(0.4)
+      doc.roundedRect(x, summaryY - 5, chipW - 2, 11, 1.5, 1.5, 'FD')
+
+      // Label
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(6)
+      doc.setTextColor(...LIGHT_GRAY)
+      doc.text(label, x + (chipW - 2) / 2, summaryY - 0.8, { align: 'center' })
+
+      // Value — Deep Navy for accent chip, Soft Navy for rest
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(7.5)
+      doc.setTextColor(...(accent ? DEEP_NAVY : SOFT_NAVY))
+      doc.text(value, x + (chipW - 2) / 2, summaryY + 3.8, { align: 'center' })
+    })
+
+    // ── Table ─────────────────────────────────────────────────────────────────
+    const tableBody = rows.map((r, i) => [
+      i + 1,
+      r.name,
+      r.position,
+      r.sg,
+      `PHP ${fmtNum(r.wage)}`,
+      `PHP ${fmtNum(r.philhealth)}`,
+      `PHP ${fmtNum(r.pagibig)}`,
+      r.sssLabel === 'Opted out' ? 'Opted out' : `PHP ${r.sssLabel}`,
+      r.ewtRate,
+      `PHP ${fmtNum(r.totalDeduct)}`,
+      `PHP ${fmtNum(r.netPay)}`,
+    ])
+
+    const totalsRow = [
+      { content: 'TOTAL', colSpan: 4, styles: { fontStyle: 'bold' as const, halign: 'left' as const } },
+      `PHP ${fmtNum(totals.wage)}`,
+      `PHP ${fmtNum(totals.philhealth)}`,
+      `PHP ${fmtNum(totals.pagibig)}`,
+      `PHP ${fmtNum(totals.sss)}`,
+      '',
+      `PHP ${fmtNum(totals.totalDeduct)}`,
+      `PHP ${fmtNum(totals.netPay)}`,
+    ]
+
+    ;(doc as any).autoTable({
+      startY: summaryY + 9,
+      head: [[
+        '#', 'Name', 'Position', 'SG',
+        'Monthly Wage', 'PhilHealth', 'Pag-IBIG', 'SSS',
+        'EWT Rate', 'Total Deductions', 'Est. Net Pay',
+      ]],
+      body: tableBody,
+      foot: [totalsRow],
+      showFoot: 'lastPage',
+      theme: 'grid',
+      styles: {
+        fontSize: 8,
+        cellPadding: 2.5,
+        valign: 'middle',
+        overflow: 'linebreak',
+        textColor: CHARCOAL_GRAY,
+        lineColor: [210, 220, 230],
+        lineWidth: 0.2,
+      },
+      headStyles: {
+        fillColor: SOFT_NAVY,       // Secondary Soft Navy Blue for table header
+        textColor: WHITE,
+        fontStyle: 'bold',
+        halign:    'center',
+        fontSize:  8,
+        lineColor: DEEP_NAVY,
+        lineWidth: 0.3,
+      },
+      footStyles: {
+        fillColor: HONEYDEW,        // Honeydew (primary neutral) for totals row
+        textColor: DEEP_NAVY,
+        fontStyle: 'bold',
+        lineColor: [180, 210, 195],
+        lineWidth: 0.3,
+      },
+      alternateRowStyles: {
+        fillColor: FROSTED_MINT,    // Frosted Mint — very subtle stripe
+      },
+      columnStyles: {
+        0:  { halign: 'center', cellWidth: 8   },
+        1:  { cellWidth: 48  },
+        2:  { cellWidth: 38  },
+        3:  { halign: 'center', cellWidth: 10  },
+        4:  { halign: 'right', cellWidth: 24   },
+        5:  { halign: 'right', cellWidth: 22   },
+        6:  { halign: 'right', cellWidth: 20   },
+        7:  { halign: 'right', cellWidth: 22   },
+        8:  { halign: 'center', cellWidth: 16  },
+        9:  { halign: 'right', cellWidth: 26   },
+        10: { halign: 'right', cellWidth: 24   },
+      },
+      margin: { left: 14, right: 14 },
+    })
+
+    // ── Bottom footer bar: Heritage Yellow + Deep Navy ────────────────────────
+    doc.setFillColor(...HERITAGE_YELLOW)
+    doc.rect(0, pageH - 7,   pageW, 2,   'F')
+    doc.setFillColor(...DEEP_NAVY)
+    doc.rect(0, pageH - 5,   pageW, 5,   'F')
+
+    // ── Footer note ───────────────────────────────────────────────────────────
+    const finalY = (doc as any).lastAutoTable.finalY + 5
+    doc.setFont('helvetica', 'italic')
+    doc.setFontSize(7)
+    doc.setTextColor(...LIGHT_GRAY)
+    doc.text(
+      'This report is system-generated. Employee share only. EWT applied after PHP 250,000 annual gross threshold.',
+      pageW - 14, finalY, { align: 'right' },
+    )
+
+    // ── Open as real PDF blob in a new tab ────────────────────────────────────
+    const pdfBlob = doc.output('blob')
+    const url     = URL.createObjectURL(pdfBlob)
+    const tab     = window.open(url, '_blank')
+
+    if (!tab) {
+      showAlert('error', 'Popup blocked. Please allow popups for this site.')
+      URL.revokeObjectURL(url)
+      return
+    }
+
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+
+    showAlert('success', 'PDF opened in a new tab.')
+    exportDialog.value = false
+  } catch (err: any) {
+    showAlert('error', err.message ?? 'PDF export failed.')
+  } finally {
+    exportLoading.value = false
+  }
+}
+
+async function handleExport() {
+  if (exportFormat.value === 'excel') {
+    await handleExportExcel()
+  } else {
+    await handleExportPdf()
+  }
 }
 
 /* ─────────────────────────────────────────
@@ -200,11 +633,8 @@ async function fetchEmployees() {
   }
 }
 
-// #3 — called after user confirms the save dialog
 async function handleSave() {
   if (!validate() || !selectedEmp.value) return
-
-  // Show confirmation dialog instead of saving immediately
   confirmSaveDialog.value = true
 }
 
@@ -213,7 +643,6 @@ async function executeSave() {
   confirmSaveDialog.value = false
   modalLoading.value      = true
 
-  // If employee opted out of SSS, ensure the value sent is exactly 0
   const payload = { ...form.value, sss: sssOptIn.value ? form.value.sss : 0 }
 
   try {
@@ -244,7 +673,6 @@ async function executeSave() {
   }
 }
 
-// #4 — delete wage record from DB
 async function executeReset() {
   if (!selectedEmp.value) return
   confirmResetDialog.value = false
@@ -296,6 +724,20 @@ function openEdit(item: Record<string, any>) {
   modalOpen.value  = true
 }
 
+function openDeleteConfirm(item: Record<string, any>) {
+  const emp = employees.value.find(e => e.emp_id === item.emp_id)
+  if (!emp || !emp.has_deductions) return
+  selectedEmp.value        = emp
+  confirmResetDialog.value = true
+}
+
+function openExportDialog(format: 'excel' | 'pdf') {
+  exportFormat.value   = format
+  exportDateFrom.value = ''
+  exportDateTo.value   = ''
+  exportDialog.value   = true
+}
+
 /* ─────────────────────────────────────────
    INIT
 ───────────────────────────────────────── */
@@ -314,6 +756,28 @@ onMounted(fetchEmployees)
             Set monthly wage and deduction amounts per JO employee.
           </p>
         </div>
+
+        <!-- ── Export Buttons ── -->
+        <div class="d-flex gap-2">
+          <VBtn
+            variant="outlined"
+            color="success"
+            prepend-icon="mdi-microsoft-excel"
+            size="small"
+            @click="openExportDialog('excel')"
+          >
+            Export Excel
+          </VBtn>
+          <VBtn
+            variant="outlined"
+            color="error"
+            prepend-icon="mdi-file-pdf-box"
+            size="small"
+            @click="openExportDialog('pdf')"
+          >
+            Export PDF
+          </VBtn>
+        </div>
       </div>
 
       <!-- ── Info Banner ── -->
@@ -325,7 +789,6 @@ onMounted(fetchEmployees)
         class="mb-6 mt-4"
         closable
       >
-        <!-- #1 — corrected SSS text: voluntary, min ₱0 for JO -->
         <strong>PhilHealth:</strong>
         SG 15 and below = ₱500/month fixed &nbsp;·&nbsp;
         SG 16 and above = 5% of monthly wage &nbsp;·&nbsp;
@@ -395,6 +858,7 @@ onMounted(fetchEmployees)
         :items-per-page="10"
         searchable
         @edit="openEdit"
+        @delete="openDeleteConfirm"
       >
         <template #item.salary_grade="{ item }">
           <VChip
@@ -428,6 +892,31 @@ onMounted(fetchEmployees)
             {{ item.ewtDisp }}
           </VChip>
           <span v-else class="text-medium-emphasis">—</span>
+        </template>
+
+        <!-- ── Actions: hide delete for employees with no deductions ── -->
+        <template #item.actions="{ item }">
+          <div class="d-flex align-center justify-center gap-1">
+            <VBtn
+              icon
+              size="small"
+              variant="text"
+              color="primary"
+              @click.stop="openEdit(item)"
+            >
+              <VIcon size="18">mdi-pencil-outline</VIcon>
+            </VBtn>
+            <VBtn
+              v-if="item.status === 'Set'"
+              icon
+              size="small"
+              variant="text"
+              color="error"
+              @click.stop="openDeleteConfirm(item)"
+            >
+              <VIcon size="18">mdi-delete-outline</VIcon>
+            </VBtn>
+          </div>
         </template>
       </BaseTable>
 
@@ -477,13 +966,11 @@ onMounted(fetchEmployees)
           </VCard>
         </VCol>
 
-        <!-- #4 — Reset button, only shown when editing existing deductions -->
+        <!-- Reset warning -->
         <VCol v-if="isEditing" cols="12">
           <VAlert type="warning" variant="tonal" density="compact" icon="mdi-alert-outline">
             <div class="d-flex align-center justify-space-between flex-wrap gap-2">
-              <span class="text-body-2">
-                Existing deductions are set for this employee.
-              </span>
+              <span class="text-body-2">Existing deductions are set for this employee.</span>
               <VBtn
                 size="small"
                 color="error"
@@ -500,9 +987,7 @@ onMounted(fetchEmployees)
 
         <!-- Wage -->
         <VCol cols="12" class="mt-1">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
-            Monthly Wage
-          </p>
+          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Monthly Wage</p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
@@ -524,9 +1009,7 @@ onMounted(fetchEmployees)
 
         <!-- Government Contributions -->
         <VCol cols="12" class="mt-2">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
-            Government Contributions
-          </p>
+          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Government Contributions</p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
@@ -563,7 +1046,6 @@ onMounted(fetchEmployees)
           />
         </VCol>
 
-        <!-- SSS — toggle opt-in, then show amount field only if opted in -->
         <VCol cols="12" sm="4">
           <div class="d-flex flex-column gap-2">
             <VSwitch
@@ -596,9 +1078,7 @@ onMounted(fetchEmployees)
 
         <!-- EWT -->
         <VCol cols="12" class="mt-2">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
-            Expanded Withholding Tax (EWT)
-          </p>
+          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Expanded Withholding Tax (EWT)</p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
@@ -621,13 +1101,7 @@ onMounted(fetchEmployees)
         </VCol>
 
         <VCol cols="12" sm="7" class="d-flex align-center">
-          <VAlert
-            type="info"
-            variant="tonal"
-            density="compact"
-            icon="mdi-information-outline"
-            class="text-body-2 w-100"
-          >
+          <VAlert type="info" variant="tonal" density="compact" icon="mdi-information-outline" class="text-body-2 w-100">
             EWT applies only after cumulative annual gross exceeds
             <strong>₱250,000</strong>. Only the excess is taxed in the crossing month.
           </VAlert>
@@ -661,7 +1135,7 @@ onMounted(fetchEmployees)
       </VRow>
     </BaseModal>
 
-    <!-- ── #3 Save Confirmation Dialog ── -->
+    <!-- ── Save Confirmation Dialog ── -->
     <VDialog v-model="confirmSaveDialog" max-width="420" persistent>
       <VCard>
         <VCardTitle class="pt-5 px-5">
@@ -687,7 +1161,7 @@ onMounted(fetchEmployees)
       </VCard>
     </VDialog>
 
-    <!-- ── #4 Reset Confirmation Dialog ── -->
+    <!-- ── Reset Confirmation Dialog ── -->
     <VDialog v-model="confirmResetDialog" max-width="420" persistent>
       <VCard>
         <VCardTitle class="pt-5 px-5">Clear Deductions?</VCardTitle>
@@ -700,6 +1174,74 @@ onMounted(fetchEmployees)
           <VBtn variant="text" @click="confirmResetDialog = false">Cancel</VBtn>
           <VBtn color="error" :loading="resetLoading" @click="executeReset">
             Yes, Clear Deductions
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
+    <!-- ── Export Dialog ── -->
+    <VDialog v-model="exportDialog" max-width="460" persistent>
+      <VCard>
+        <VCardTitle class="pt-5 px-5 d-flex align-center gap-2">
+          <VIcon
+            :icon="exportFormat === 'excel' ? 'mdi-microsoft-excel' : 'mdi-file-pdf-box'"
+            :color="exportFormat === 'excel' ? 'success' : 'error'"
+          />
+          Export {{ exportFormat === 'excel' ? 'Excel' : 'PDF' }} Report
+        </VCardTitle>
+
+        <VCardText class="px-5 pb-2">
+          <VAlert type="info" variant="tonal" density="compact" icon="mdi-information-outline" class="mb-4">
+            Only employees whose deduction record was <strong>last updated</strong> within the
+            selected date range will be included in the export.
+          </VAlert>
+
+          <VRow dense>
+            <VCol cols="12" sm="6">
+              <VTextField
+                v-model="exportDateFrom"
+                label="Date From"
+                type="date"
+                variant="outlined"
+                density="compact"
+                prepend-inner-icon="mdi-calendar-start"
+                hide-details
+              />
+            </VCol>
+            <VCol cols="12" sm="6">
+              <VTextField
+                v-model="exportDateTo"
+                label="Date To"
+                type="date"
+                variant="outlined"
+                density="compact"
+                prepend-inner-icon="mdi-calendar-end"
+                hide-details
+              />
+            </VCol>
+          </VRow>
+
+          <!-- Period preview label -->
+          <p v-if="exportPeriodLabel" class="text-caption text-medium-emphasis mt-3 mb-0">
+            <VIcon icon="mdi-tag-outline" size="13" class="mr-1" />
+            Period label: <strong>{{ exportPeriodLabel }}</strong>
+          </p>
+          <p v-if="exportDateFrom && exportDateTo && !exportDateValid" class="text-caption text-error mt-2 mb-0">
+            <VIcon icon="mdi-alert-circle-outline" size="13" class="mr-1" />
+            "Date From" must be on or before "Date To".
+          </p>
+        </VCardText>
+
+        <VCardActions class="justify-end px-5 pb-4">
+          <VBtn variant="text" :disabled="exportLoading" @click="exportDialog = false">Cancel</VBtn>
+          <VBtn
+            :color="exportFormat === 'excel' ? 'success' : 'error'"
+            :prepend-icon="exportFormat === 'excel' ? 'mdi-download' : 'mdi-file-pdf-box'"
+            :loading="exportLoading"
+            :disabled="!exportDateValid"
+            @click="handleExport"
+          >
+            {{ exportFormat === 'excel' ? 'Download Excel' : 'Open PDF' }}
           </VBtn>
         </VCardActions>
       </VCard>
