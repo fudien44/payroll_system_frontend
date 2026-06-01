@@ -126,10 +126,10 @@ const philhealthMin = computed(() => {
 })
 
 const philhealthHint = computed(() => {
-  if (!selectedEmp.value) return 'Min: ₱500.00/month'
+  if (!selectedEmp.value) return 'Stored monthly amount. Deducted ×3 on Jan/Apr/Jul/Oct.'
   return selectedEmp.value.salary_grade >= SG_CUTOFF
-    ? `SG ${selectedEmp.value.salary_grade} — 5% of wage (min: ${fmt(philhealthMin.value)})/month`
-    : 'Min: ₱500.00/month (SG 15 and below)'
+    ? `SG ${selectedEmp.value.salary_grade} — 5% of wage (${fmt(philhealthMin.value)}) deducted monthly`
+    : `Stored monthly amount (min ₱500). Deducted ×3 = ${fmt((form.value.philhealth || 500) * 3)} on Jan/Apr/Jul/Oct only.`
 })
 
 const filteredItems = computed(() =>
@@ -807,8 +807,10 @@ onMounted(fetchEmployees)
 
       <!-- ── Info Banner ── -->
       <VAlert type="info" variant="tonal" density="compact" icon="mdi-information-outline" class="mb-4 mt-4" closable>
-        <strong>PhilHealth:</strong> SG 15 and below = ₱500/month fixed &nbsp;·&nbsp;
-        SG 16 and above = 5% of monthly wage &nbsp;·&nbsp;
+        <strong>PhilHealth (SG 15 and below):</strong>
+        Quarterly — enter monthly amount (min ₱500), deducted as
+        <strong>×3 on Jan, Apr, Jul, Oct</strong> (min ₱1,500/quarter). Zero on other months. &nbsp;·&nbsp;
+        <strong>PhilHealth (SG 16 and above):</strong> 5% of monthly wage, deducted every month &nbsp;·&nbsp;
         <strong>Pag-IBIG</strong> min ₱400 (mandatory) &nbsp;·&nbsp;
         <strong>SSS</strong> voluntary — min ₱760 if deducting &nbsp;·&nbsp;
         <strong>Premium</strong> 5/10/15/20% of wage &nbsp;·&nbsp;
@@ -889,7 +891,7 @@ onMounted(fetchEmployees)
             :color="item.salary_grade >= SG_CUTOFF ? 'purple' : 'default'"
             size="small" variant="tonal" label
           >
-            SG {{ item.salary_grade || '—' }}
+            SG - {{ item.salary_grade || '—' }}
           </VChip>
         </template>
 
@@ -966,7 +968,9 @@ onMounted(fetchEmployees)
               <div>
                 <div class="text-caption text-medium-emphasis">PhilHealth Mode</div>
                 <div class="text-body-2 font-weight-medium">
-                  {{ (selectedEmp?.salary_grade ?? 0) >= SG_CUTOFF ? '5% of monthly wage' : '₱500 fixed/month' }}
+                  {{ (selectedEmp?.salary_grade ?? 0) >= SG_CUTOFF
+                      ? '5% of wage — monthly'
+                      : `Quarterly lump-sum (×3 on Jan/Apr/Jul/Oct)` }}
                 </div>
               </div>
             </VCardText>
@@ -1316,3 +1320,14 @@ onMounted(fetchEmployees)
     />
   </div>
 </template>
+<style scoped>
+/* Freeze Name column only */
+:deep(.v-data-table__td:nth-child(1)),
+:deep(.v-data-table__th:nth-child(1)) {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: rgb(var(--v-theme-surface));
+  border-right: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+</style>

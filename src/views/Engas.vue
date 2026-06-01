@@ -11,6 +11,7 @@ interface EngasEmployee {
   engas_name: string | null
   hrmis_name: string
   matched:    boolean
+  source:     'Manual' | 'ENGAS System' | null
 }
 
 /* ─────────────────────────────────────────
@@ -20,6 +21,7 @@ const TABLE_HEADERS = [
   { title: 'ENGAS Code', key: 'engas_code', sortable: true  },
   { title: 'HRMIS Name', key: 'hrmis_name', sortable: true  },
   { title: 'ENGAS Name', key: 'engas_name', sortable: true  },
+  { title: 'Source',     key: 'source',     sortable: true  },
   { title: 'Status',     key: 'matched',    sortable: true  },
 ]
 
@@ -34,10 +36,11 @@ const exporting    = ref(false)
 /* ─────────────────────────────────────────
    COMPUTED
 ───────────────────────────────────────── */
-const totalEmployees = computed(() => employees.value.length)
-const totalMatched   = computed(() => employees.value.filter(e => e.matched).length)
-const totalUnmatched = computed(() => employees.value.filter(e => !e.matched).length)
-const unmatched      = computed(() => employees.value.filter(e => !e.matched))
+const totalEmployees  = computed(() => employees.value.length)
+const totalMatched    = computed(() => employees.value.filter(e => e.matched).length)
+const totalUnmatched  = computed(() => employees.value.filter(e => !e.matched).length)
+const totalManual     = computed(() => employees.value.filter(e => e.source === 'Manual').length)
+const unmatched       = computed(() => employees.value.filter(e => !e.matched))
 
 /* ─────────────────────────────────────────
    API
@@ -66,34 +69,28 @@ function exportUnmatched() {
   try {
     const wb = XLSX.utils.book_new()
 
-    // Build rows
     const rows = [
-      // Title row
       ['ENGAS UNMATCHED EMPLOYEES — FOR HR VERIFICATION'],
       [`Generated: ${new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}`],
       [],
-      // Header row
       ['#', 'Name', 'Regular?', 'Active?'],
-      // Data rows
       ...unmatched.value.map((emp, i) => [
         i + 1,
         emp.hrmis_name,
-        '',   // To be filled by HR
-        '',   // To be filled by HR
+        '',
+        '',
       ]),
     ]
 
     const ws = XLSX.utils.aoa_to_sheet(rows)
 
-    // Column widths
     ws['!cols'] = [
-      { wch: 5  },  // #
-      { wch: 40 },  // Name
-      { wch: 15 },  // Regular?
-      { wch: 15 },  // Active?
+      { wch: 5  },
+      { wch: 40 },
+      { wch: 15 },
+      { wch: 15 },
     ]
 
-    // Merge title cell across 4 columns
     ws['!merges'] = [
       { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
       { s: { r: 1, c: 0 }, e: { r: 1, c: 3 } },
@@ -124,6 +121,7 @@ onMounted(fetchEmployees)
           <h4 class="text-h5 font-weight-bold mb-1">ENGAS Employee Reference</h4>
           <p class="text-body-2 text-medium-emphasis mb-0">
             Read-only reference from <code>ENGAS SYSTEM</code> from Accounting Department.
+            Codes manually encoded in payroll batches take priority.
           </p>
         </div>
 
@@ -158,7 +156,7 @@ onMounted(fetchEmployees)
 
       <!-- ── Summary Cards ── -->
       <VRow class="mb-6 mt-2">
-        <VCol cols="12" sm="4">
+        <VCol cols="12" sm="3">
           <VCard variant="tonal" color="primary" rounded="lg">
             <VCardText class="d-flex align-center gap-4">
               <VIcon icon="mdi-account-group-outline" size="36" />
@@ -169,7 +167,7 @@ onMounted(fetchEmployees)
             </VCardText>
           </VCard>
         </VCol>
-        <VCol cols="12" sm="4">
+        <VCol cols="12" sm="3">
           <VCard variant="tonal" color="success" rounded="lg">
             <VCardText class="d-flex align-center gap-4">
               <VIcon icon="mdi-check-circle-outline" size="36" />
@@ -180,7 +178,18 @@ onMounted(fetchEmployees)
             </VCardText>
           </VCard>
         </VCol>
-        <VCol cols="12" sm="4">
+        <VCol cols="12" sm="3">
+          <VCard variant="tonal" color="info" rounded="lg">
+            <VCardText class="d-flex align-center gap-4">
+              <VIcon icon="mdi-pencil-circle-outline" size="36" />
+              <div>
+                <div class="text-h5 font-weight-bold">{{ totalManual }}</div>
+                <div class="text-body-2">Manually Encoded</div>
+              </div>
+            </VCardText>
+          </VCard>
+        </VCol>
+        <VCol cols="12" sm="3">
           <VCard variant="tonal" color="warning" rounded="lg">
             <VCardText class="d-flex align-center gap-4">
               <VIcon icon="mdi-alert-circle-outline" size="36" />
@@ -224,26 +233,67 @@ onMounted(fetchEmployees)
           <span v-else class="text-medium-emphasis">—</span>
         </template>
 
-       <template #item.matched="{ item }">
-            <VChip
-                :color="item.matched ? 'success' : 'warning'"
-                size="small"
-                variant="tonal"
-                label
-            >
-                <VIcon
-                start
-                :icon="item.matched ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'"
-                size="14"
-                />
-                {{ item.matched ? 'Matched' : 'Not Found' }}
-            </VChip>
-            <div v-if="!item.matched" class="text-caption text-warning mt-1" style="max-width: 220px; line-height: 1.3;">
-                Please verify with HRMIS — employee may no longer be active or may have been regularized.
-            </div>
-            </template>
+        <!-- ── Source chip ── -->
+        <template #item.source="{ item }">
+          <VChip
+            v-if="item.source === 'Manual'"
+            color="info"
+            size="small"
+            variant="tonal"
+            label
+          >
+            <VIcon start icon="mdi-pencil-outline" size="14" />
+            Manual
+          </VChip>
+          <VChip
+            v-else-if="item.source === 'ENGAS System'"
+            color="secondary"
+            size="small"
+            variant="tonal"
+            label
+          >
+            <VIcon start icon="mdi-database-outline" size="14" />
+            ENGAS System
+          </VChip>
+          <span v-else class="text-medium-emphasis">—</span>
+        </template>
+
+        <!-- ── Status chip ── -->
+        <template #item.matched="{ item }">
+          <VChip
+            :color="item.matched ? 'success' : 'warning'"
+            size="small"
+            variant="tonal"
+            label
+          >
+            <VIcon
+              start
+              :icon="item.matched ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'"
+              size="14"
+            />
+            {{ item.matched ? 'Matched' : 'Not Found' }}
+          </VChip>
+          <div
+            v-if="!item.matched"
+            class="text-caption text-warning mt-1 not-found-hint"
+          >
+            Please verify with HRMIS — employee may no longer be active or may have been regularized.
+          </div>
+        </template>
       </BaseTable>
 
     </VContainer>
   </div>
 </template>
+<style scoped>
+:deep(.v-data-table__td:last-child) {
+  min-width: 0;
+}
+
+.not-found-hint {
+  white-space: normal;
+  word-break: break-word;
+  max-width: 200px;
+  line-height: 1.3;
+}
+</style>
