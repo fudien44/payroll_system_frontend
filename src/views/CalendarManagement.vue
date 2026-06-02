@@ -388,6 +388,51 @@
       </VCard>
     </VDialog>
 
+    <!-- ── Event Type Picker Dialog ──────────────────────────────────────── -->
+    <VDialog v-model="pickerDialog.visible" max-width="320">
+      <VCard>
+        <VCardTitle class="pt-5 px-5">What do you want to add?</VCardTitle>
+
+        <VCardText class="px-5 pb-2">
+          <div class="d-flex flex-column gap-3">
+            <VBtn
+              block
+              variant="tonal"
+              color="error"
+              prepend-icon="mdi-calendar-star"
+              @click="onPickerSelect('regular')"
+            >
+              Regular Holiday
+            </VBtn>
+
+            <VBtn
+              block
+              variant="tonal"
+              color="warning"
+              prepend-icon="mdi-calendar-alert"
+              @click="onPickerSelect('special')"
+            >
+              Special Non-Working Holiday
+            </VBtn>
+
+            <VBtn
+              block
+              variant="tonal"
+              color="success"
+              prepend-icon="mdi-calendar-remove"
+              @click="onPickerSelect('suspension')"
+            >
+              Suspension Day
+            </VBtn>
+          </div>
+        </VCardText>
+
+        <VCardActions class="justify-end px-5 pb-4">
+          <VBtn variant="text" @click="pickerDialog.visible = false">Cancel</VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
     <!-- ── Confirm Delete Dialog ─────────────────────────────────────────── -->
     <VDialog v-model="deleteDialog.visible" max-width="380">
       <VCard>
@@ -484,7 +529,27 @@ function isWeekCompressed(weekStart: string, fridayHasEvent: boolean): boolean {
   if (row !== undefined) return row.is_compressed
   return false // default: Standard — Compressed must be manually set
 }
+const pickerDialog = reactive({
+  visible: false,
+  prefillDate: null as Date | null,
+})
 
+function openPickerDialog(date: Date) {
+  pickerDialog.prefillDate = date
+  pickerDialog.visible = true
+}
+
+function onPickerSelect(type: 'regular' | 'special' | 'suspension') {
+  pickerDialog.visible = false
+  const date = pickerDialog.prefillDate!
+  if (type === 'suspension') {
+    openSuspensionDialog(undefined, date)
+  } else {
+    openHolidayDialog(undefined, date)
+    // pre-select the holiday type
+    holidayDialog.type = type
+  }
+}
 async function toggleWeekSchedule(weekStart: string, currentIsCompressed: boolean) {
   if (scheduleOverrideLoading.value) return
   scheduleOverrideLoading.value = weekStart
@@ -751,7 +816,7 @@ function onCellClick(cell: CalendarCell) {
   } else if (cell.info.holiday) {
     openHolidayDialog(cell.info.holiday)
   } else {
-    openSuspensionDialog(undefined, cell.date)
+    openPickerDialog(cell.date) // ← show picker first
   }
 }
 
