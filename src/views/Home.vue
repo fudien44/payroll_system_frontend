@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import BaseCard from '@/components/base/BaseCard.vue'
 import axios from '@axios'
 
 /* ─────────────────────────────────────────
@@ -55,26 +54,21 @@ const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 const monthLabel = computed(() => `${MONTH_NAMES[currentMonth - 1]} ${currentYear}`)
 
 const calendarDays = computed((): (CalendarDay | null)[] => {
-  const firstDay  = new Date(currentYear, currentMonth - 1, 1).getDay()
+  const firstDay    = new Date(currentYear, currentMonth - 1, 1).getDay()
   const daysInMonth = new Date(currentYear, currentMonth, 0).getDate()
-
   const days: (CalendarDay | null)[] = Array(firstDay).fill(null)
 
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     const events: CalendarDay['events'] = []
-
     holidays.value
       .filter(h => h.date.startsWith(dateStr))
       .forEach(h => events.push({ label: h.label, type: h.type }))
-
     suspensions.value
       .filter(s => s.date.startsWith(dateStr))
       .forEach(s => events.push({ label: s.label, type: 'suspension' }))
-
     days.push({ day: d, date: dateStr, events })
   }
-
   return days
 })
 
@@ -84,13 +78,16 @@ const upcomingEvents = computed(() => {
     ...suspensions.value.map(s => ({ date: s.date, label: s.label, type: 'suspension' })),
   ]
   return all
-    .filter(e => {
-      const d = new Date(e.date)
-      return d.getDate() >= today
-    })
+    .filter(e => new Date(e.date).getDate() >= today)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 5)
 })
+
+const deductionsProgress = computed(() =>
+  totalEmployees.value > 0
+    ? Math.round((deductionsSet.value / totalEmployees.value) * 100)
+    : 0
+)
 
 /* ─────────────────────────────────────────
    API
@@ -104,17 +101,14 @@ async function fetchDashboard() {
       axios.get('/api/payroll-batch'),
     ])
 
-    totalEmployees.value  = empRes.data?.data?.length ?? 0
-
-    const wages           = wageRes.data?.data ?? []
-    deductionsSet.value   = wages.filter((e: any) => e.has_deductions).length
+    totalEmployees.value   = empRes.data?.data?.length ?? 0
+    const wages            = wageRes.data?.data ?? []
+    deductionsSet.value    = wages.filter((e: any) =>  e.has_deductions).length
     deductionsNotSet.value = wages.filter((e: any) => !e.has_deductions).length
 
-    const batches         = batchRes.data?.data ?? []
-    pendingBatches.value  = batches.filter((b: any) => b.status !== 'finalized').length
-
-    // Sum net pay from finalized batches this month
-    totalDeductions.value = batches
+    const batches          = batchRes.data?.data ?? []
+    pendingBatches.value   = batches.filter((b: any) => b.status !== 'finalized').length
+    totalDeductions.value  = batches
       .filter((b: any) => {
         const d = new Date(b.created_at ?? '')
         return b.status === 'finalized' &&
@@ -122,9 +116,8 @@ async function fetchDashboard() {
                d.getMonth() + 1 === currentMonth
       })
       .reduce((sum: number, b: any) => sum + (Number(b.net_pay ?? b.total_net ?? 0)), 0)
-
   } catch {
-    // fail silently — cards will show 0
+    // fail silently
   } finally {
     loading.value = false
   }
@@ -171,9 +164,15 @@ function eventDot(type: string) {
   return '#94a3b8'
 }
 
+function eventIcon(type: string) {
+  if (type === 'regular')    return 'mdi-calendar-star'
+  if (type === 'special')    return 'mdi-calendar-alert'
+  if (type === 'suspension') return 'mdi-calendar-remove'
+  return 'mdi-calendar'
+}
+
 function formatEventDate(dateStr: string) {
-  const d = new Date(dateStr)
-  return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
+  return new Date(dateStr).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
 }
 
 /* ─────────────────────────────────────────
@@ -200,79 +199,131 @@ onMounted(() => {
 
       <!-- ── Stat Cards ── -->
       <VCol cols="12" sm="6" lg="3">
-        <BaseCard
-          title="Total JO Employees"
-          :value="loading ? '...' : String(totalEmployees)"
-          icon="mdi-account-group-outline"
-          color="primary"
-        />
+        <VCard variant="tonal" color="primary" rounded="lg" flat>
+          <VCardText class="d-flex align-center gap-3 py-4">
+            <VAvatar color="primary" variant="tonal" size="44" rounded="lg">
+              <VIcon icon="mdi-account-group-outline" size="22" />
+            </VAvatar>
+            <div>
+              <div class="text-caption text-medium-emphasis font-weight-medium text-uppercase">
+                Total JO Employees
+              </div>
+              <div class="text-h5 font-weight-bold mt-1">
+                {{ loading ? '…' : totalEmployees }}
+              </div>
+            </div>
+          </VCardText>
+        </VCard>
       </VCol>
 
       <VCol cols="12" sm="6" lg="3">
-        <BaseCard
-          title="Net Pay This Month"
-          :value="loading ? '...' : (totalDeductions > 0 ? fmt(totalDeductions) : '—')"
-          icon="mdi-cash-multiple"
-          color="success"
-        />
+        <VCard variant="tonal" color="success" rounded="lg" flat>
+          <VCardText class="d-flex align-center gap-3 py-4">
+            <VAvatar color="success" variant="tonal" size="44" rounded="lg">
+              <VIcon icon="mdi-cash-multiple" size="22" />
+            </VAvatar>
+            <div>
+              <div class="text-caption text-medium-emphasis font-weight-medium text-uppercase">
+                Net Pay This Month
+              </div>
+              <div class="text-h5 font-weight-bold mt-1">
+                {{ loading ? '…' : (totalDeductions > 0 ? fmt(totalDeductions) : '—') }}
+              </div>
+            </div>
+          </VCardText>
+        </VCard>
       </VCol>
 
       <VCol cols="12" sm="6" lg="3">
-        <BaseCard
-          title="Pending Payroll Batches"
-          :value="loading ? '...' : String(pendingBatches)"
-          icon="mdi-clock-outline"
-          color="warning"
-        />
+        <VCard variant="tonal" color="warning" rounded="lg" flat>
+          <VCardText class="d-flex align-center gap-3 py-4">
+            <VAvatar color="warning" variant="tonal" size="44" rounded="lg">
+              <VIcon icon="mdi-clock-outline" size="22" />
+            </VAvatar>
+            <div>
+              <div class="text-caption text-medium-emphasis font-weight-medium text-uppercase">
+                Pending Payroll Batches
+              </div>
+              <div class="text-h5 font-weight-bold mt-1">
+                {{ loading ? '…' : pendingBatches }}
+              </div>
+            </div>
+          </VCardText>
+        </VCard>
       </VCol>
 
       <VCol cols="12" sm="6" lg="3">
-        <BaseCard
-          title="Deductions Not Set"
-          :value="loading ? '...' : String(deductionsNotSet)"
-          icon="mdi-alert-circle-outline"
-          color="error"
-        />
+        <VCard variant="tonal" color="error" rounded="lg" flat>
+          <VCardText class="d-flex align-center gap-3 py-4">
+            <VAvatar color="error" variant="tonal" size="44" rounded="lg">
+              <VIcon icon="mdi-alert-circle-outline" size="22" />
+            </VAvatar>
+            <div>
+              <div class="text-caption text-medium-emphasis font-weight-medium text-uppercase">
+                Deductions Not Set
+              </div>
+              <div class="text-h5 font-weight-bold mt-1">
+                {{ loading ? '…' : deductionsNotSet }}
+              </div>
+            </div>
+          </VCardText>
+        </VCard>
       </VCol>
 
       <!-- ── Deductions Progress ── -->
       <VCol cols="12" md="6">
-        <VCard rounded="lg" border>
-          <VCardText>
-            <div class="d-flex align-center justify-space-between mb-3">
+        <VCard rounded="lg" border flat style="height: 100%;">
+          <VCardText class="pa-5">
+            <div class="d-flex align-center justify-space-between mb-4">
               <div>
-                <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
+                <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-1">
                   Deductions Setup Progress
                 </p>
                 <p class="text-body-2 text-medium-emphasis mb-0">
-                  How many JO employees have deductions configured
+                  JO employees with deductions configured
                 </p>
               </div>
-              <VIcon icon="mdi-chart-donut" color="primary" size="28" />
+              <VAvatar color="primary" variant="tonal" size="40" rounded="lg">
+                <VIcon icon="mdi-chart-donut" size="20" />
+              </VAvatar>
             </div>
 
-            <div class="d-flex align-center gap-2 mb-2">
-              <span class="text-h5 font-weight-bold text-primary">{{ deductionsSet }}</span>
-              <span class="text-body-2 text-medium-emphasis">of {{ totalEmployees }} set</span>
+            <!-- Big number -->
+            <div class="d-flex align-baseline gap-2 mb-3">
+              <span class="text-h4 font-weight-bold text-primary">{{ deductionsSet }}</span>
+              <span class="text-body-2 text-medium-emphasis">of {{ totalEmployees }} employees</span>
+              <VSpacer />
+              <VChip
+                :color="deductionsProgress === 100 ? 'success' : deductionsProgress >= 50 ? 'warning' : 'error'"
+                size="small"
+                variant="tonal"
+                label
+              >
+                {{ deductionsProgress }}%
+              </VChip>
             </div>
 
             <VProgressLinear
-              :model-value="totalEmployees > 0 ? (deductionsSet / totalEmployees) * 100 : 0"
+              :model-value="deductionsProgress"
               color="primary"
               bg-color="primary-lighten-4"
               rounded
-              height="10"
-              class="mb-3"
+              height="8"
+              class="mb-4"
             />
 
             <div class="d-flex gap-4">
               <div class="d-flex align-center gap-2">
-                <div style="width:10px;height:10px;border-radius:50%;background:#0ea5e9" />
-                <span class="text-caption">Set ({{ deductionsSet }})</span>
+                <VAvatar color="primary" variant="tonal" size="20" rounded>
+                  <VIcon icon="mdi-check" size="12" />
+                </VAvatar>
+                <span class="text-caption text-medium-emphasis">Set ({{ deductionsSet }})</span>
               </div>
               <div class="d-flex align-center gap-2">
-                <div style="width:10px;height:10px;border-radius:50%;background:#fca5a5" />
-                <span class="text-caption">Not Set ({{ deductionsNotSet }})</span>
+                <VAvatar color="error" variant="tonal" size="20" rounded>
+                  <VIcon icon="mdi-close" size="12" />
+                </VAvatar>
+                <span class="text-caption text-medium-emphasis">Not Set ({{ deductionsNotSet }})</span>
               </div>
             </div>
           </VCardText>
@@ -281,25 +332,35 @@ onMounted(() => {
 
       <!-- ── Upcoming Events ── -->
       <VCol cols="12" md="6">
-        <VCard rounded="lg" border style="height:100%">
-          <VCardText>
-            <div class="d-flex align-center justify-space-between mb-3">
-              <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
-                Upcoming This Month
-              </p>
-              <div class="d-flex gap-3">
-                <div class="d-flex align-center gap-1">
-                  <div style="width:8px;height:8px;border-radius:50%;background:#ef4444" />
-                  <span class="text-caption">Regular</span>
-                </div>
-                <div class="d-flex align-center gap-1">
-                  <div style="width:8px;height:8px;border-radius:50%;background:#f59e0b" />
-                  <span class="text-caption">Special</span>
-                </div>
-                <div class="d-flex align-center gap-1">
-                  <div style="width:8px;height:8px;border-radius:50%;background:#3b82f6" />
-                  <span class="text-caption">Suspension</span>
-                </div>
+        <VCard rounded="lg" border flat style="height: 100%;">
+          <VCardText class="pa-5">
+            <div class="d-flex align-center justify-space-between mb-4">
+              <div>
+                <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-1">
+                  Upcoming This Month
+                </p>
+                <p class="text-body-2 text-medium-emphasis mb-0">
+                  Holidays and suspensions remaining
+                </p>
+              </div>
+              <VAvatar color="info" variant="tonal" size="40" rounded="lg">
+                <VIcon icon="mdi-calendar-clock" size="20" />
+              </VAvatar>
+            </div>
+
+            <!-- Legend -->
+            <div class="d-flex flex-wrap gap-3 mb-4">
+              <div class="d-flex align-center gap-1">
+                <div style="width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0" />
+                <span class="text-caption text-medium-emphasis">Regular</span>
+              </div>
+              <div class="d-flex align-center gap-1">
+                <div style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0" />
+                <span class="text-caption text-medium-emphasis">Special</span>
+              </div>
+              <div class="d-flex align-center gap-1">
+                <div style="width:8px;height:8px;border-radius:50%;background:#3b82f6;flex-shrink:0" />
+                <span class="text-caption text-medium-emphasis">Suspension</span>
               </div>
             </div>
 
@@ -307,8 +368,10 @@ onMounted(() => {
               <VProgressCircular indeterminate color="primary" size="24" />
             </div>
 
-            <div v-else-if="upcomingEvents.length === 0" class="text-center py-4">
-              <VIcon icon="mdi-calendar-check-outline" color="success" size="32" class="mb-2" />
+            <div v-else-if="upcomingEvents.length === 0" class="text-center py-6">
+              <VAvatar color="success" variant="tonal" size="48" rounded="lg" class="mb-3">
+                <VIcon icon="mdi-calendar-check-outline" size="24" />
+              </VAvatar>
               <p class="text-body-2 text-medium-emphasis mb-0">No upcoming events this month</p>
             </div>
 
@@ -316,17 +379,27 @@ onMounted(() => {
               <div
                 v-for="event in upcomingEvents"
                 :key="event.date + event.label"
-                class="d-flex align-center gap-3 pa-2 rounded"
-                style="background: rgba(0,0,0,0.02)"
+                class="d-flex align-center gap-3 pa-2 rounded-lg"
+                style="background: rgba(var(--v-theme-surface-variant), 0.4);"
               >
-                <div
-                  style="width:8px;height:8px;border-radius:50%;flex-shrink:0"
-                  :style="{ background: eventDot(event.type) }"
-                />
-                <div class="flex-grow-1">
-                  <p class="text-body-2 font-weight-medium mb-0">{{ event.label }}</p>
+                <VAvatar
+                  :color="eventColor(event.type)"
+                  variant="tonal"
+                  size="32"
+                  rounded="lg"
+                >
+                  <VIcon :icon="eventIcon(event.type)" size="16" />
+                </VAvatar>
+                <div class="flex-grow-1 text-truncate">
+                  <p class="text-body-2 font-weight-medium mb-0 text-truncate">{{ event.label }}</p>
                 </div>
-                <VChip :color="eventColor(event.type)" size="x-small" variant="tonal" label>
+                <VChip
+                  :color="eventColor(event.type)"
+                  size="x-small"
+                  variant="tonal"
+                  label
+                  class="flex-shrink-0"
+                >
                   {{ formatEventDate(event.date) }}
                 </VChip>
               </div>
@@ -337,11 +410,11 @@ onMounted(() => {
 
       <!-- ── Calendar Preview ── -->
       <VCol cols="12">
-        <VCard rounded="lg" border>
-          <VCardText>
+        <VCard rounded="lg" border flat>
+          <VCardText class="pa-5">
             <div class="d-flex align-center justify-space-between mb-4">
               <div>
-                <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
+                <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-1">
                   Calendar Preview
                 </p>
                 <p class="text-h6 font-weight-bold mb-0">{{ monthLabel }}</p>
@@ -355,6 +428,22 @@ onMounted(() => {
               >
                 Manage Calendar
               </VBtn>
+            </div>
+
+            <!-- Calendar legend -->
+            <div class="d-flex flex-wrap gap-3 mb-4">
+              <div class="d-flex align-center gap-1">
+                <div style="width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0" />
+                <span class="text-caption text-medium-emphasis">Regular Holiday</span>
+              </div>
+              <div class="d-flex align-center gap-1">
+                <div style="width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0" />
+                <span class="text-caption text-medium-emphasis">Special Holiday</span>
+              </div>
+              <div class="d-flex align-center gap-1">
+                <div style="width:8px;height:8px;border-radius:50%;background:#3b82f6;flex-shrink:0" />
+                <span class="text-caption text-medium-emphasis">Suspension</span>
+              </div>
             </div>
 
             <div v-if="calLoading" class="d-flex justify-center py-6">
@@ -380,8 +469,9 @@ onMounted(() => {
                   :key="i"
                   class="cal-cell"
                   :class="{
-                    'cal-today':   cell?.day === today,
+                    'cal-today':     cell?.day === today,
                     'cal-has-event': cell && cell.events.length > 0,
+                    'cal-weekend':   cell && (new Date(cell.date).getDay() === 0 || new Date(cell.date).getDay() === 6),
                   }"
                 >
                   <template v-if="cell">
@@ -394,7 +484,6 @@ onMounted(() => {
                         :style="{ background: eventDot(ev.type) }"
                       />
                     </div>
-                    <!-- Tooltip label on hover -->
                     <div v-if="cell.events.length" class="cal-tooltip">
                       <div v-for="(ev, ei) in cell.events" :key="ei" class="text-caption">
                         <span :style="{ color: eventDot(ev.type) }">●</span>
@@ -437,6 +526,10 @@ onMounted(() => {
   display: block;
 }
 
+.cal-weekend {
+  background: rgba(var(--v-theme-surface-variant), 0.35);
+}
+
 .cal-today .cal-day-num {
   background: rgb(var(--v-theme-primary));
   color: #fff;
@@ -450,7 +543,12 @@ onMounted(() => {
 }
 
 .cal-has-event {
-  background: rgba(0, 0, 0, 0.03);
+  background: rgba(var(--v-theme-surface-variant), 0.5);
+}
+
+/* weekend + event: event takes priority visually */
+.cal-weekend.cal-has-event {
+  background: rgba(var(--v-theme-surface-variant), 0.5);
 }
 
 .cal-day-num {

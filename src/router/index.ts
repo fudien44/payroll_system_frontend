@@ -92,6 +92,16 @@ const router = createRouter({
       },
     },
     {
+      path: '/signatories',
+      name: 'Signatories',
+      component: () => import('@/views/Signatories.vue'),
+      meta: {
+        title: 'Signatories',
+        layout: 'content',
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/dtr',
       name: 'DTR',
       component: () => import('@/views/Dtr.vue'),
