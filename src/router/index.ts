@@ -102,6 +102,26 @@ const router = createRouter({
       },
     },
     {
+      path: '/reports',
+      name: 'Reports',
+      component: () => import('@/views/Reports.vue'),
+      meta: {
+        title: 'Reports',
+        layout: 'content',
+        requiresAuth:true,
+      },
+    },
+    {
+      path: '/signatories',
+      name: 'Signatories',
+      component: () => import('@/views/Signatories.vue'),
+      meta: {
+        title: 'Signatories',
+        layout: 'content',
+        requiresAuth:true,
+      },
+    },
+    {
       path: '/register',
       name: 'register',
       component: () => import('@/views/Register.vue'),

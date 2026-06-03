@@ -4,10 +4,6 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
 import axios from '@axios'
 
-// REMOVED: usePayrollCalendar and useWeekSchedule are no longer needed here.
-// The backend now computes schedule_type, am_official_time, pm_official_time,
-// and is_rest_day per day and returns them in the attendance payload.
-
 /* ─────────────────────────────────────────
    TYPES
 ───────────────────────────────────────── */
@@ -58,11 +54,11 @@ interface AttendanceDay {
   holiday_label:           string | null
   is_suspension:           boolean
   suspension_label:        string | null
-  // NEW: schedule fields returned by the backend
-  is_rest_day:             boolean                          // Friday on a compressed week
-  schedule_type:           'compressed' | 'standard' | null // null for weekends
-  am_official_time:        string | null                   // '07:00 AM' | '08:00 AM' | null
-  pm_official_time:        string | null                   // '06:00 PM' | '05:00 PM' | null
+  // Schedule fields returned by the backend
+  is_rest_day:             boolean
+  schedule_type:           'compressed' | 'standard' | null
+  am_official_time:        string | null
+  pm_official_time:        string | null
 }
 
 interface WeeklyAttendanceDay {
@@ -154,6 +150,16 @@ const selectedMonth = ref<number>(new Date().getMonth() + 1)
 const selectedYear  = ref<number>(currentYear)
 const dtrData       = ref<DtrData | null>(null)
 
+// ── Save DTR state ──────────────────────────────────────────────────
+const savingDtr        = ref(false)
+const confirmSaveOpen  = ref(false)
+
+// Period selector inside Save DTR dialog — defaults to preceding month
+const saveDtrMonth = ref<number>(new Date().getMonth() === 0 ? 12 : new Date().getMonth())
+const saveDtrYear  = ref<number>(
+  new Date().getMonth() === 0 ? new Date().getFullYear() - 1 : new Date().getFullYear()
+)
+
 const alertVisible = ref(false)
 const alertMessage = ref('')
 const alertType    = ref<AlertType>('success')
@@ -172,9 +178,13 @@ const modalTitle = computed(() => {
   return `DTR — ${selectedEmp.value.full_name} — ${dtrData.value.month} ${dtrData.value.year}`
 })
 
-// Convert attendance object { "1": {...}, "2": {...} } → sorted array.
-// CHANGED: scheduleType and isRestFriday now come directly from the backend
-// fields (schedule_type and is_rest_day) — no client-side schedule inference.
+const canSaveDtr = computed(() => !savingDtr.value && !loading.value)
+
+const saveDtrLabel = computed(() => {
+  const m = MONTH_ITEMS.find(x => x.value === saveDtrMonth.value)
+  return `${m?.title ?? ''} ${saveDtrYear.value}`
+})
+
 const attendanceRows = computed<AttendanceRow[]>(() => {
   if (!dtrData.value) return []
 
@@ -192,8 +202,6 @@ const attendanceRows = computed<AttendanceRow[]>(() => {
         isSaturday: dayOfWeek === 6,
         isSunday:   dayOfWeek === 0,
         isFriday:   dayOfWeek === 5,
-        // schedule_type and is_rest_day come straight from the backend —
-        // no need to call useWeekSchedule or warm the calendar cache.
       }
     })
     .sort((a, b) => a.day - b.day)
@@ -230,7 +238,7 @@ function fmtMinutes(mins: number): string {
 function getRowClass(row: AttendanceRow): string {
   if (row.is_holiday)                   return 'dtr-row--holiday'
   if (row.is_suspension)                return 'dtr-row--suspension'
-  if (row.is_rest_day)                  return 'dtr-row--fri-cmp'   // CHANGED: use backend flag
+  if (row.is_rest_day)                  return 'dtr-row--fri-cmp'
   if (row.isSunday)                     return 'dtr-row--sunday'
   if (row.isSaturday)                   return 'dtr-row--saturday'
   if (row.is_absent)                    return 'dtr-row--absent'
@@ -256,10 +264,6 @@ async function fetchData() {
   }
 }
 
-// CHANGED: removed the parallel fetchCalendarMonth call.
-// The backend now returns all schedule information (schedule_type,
-// is_rest_day, am_official_time, pm_official_time) inside the DTR
-// payload — no need to pre-warm the calendar cache on the client.
 async function fetchDtr() {
   if (!selectedEmp.value) return
   modalLoading.value = true
@@ -274,6 +278,32 @@ async function fetchDtr() {
     showAlert('error', 'Failed to load DTR records.')
   } finally {
     modalLoading.value = false
+  }
+}
+
+// ── Save DTR for all JO employees (preceding month) ────────────────
+async function saveDtr() {
+  confirmSaveOpen.value = false
+  savingDtr.value       = true
+
+  try {
+    const { data } = await axios.post('/api/dtr/save', {
+      month: saveDtrMonth.value,
+      year:  saveDtrYear.value,
+    })
+    showAlert('success', data.message)
+  } catch (err: any) {
+    const status  = err?.response?.status
+    const message = err?.response?.data?.message
+
+    if (status === 409) {
+      // Already saved for this month
+      showAlert('warning', message ?? `DTR for ${saveDtrLabel.value} has already been saved.`)
+    } else {
+      showAlert('error', message ?? 'Failed to save DTR. Please try again.')
+    }
+  } finally {
+    savingDtr.value = false
   }
 }
 
@@ -311,9 +341,31 @@ onMounted(fetchData)
             Monitor biometric device status and view employees with DTR access.
           </p>
         </div>
-        <VBtn variant="tonal" prepend-icon="mdi-refresh" :loading="loading" @click="fetchData">
-          Refresh
-        </VBtn>
+
+        <!-- ── Header action buttons ── -->
+        <div class="d-flex gap-2">
+          <VBtn variant="tonal" prepend-icon="mdi-refresh" :loading="loading" @click="fetchData">
+            Refresh
+          </VBtn>
+
+          <!-- Save DTR button — saves ALL JO employees' DTR for the preceding month -->
+          <VTooltip location="bottom">
+            <template #activator="{ props }">
+              <VBtn
+                v-bind="props"
+                color="success"
+                variant="tonal"
+                prepend-icon="mdi-content-save-outline"
+                :loading="savingDtr"
+                :disabled="!canSaveDtr"
+                @click="confirmSaveOpen = true"
+              >
+                Save DTR
+              </VBtn>
+            </template>
+            <span>Save DTR summaries — select period in dialog</span>
+          </VTooltip>
+        </div>
       </div>
 
       <!-- ── Summary Cards ── -->
@@ -661,8 +713,6 @@ onMounted(fetchData)
                     </template>
 
                     <!-- ── Compressed Friday (Rest Day) ── -->
-                    <!-- CHANGED: uses row.is_rest_day (from backend) instead of the
-                         old client-side isRestFriday derived from useWeekSchedule -->
                     <template v-else-if="row.is_rest_day">
                       <td colspan="5" class="text-center text-caption text-disabled">
                         Rest Day
@@ -734,6 +784,63 @@ onMounted(fetchData)
 
       </VRow>
     </BaseModal>
+
+    <!-- ── Save DTR Confirmation Dialog ── -->
+    <VDialog v-model="confirmSaveOpen" max-width="440" persistent>
+      <VCard rounded="lg">
+        <VCardText class="pa-6">
+          <div class="d-flex align-center gap-3 mb-4">
+            <VIcon icon="mdi-content-save-outline" color="success" size="28" />
+            <span class="text-h6 font-weight-bold">Save DTR</span>
+          </div>
+          <p class="text-body-2 mb-3">
+            This will save DTR summary totals for <strong>all active JO employees</strong> for:
+          </p>
+
+          <!-- ── Period selectors ── -->
+          <VRow dense class="mb-3">
+            <VCol cols="7">
+              <VSelect
+                v-model="saveDtrMonth"
+                label="Month"
+                :items="MONTH_ITEMS"
+                item-title="title"
+                item-value="value"
+                variant="outlined"
+                density="compact"
+                prepend-inner-icon="mdi-calendar-month-outline"
+                hide-details
+              />
+            </VCol>
+            <VCol cols="5">
+              <VSelect
+                v-model="saveDtrYear"
+                label="Year"
+                :items="YEAR_ITEMS"
+                variant="outlined"
+                density="compact"
+                prepend-inner-icon="mdi-calendar-outline"
+                hide-details
+              />
+            </VCol>
+          </VRow>
+
+          <p class="text-body-1 font-weight-bold text-success mb-3">
+            {{ saveDtrLabel }}
+          </p>
+
+          <p class="text-caption text-medium-emphasis">
+            This action cannot be undone. If DTR for the selected period has already been saved, the request will be blocked.
+          </p>
+        </VCardText>
+        <VCardActions class="pa-4 pt-0 gap-2 justify-end">
+          <VBtn variant="text" @click="confirmSaveOpen = false">Cancel</VBtn>
+          <VBtn color="success" variant="tonal" prepend-icon="mdi-content-save-outline" :loading="savingDtr" @click="saveDtr">
+            Save
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
 
     <!-- ── Alert ── -->
     <BaseAlert
