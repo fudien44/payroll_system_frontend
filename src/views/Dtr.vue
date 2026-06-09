@@ -638,6 +638,13 @@ onMounted(fetchData)
                 <span class="text-caption">Weekend</span>
               </div>
             </div>
+            <!-- Compressed week absence note -->
+            <div class="d-flex align-center gap-1 mt-1">
+              <VIcon size="14" color="info">mdi-information-outline</VIcon>
+              <span class="text-caption text-medium-emphasis">
+                <strong>Compressed Week Absence:</strong> 1 absent day + 120 mins added to late
+              </span>
+            </div>
 
             <!-- Scrollable table -->
             <div class="dtr-table-wrapper">
@@ -747,10 +754,10 @@ onMounted(fetchData)
                             ½ Day
                           </VChip>
                           <VChip v-if="row.total_late_minutes > 0" color="warning" size="x-small" variant="tonal" label>
-                            Late {{ fmtMinutes(row.total_late_minutes) }}
+                            Late {{ row.total_late_minutes }}m
                           </VChip>
                           <VChip v-if="row.total_undertime_minutes > 0" color="info" size="x-small" variant="tonal" label>
-                            UT {{ fmtMinutes(row.total_undertime_minutes) }}
+                            UT {{ row.total_undertime_minutes }}m
                           </VChip>
                           <VChip
                             v-if="!row.is_absent && !row.is_half_day_absent && row.entry_count >= 4"

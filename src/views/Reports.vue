@@ -78,21 +78,23 @@ const selectedEmpIds      = ref<number[]>([])   // emp_ids; empty = all
 const loadingEmployees    = ref(false)
 const generatingPdf       = ref(false)
 const exportingPayslip    = ref(false)
-const selectAll = ref(true)
+const selectAll = ref(false)
+const payslipFilterDivision = ref<string | null>(null)
+const payslipFilterSection  = ref<string | null>(null)
 
 function toggleSelectAll() {
   if (selectAll.value) {
     selectedEmpIds.value = []
     selectAll.value      = false
   } else {
-    selectedEmpIds.value = payslipEmployees.value.map(e => e.emp_id)
+    selectedEmpIds.value = filteredPayslipEmployees.value.map(e => e.emp_id)
     selectAll.value      = true
   }
 }
 
 // Keep selectAll in sync when individual checkboxes are toggled
 watch(selectedEmpIds, (val) => {
-  selectAll.value = val.length === payslipEmployees.value.length
+  selectAll.value = val.length === filteredPayslipEmployees.value.length
 })
 
 const payslipMonthLabel = computed(() => {
@@ -101,15 +103,35 @@ const payslipMonthLabel = computed(() => {
 })
 
 const employeesWithDtr = computed(() =>
-  payslipEmployees.value.filter(e => e.has_dtr)
+  filteredPayslipEmployees.value.filter(e => e.has_dtr)
 )
 
-const employeesWithoutDtr = computed(() =>
-  payslipEmployees.value.filter(e => !e.has_dtr)
-)
+const payslipSectionOptions = computed(() => {
+  const base = payslipFilterDivision.value
+    ? allEmployeesRef.value.filter(e => e.division === payslipFilterDivision.value)
+    : allEmployeesRef.value
+  return [...new Set(base.map(e => e.section).filter(Boolean))].sort() as string[]
+})
 
-// Send only selected IDs; empty array means nothing selected (not "all")
-const resolvedEmpIds = computed(() => selectedEmpIds.value)
+watch(payslipFilterDivision, () => {
+  if (payslipFilterSection.value && !payslipSectionOptions.value.includes(payslipFilterSection.value)) {
+    payslipFilterSection.value = null
+  }
+})
+
+const filteredPayslipEmployees = computed(() => {
+  if (!payslipFilterDivision.value && !payslipFilterSection.value) {
+    return payslipEmployees.value
+  }
+  const refMap = new Map(allEmployeesRef.value.map(e => [e.emp_id, e]))
+  return payslipEmployees.value.filter(e => {
+    const ref = refMap.get(e.emp_id)
+    if (!ref) return false
+    if (payslipFilterDivision.value && ref.division !== payslipFilterDivision.value) return false
+    if (payslipFilterSection.value  && ref.section  !== payslipFilterSection.value)  return false
+    return true
+  })
+})
 
 async function fetchPayslipEmployees() {
   loadingEmployees.value = true
@@ -119,7 +141,7 @@ async function fetchPayslipEmployees() {
       params: { month: payslipMonth.value, year: payslipYear.value },
     })
     payslipEmployees.value = data.data
-    selectedEmpIds.value   = data.data.map((e: EmployeeOption) => e.emp_id)
+    selectedEmpIds.value = []
   } catch {
     showAlert('error', 'Failed to load employee list.')
   } finally {
@@ -128,17 +150,33 @@ async function fetchPayslipEmployees() {
 }
 
 async function generatePdf() {
+  if (selectedEmpIds.value.length === 0) {
+    showAlert('warning', 'No employees selected. Please select at least one employee to generate PDF.')
+    return
+  }
+
   generatingPdf.value = true
+
+  // Open the tab immediately while still in the user gesture context
+  const previewTab = window.open('', '_blank')
+
   try {
     const resp = await axios.post('/api/reports/payslip/generate', {
       month:        payslipMonth.value,
       year:         payslipYear.value,
-      employee_ids: selectAll.value ? null : resolvedEmpIds.value,
+      employee_ids: selectedEmpIds.value,
     }, { responseType: 'blob' })
 
-    downloadBlob(resp.data, `Payslip_${payslipMonthLabel.value.replace(' ', '_')}.pdf`, 'application/pdf')
+    const url = URL.createObjectURL(new Blob([resp.data], { type: 'application/pdf' }))
+
+    if (previewTab) {
+      previewTab.location.href = url
+    }
+
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
     showAlert('success', 'Payslip PDF generated successfully.')
   } catch (err: any) {
+    previewTab?.close() // close the blank tab if the request failed
     const msg = await blobErrorMessage(err)
     showAlert('error', msg ?? 'Failed to generate PDF.')
   } finally {
@@ -147,12 +185,18 @@ async function generatePdf() {
 }
 
 async function exportPayslipExcel() {
+  if (selectedEmpIds.value.length === 0) {
+    showAlert('warning', 'No employees selected. Please select at least one employee to export Excel.')
+    return
+  }
+
+
   exportingPayslip.value = true
   try {
     const resp = await axios.post('/api/reports/payslip/export', {
       month:        payslipMonth.value,
       year:         payslipYear.value,
-      employee_ids: selectAll.value ? null : resolvedEmpIds.value,
+      employee_ids: selectedEmpIds.value,
     }, { responseType: 'blob' })
 
     downloadBlob(resp.data, `Payslip_${payslipMonthLabel.value.replace(' ', '_')}.xlsx`,
@@ -172,10 +216,50 @@ async function exportPayslipExcel() {
 const attendanceMonth     = ref<number>(new Date().getMonth())
 const attendanceYear      = ref<number>(currentYear)
 const attendanceRows      = ref<AttendanceRow[]>([])
-const loadingAttendance   = ref(false)
-const exportingAttendance = ref(false)
-const selectedAttEmpIds   = ref<number[]>([])
-const selectAllAtt        = ref(true)
+const loadingAttendance      = ref(false)
+const exportingAttendance    = ref(false)
+const exportingAttendancePdf = ref(false)
+const selectedAttEmpIds      = ref<number[]>([])
+const selectAllAtt           = ref(true)
+
+// ── Division / Section filter (pre-load) ──
+interface EmployeeRef { emp_id: number; full_name: string; position: string; division: string | null; section: string | null }
+const allEmployeesRef      = ref<EmployeeRef[]>([])
+const loadingEmployeeRefs  = ref(false)
+const attFilterDivision    = ref<string | null>(null)
+const attFilterSection     = ref<string | null>(null)
+
+const divisionOptions = computed(() =>
+  [...new Set(allEmployeesRef.value.map(e => e.division).filter(Boolean))]
+    .sort() as string[]
+)
+
+const sectionOptions = computed(() => {
+  const base = attFilterDivision.value
+    ? allEmployeesRef.value.filter(e => e.division === attFilterDivision.value)
+    : allEmployeesRef.value
+  return [...new Set(base.map(e => e.section).filter(Boolean))].sort() as string[]
+})
+
+// When division changes, reset section if it no longer belongs to the new division
+watch(attFilterDivision, () => {
+  if (attFilterSection.value && !sectionOptions.value.includes(attFilterSection.value)) {
+    attFilterSection.value = null
+  }
+})
+
+async function fetchEmployeeRefs() {
+  if (allEmployeesRef.value.length) return   // already loaded
+  loadingEmployeeRefs.value = true
+  try {
+    const { data } = await axios.get('/api/reports/employees')
+    allEmployeesRef.value = data.data
+  } catch {
+    showAlert('error', 'Failed to load division/section list.')
+  } finally {
+    loadingEmployeeRefs.value = false
+  }
+}
 
 const attendanceMonthLabel = computed(() => {
   const m = MONTH_ITEMS.find(x => x.value === attendanceMonth.value)
@@ -191,7 +275,12 @@ async function fetchAttendance() {
   attendanceRows.value    = []
   try {
     const { data } = await axios.get('/api/reports/attendance', {
-      params: { month: attendanceMonth.value, year: attendanceYear.value },
+      params: {
+        month:    attendanceMonth.value,
+        year:     attendanceYear.value,
+        division: attFilterDivision.value ?? undefined,
+        section:  attFilterSection.value  ?? undefined,
+      },
     })
     attendanceRows.value    = data.data
     selectedAttEmpIds.value = data.data.map((r: AttendanceRow) => r.user_id)
@@ -225,6 +314,200 @@ async function exportAttendanceExcel() {
     showAlert('error', msg ?? 'Failed to export attendance summary.')
   } finally {
     exportingAttendance.value = false
+  }
+}
+
+/* ── Attendance PDF export (jsPDF) ────────────────────────────────────────── */
+async function exportAttendancePdf() {
+  if (!attendanceRows.value.length) {
+    showAlert('warning', 'No attendance data to export.')
+    return
+  }
+
+  exportingAttendancePdf.value = true
+  try {
+    // ── Lazy-load jsPDF ──────────────────────────────────────────────────────
+    if (!(window as any).jspdf) {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement('script')
+        s.src     = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
+        s.onload  = () => resolve()
+        s.onerror = () => reject(new Error('Failed to load jsPDF.'))
+        document.head.appendChild(s)
+      })
+    }
+    if (!(window as any).jspdfAutotable) {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement('script')
+        s.src     = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'
+        s.onload  = () => resolve()
+        s.onerror = () => reject(new Error('Failed to load AutoTable.'))
+        document.head.appendChild(s)
+        ;(window as any).jspdfAutotable = true
+      })
+    }
+
+    const { jsPDF } = (window as any).jspdf
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+
+    const periodLabel = attendanceMonthLabel.value
+    const generated   = new Date().toLocaleDateString('en-PH', {
+      month: 'long', day: 'numeric', year: 'numeric',
+    })
+
+    // ── Filter rows if not all selected ──────────────────────────────────────
+    const rows = selectAllAtt.value
+      ? attendanceRows.value
+      : attendanceRows.value.filter(r => selectedAttEmpIds.value.includes(r.user_id))
+
+    if (!rows.length) {
+      showAlert('warning', 'No employees selected for export.')
+      return
+    }
+
+    // ── Color palette: Deep Teal / Forest Green ───────────────────────────────
+    const DEEP_TEAL       = [18,  78,  76]  as [number, number, number] // #124E4C
+    const FOREST_GREEN    = [34, 102,  68]  as [number, number, number] // #226644
+    const MIST_GREEN      = [232,245, 237]  as [number, number, number] // #E8F5ED
+    const PALE_FERN       = [212,235, 220]  as [number, number, number] // #D4EBDC
+    const CITRON          = [188,210,  55]  as [number, number, number] // #BCD237 — accent
+    const WHITE           = [255,255, 255]  as [number, number, number]
+    const LIGHT_GRAY      = [140,140, 140]  as [number, number, number]
+    const CHARCOAL        = [45,  55,  45]  as [number, number, number]
+
+    const pageW = doc.internal.pageSize.getWidth()
+    const pageH = doc.internal.pageSize.getHeight()
+
+    // ── Header band ───────────────────────────────────────────────────────────
+    doc.setFillColor(...DEEP_TEAL)
+    doc.rect(0, 0, pageW, 32, 'F')
+    doc.setFillColor(...CITRON)
+    doc.rect(0, 32, pageW, 2, 'F')
+    doc.setFillColor(...FOREST_GREEN)
+    doc.rect(0, 0, 3, 34, 'F')
+
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.setTextColor(...WHITE)
+    doc.text('DEPARTMENT OF HEALTH — REGION XII (SOCCSKSARGEN)', pageW / 2, 11, { align: 'center' })
+    doc.setFontSize(13.5)
+    doc.text('JO Employee Attendance Summary', pageW / 2, 20, { align: 'center' })
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(7.5)
+    doc.setTextColor(180, 220, 195)
+    doc.text(
+      `Period Covered: ${periodLabel}   ·   Generated: ${generated}   ·   Total Employees: ${rows.length}`,
+      pageW / 2, 28, { align: 'center' },
+    )
+
+    // ── Table ─────────────────────────────────────────────────────────────────
+    const tableBody = rows.map((r, i) => [
+      i + 1,
+      r.full_name,
+      r.position,
+      r.regdays,
+      r.total_rendered_hours,
+      r.total_absent_days   > 0 ? String(r.total_absent_days)            : '—',
+      r.total_late_minutes  > 0 ? fmtHours(r.total_late_minutes)         : '—',
+      r.total_undertime_minutes > 0 ? fmtHours(r.total_undertime_minutes) : '—',
+    ])
+
+    // ── Totals / summary row ──────────────────────────────────────────────────
+    const totalRendered  = rows.reduce((s, r) => s + Number(r.total_rendered_hours),    0)
+    const totalAbsent    = rows.reduce((s, r) => s + Number(r.total_absent_days),        0)
+    const totalLate      = rows.reduce((s, r) => s + Number(r.total_late_minutes),       0)
+    const totalUndertime = rows.reduce((s, r) => s + Number(r.total_undertime_minutes),  0)
+
+    const totalsRow = [
+      { content: 'TOTAL', colSpan: 3, styles: { fontStyle: 'bold' as const, halign: 'left' as const } },
+      '',
+      totalRendered.toFixed(2),
+      totalAbsent   > 0 ? String(totalAbsent)            : '—',
+      totalLate     > 0 ? fmtHours(totalLate)            : '—',
+      totalUndertime > 0 ? fmtHours(totalUndertime)      : '—',
+    ]
+
+    ;(doc as any).autoTable({
+      startY: 38,
+      head: [[
+        '#', 'Employee', 'Position',
+        'Working Days', 'Hours Rendered',
+        'Absent Days', 'Late', 'Undertime',
+      ]],
+      body: tableBody,
+      foot: [totalsRow],
+      showFoot: 'lastPage',
+      theme: 'grid',
+      styles: {
+        fontSize:    7.5,
+        cellPadding: 2.5,
+        valign:      'middle',
+        overflow:    'linebreak',
+        textColor:   CHARCOAL,
+        lineColor:   [180, 215, 195],
+        lineWidth:   0.2,
+      },
+      headStyles: {
+        fillColor: DEEP_TEAL,
+        textColor: WHITE,
+        fontStyle: 'bold',
+        halign:    'center',
+        fontSize:  7.5,
+        lineColor: FOREST_GREEN,
+        lineWidth: 0.3,
+      },
+      footStyles: {
+        fillColor: PALE_FERN,
+        textColor: DEEP_TEAL,
+        fontStyle: 'bold',
+        lineColor: [160, 205, 180],
+        lineWidth: 0.3,
+      },
+      alternateRowStyles: { fillColor: MIST_GREEN },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 8   },
+        1: { cellWidth: 52 },
+        2: { cellWidth: 42 },
+        3: { halign: 'center', cellWidth: 22  },
+        4: { halign: 'center', cellWidth: 28  },
+        5: { halign: 'center', cellWidth: 22  },
+        6: { halign: 'center', cellWidth: 22  },
+        7: { halign: 'center', cellWidth: 22  },
+      },
+      margin: { left: 14, right: 14 },
+    })
+
+    // ── Footer bar ────────────────────────────────────────────────────────────
+    doc.setFillColor(...CITRON)
+    doc.rect(0, pageH - 7, pageW, 2, 'F')
+    doc.setFillColor(...DEEP_TEAL)
+    doc.rect(0, pageH - 5, pageW, 5, 'F')
+
+    const finalY = (doc as any).lastAutoTable.finalY + 5
+    doc.setFont('helvetica', 'italic')
+    doc.setFontSize(7)
+    doc.setTextColor(...LIGHT_GRAY)
+    doc.text(
+      'This report is system-generated. Based on saved DTR summaries from the DTR module.',
+      pageW - 14, finalY, { align: 'right' },
+    )
+
+    const pdfBlob = doc.output('blob')
+    const url     = URL.createObjectURL(pdfBlob)
+    const tab     = window.open(url, '_blank')
+
+    if (!tab) {
+      showAlert('error', 'Popup blocked. Please allow popups for this site.')
+      URL.revokeObjectURL(url)
+      return
+    }
+
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    showAlert('success', 'Attendance PDF opened in a new tab.')
+  } catch (err: any) {
+    showAlert('error', err.message ?? 'PDF export failed.')
+  } finally {
+    exportingAttendancePdf.value = false
   }
 }
 
@@ -264,6 +547,11 @@ function fmtHours(mins: number): string {
 ───────────────────────────────────────── */
 onMounted(() => {
   fetchPayslipEmployees()
+  fetchEmployeeRefs()
+})
+
+watch(activeTab, (tab) => {
+  if (tab === 'attendance') fetchEmployeeRefs()
 })
 </script>
 
@@ -295,13 +583,13 @@ onMounted(() => {
 
         <!-- ── Period + controls ── -->
         <VCol cols="12">
-          <VCard variant="outlined" rounded="lg">
+          <VCard variant="flat" rounded="lg">
             <VCardText>
               <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
                 Select Period
               </p>
               <VRow dense align="center">
-                <VCol cols="12" sm="4" md="3">
+                <VCol cols="12" sm="6" md="2">
                   <VSelect
                     v-model="payslipMonth"
                     label="Month"
@@ -314,7 +602,7 @@ onMounted(() => {
                     hide-details
                   />
                 </VCol>
-                <VCol cols="12" sm="3" md="2">
+                <VCol cols="12" sm="6" md="2">
                   <VSelect
                     v-model="payslipYear"
                     label="Year"
@@ -325,7 +613,35 @@ onMounted(() => {
                     hide-details
                   />
                 </VCol>
-                <VCol cols="12" sm="5" md="3">
+                <VCol cols="12" sm="6" md="3">
+                  <VSelect
+                    v-model="payslipFilterDivision"
+                    :items="divisionOptions"
+                    :loading="loadingEmployeeRefs"
+                    label="Division (optional)"
+                    variant="outlined"
+                    density="compact"
+                    prepend-inner-icon="mdi-office-building-outline"
+                    clearable
+                    hide-details
+                    placeholder="All divisions"
+                  />
+                </VCol>
+                <VCol cols="12" sm="6" md="3">
+                  <VSelect
+                    v-model="payslipFilterSection"
+                    :items="payslipSectionOptions"
+                    :disabled="!divisionOptions.length"
+                    label="Section (optional)"
+                    variant="outlined"
+                    density="compact"
+                    prepend-inner-icon="mdi-account-group-outline"
+                    clearable
+                    hide-details
+                    placeholder="All sections"
+                  />
+                </VCol>
+                <VCol cols="12" sm="6" md="2">
                   <VBtn
                     variant="tonal"
                     color="primary"
@@ -344,7 +660,7 @@ onMounted(() => {
 
         <!-- ── Employee selection ── -->
         <VCol v-if="payslipEmployees.length" cols="12">
-          <VCard variant="outlined" rounded="lg">
+          <VCard variant="flat" rounded="lg">
             <VCardText>
               <!-- ── Header row: title + chips + select all toggle ── -->
               <div class="d-flex align-center justify-space-between flex-wrap gap-3 mb-3">
@@ -354,32 +670,56 @@ onMounted(() => {
                   </p>
                   <p class="text-caption text-medium-emphasis mt-1">
                     <VChip color="success" size="x-small" variant="tonal" label class="me-1">
-                      {{ employeesWithDtr.length }} with DTR
+                      {{ filteredPayslipEmployees.filter(e => e.has_dtr).length }} with DTR
                     </VChip>
-                    <VChip v-if="employeesWithoutDtr.length" color="warning" size="x-small" variant="tonal" label class="me-1">
-                      {{ employeesWithoutDtr.length }} missing DTR
+                    <VChip v-if="filteredPayslipEmployees.filter(e => !e.has_dtr).length" color="warning" size="x-small" variant="tonal" label class="me-1">
+                      {{ filteredPayslipEmployees.filter(e => !e.has_dtr).length }} missing DTR
                     </VChip>
                     <VChip color="primary" size="x-small" variant="tonal" label>
                       {{ selectedEmpIds.length }} selected
                     </VChip>
                   </p>
                 </div>
-                <VBtn
-                  :color="selectAll ? 'primary' : 'default'"
-                  :variant="selectAll ? 'tonal' : 'outlined'"
-                  size="small"
-                  prepend-icon="mdi-check-all"
-                  @click="toggleSelectAll"
-                >
-                  {{ selectAll ? 'Clear' : 'Select All' }}
-                </VBtn>
+                <div class="d-flex gap-2 align-center flex-wrap">
+                  <VBtn
+                    :color="selectAll ? 'primary' : 'default'"
+                    :variant="selectAll ? 'tonal' : 'outlined'"
+                    size="small"
+                    prepend-icon="mdi-check-all"
+                    @click="toggleSelectAll"
+                  >
+                    {{ selectAll ? 'Clear' : 'Select All' }}
+                  </VBtn>
+                  <VBtn
+                    color="error"
+                    variant="outlined"
+                    size="small"
+                    prepend-icon="mdi-file-pdf-box"
+                    :loading="generatingPdf"
+                    :disabled="exportingPayslip || loadingEmployees"
+                    @click="generatePdf"
+                  >
+                    Generate PDF
+                  </VBtn>
+                  <VBtn
+                    color="success"
+                    variant="outlined"
+                    size="small"
+                    prepend-icon="mdi-microsoft-excel"
+                    :loading="exportingPayslip"
+                    :disabled="generatingPdf || loadingEmployees"
+                    @click="exportPayslipExcel"
+                  >
+                    Export Excel
+                  </VBtn>
+                </div>
               </div>
 
               <!-- ── Always-visible employee list ── -->
               <VDivider class="mb-3" />
               <VRow dense>
                 <VCol
-                  v-for="emp in payslipEmployees"
+                  v-for="emp in filteredPayslipEmployees"
                   :key="emp.emp_id"
                   cols="12" sm="6" md="4"
                 >
@@ -410,30 +750,6 @@ onMounted(() => {
                 </VCol>
               </VRow>
 
-              <!-- ── Action buttons ── -->
-              <VDivider class="my-4" />
-              <div class="d-flex gap-3 flex-wrap">
-                <VBtn
-                  color="error"
-                  variant="tonal"
-                  prepend-icon="mdi-file-pdf-box"
-                  :loading="generatingPdf"
-                  :disabled="exportingPayslip || loadingEmployees"
-                  @click="generatePdf"
-                >
-                  Generate PDF
-                </VBtn>
-                <VBtn
-                  color="success"
-                  variant="tonal"
-                  prepend-icon="mdi-microsoft-excel"
-                  :loading="exportingPayslip"
-                  :disabled="generatingPdf || loadingEmployees"
-                  @click="exportPayslipExcel"
-                >
-                  Export Excel
-                </VBtn>
-              </div>
 
             </VCardText>
           </VCard>
@@ -462,13 +778,13 @@ onMounted(() => {
 
         <!-- ── Period + controls ── -->
         <VCol cols="12">
-          <VCard variant="outlined" rounded="lg">
+          <VCard variant="flat" rounded="lg">
             <VCardText>
               <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
                 Select Period
               </p>
               <VRow dense align="center">
-                <VCol cols="12" sm="4" md="3">
+                <VCol cols="12" sm="6" md="2">
                   <VSelect
                     v-model="attendanceMonth"
                     label="Month"
@@ -481,7 +797,7 @@ onMounted(() => {
                     hide-details
                   />
                 </VCol>
-                <VCol cols="12" sm="3" md="2">
+                <VCol cols="12" sm="6" md="2">
                   <VSelect
                     v-model="attendanceYear"
                     label="Year"
@@ -492,7 +808,35 @@ onMounted(() => {
                     hide-details
                   />
                 </VCol>
-                <VCol cols="12" sm="5" md="3">
+                <VCol cols="12" sm="6" md="3">
+                  <VSelect
+                    v-model="attFilterDivision"
+                    :items="divisionOptions"
+                    :loading="loadingEmployeeRefs"
+                    label="Division (optional)"
+                    variant="outlined"
+                    density="compact"
+                    prepend-inner-icon="mdi-office-building-outline"
+                    clearable
+                    hide-details
+                    placeholder="All divisions"
+                  />
+                </VCol>
+                <VCol cols="12" sm="6" md="3">
+                  <VSelect
+                    v-model="attFilterSection"
+                    :items="sectionOptions"
+                    :disabled="!divisionOptions.length"
+                    label="Section (optional)"
+                    variant="outlined"
+                    density="compact"
+                    prepend-inner-icon="mdi-account-group-outline"
+                    clearable
+                    hide-details
+                    placeholder="All sections"
+                  />
+                </VCol>
+                <VCol cols="12" sm="6" md="2">
                   <VBtn
                     variant="tonal"
                     color="primary"
@@ -511,7 +855,7 @@ onMounted(() => {
 
         <!-- ── Attendance table ── -->
         <VCol v-if="attendanceRows.length" cols="12">
-          <VCard variant="outlined" rounded="lg">
+          <VCard variant="flat" rounded="lg">
             <VCardText>
               <div class="d-flex align-center justify-space-between flex-wrap gap-3 mb-4">
                 <div>
@@ -523,19 +867,30 @@ onMounted(() => {
                   </p>
                 </div>
                 <div class="d-flex gap-2 align-center">
-                  <VSwitch
+                  <!-- <VSwitch
                     v-model="selectAllAtt"
                     label="All"
                     color="primary"
                     density="compact"
                     hide-details
                     inset
-                  />
+                  /> -->
+                  <VBtn
+                    color="error"
+                    variant="outlined"
+                    prepend-icon="mdi-file-pdf-box"
+                    :loading="exportingAttendancePdf"
+                    :disabled="exportingAttendance"
+                    @click="exportAttendancePdf"
+                  >
+                    Export PDF
+                  </VBtn>
                   <VBtn
                     color="success"
-                    variant="tonal"
+                    variant="outlined"
                     prepend-icon="mdi-microsoft-excel"
                     :loading="exportingAttendance"
+                    :disabled="exportingAttendancePdf"
                     @click="exportAttendanceExcel"
                   >
                     Export Excel
