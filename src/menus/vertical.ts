@@ -1,20 +1,21 @@
 export default [
-  { heading: 'Main Menu' },
+  { heading: 'Dashboard' },
   {
     name: 'Home',
     icon: 'mdi-view-dashboard-outline',
     to: { name: 'home' },
   },
-  { heading: 'Management'},
+  { heading: 'Payroll' },
   {
     name: 'Payroll',
     icon: 'mdi-cash-multiple',
     to: { name: 'payroll' },
   },
+  { heading: 'Management' },
   {
-    name: 'Employees',
-    icon: 'mdi-account-group-outline',
-    to: { name: 'employees' },
+    name: 'DTR',
+    icon: 'mdi mdi-fingerprint',
+    to: { name: 'DTR' },
   },
   {
     name: 'Calendar',
@@ -27,14 +28,20 @@ export default [
     to: { name: 'Deductions' },
   },
   {
-    name: 'ENGAS',
+    name: 'Reports',
+    icon: 'mdi mdi-file-chart-outline',
+    to: { name: 'Reports' },
+  },
+  { heading: 'Configuration' },
+  {
+    name: 'Signatories',
+    icon: 'mdi-file-sign',
+    to: { name: 'Signatories' },
+  },
+  { heading: 'References' },
+  {
+    name: 'ENGAS (Viewing Only)',
     icon: 'mdi-database-search-outline',
     to: { name: 'Engas' },
   },
-  // {
-  //   name: 'Blank Page',
-  //   icon: 'mdi-file-outline',
-  //   to: { name: 'blank' },
-  // },
-  // { name: 'Documentation', icon: 'mdi-text-box-outline', href: 'https://docs.icreatorstudio.com/', target: '_blank' },
 ];
