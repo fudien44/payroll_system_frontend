@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { useTheme } from 'vuetify'
-import { VForm } from 'vuetify/components/VForm'
-import { useRouter, useRoute } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'      
 import Logo from '@/components/Logo.vue'
+import { useAuthStore } from '@/stores/auth'
 import authBgDark from '@images/pages/auth-bg-dark.svg'
 import authBgLight from '@images/pages/auth-bg-light.svg'
+import { useRoute, useRouter } from 'vue-router'
+import { useTheme } from 'vuetify'
+import { VForm } from 'vuetify/components/VForm'
 
 const loginForm = ref<VForm>()
 const isPasswordVisible = ref(false)
@@ -25,6 +25,12 @@ const loginData = ref({
 const authBgThemeVariant = computed(() => {
   return theme.current.value.dark ? authBgDark : authBgLight
 })
+
+// Right panel — hero/brand side (stays dark for now, structured for future light swap)
+const rightPanelStyle = computed(() => ({
+  background: 'linear-gradient(145deg, #1a3d33 0%, #285c4d 50%, #32725f 100%)',
+  blockSize: '38rem',
+}))
 
 async function handleLogin() {
   errorMessage.value = ''
@@ -77,7 +83,7 @@ const features = [
           cols="12"
           md="6"
           class="d-flex flex-column justify-center pa-10 position-relative"
-          style="block-size: 38rem; background: #0b1612;"
+          style="block-size: 38rem;"
         >
           <!-- Logo + System name -->
           <div class="d-flex align-center gap-3 mb-8">
@@ -95,12 +101,12 @@ const features = [
             </div>
             <div>
               <h5
-                class="mb-0 font-weight-bold"
-                style="color: white; font-size: 1rem; line-height: 1.2;"
+                class="mb-0 font-weight-bold text-high-emphasis"
+                style="font-size: 1rem; line-height: 1.2;"
               >
                 JO Payroll System
               </h5>
-              <span style="color: rgba(255,255,255,0.35); font-size: 0.7rem; letter-spacing: 0.4px;">
+              <span class="text-medium-emphasis" style="font-size: 0.7rem; letter-spacing: 0.4px;">
                 HRMIS PORTAL
               </span>
             </div>
@@ -109,14 +115,14 @@ const features = [
           <!-- Heading -->
           <div class="mb-6">
             <h3
-              class="font-weight-bold mb-1"
-              style="color: white; font-size: 1.5rem;"
+              class="font-weight-bold mb-1 text-high-emphasis"
+              style="font-size: 1.5rem;"
             >
               Welcome... 👋
             </h3>
             <p
-              class="mb-0"
-              style="color: rgba(255,255,255,0.45); font-size: 0.82rem;"
+              class="mb-0 text-medium-emphasis"
+              style="font-size: 0.82rem;"
             >
               Please sign in with your HRMIS account to continue.
             </p>
@@ -142,8 +148,8 @@ const features = [
           >
             <div class="mb-4">
               <label
-                class="d-block mb-1"
-                style="color: rgba(255,255,255,0.55); font-size: 0.75rem; letter-spacing: 0.4px;"
+                class="d-block mb-1 text-medium-emphasis"
+                style="font-size: 0.75rem; letter-spacing: 0.4px;"
               >
                 USERNAME
               </label>
@@ -155,8 +161,6 @@ const features = [
                 :rules="[v => !!v || 'Username is required']"
                 variant="outlined"
                 density="comfortable"
-                bg-color="#112318"
-                base-color="rgba(255,255,255,0.15)"
                 color="#285c4d"
                 hide-details="auto"
                 style="border-radius: 10px;"
@@ -165,8 +169,8 @@ const features = [
 
             <div class="mb-2">
               <label
-                class="d-block mb-1"
-                style="color: rgba(255,255,255,0.55); font-size: 0.75rem; letter-spacing: 0.4px;"
+                class="d-block mb-1 text-medium-emphasis"
+                style="font-size: 0.75rem; letter-spacing: 0.4px;"
               >
                 PASSWORD
               </label>
@@ -179,8 +183,6 @@ const features = [
                 :rules="[v => !!v || 'Password is required']"
                 variant="outlined"
                 density="comfortable"
-                bg-color="#112318"
-                base-color="rgba(255,255,255,0.15)"
                 color="#285c4d"
                 hide-details="auto"
                 style="border-radius: 10px;"
@@ -192,7 +194,7 @@ const features = [
             <div class="text-end mb-6">
               <RouterLink
                 to="/forgot-password"
-                style="color: #4a9d82; font-size: 0.78rem; text-decoration: none;"
+                style="color: #285c4d; font-size: 0.78rem; text-decoration: none;"
               >
                 Forgot Password?
               </RouterLink>
@@ -223,7 +225,7 @@ const features = [
         <VCol
           cols="6"
           class="d-none d-md-flex flex-column align-center justify-center pa-10 border-s position-relative overflow-hidden"
-          style="background: linear-gradient(145deg, #1a3d33 0%, #285c4d 50%, #32725f 100%); block-size: 38rem;"
+          :style="rightPanelStyle"
         >
           <!-- Decorative background circles -->
           <div

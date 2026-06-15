@@ -34,6 +34,12 @@ export default [
   },
   { heading: 'Configuration' },
   {
+    name: 'Reports',
+    icon: 'mdi mdi-file-chart-outline',
+    to: { name: 'Reports' },
+  },
+  { heading: 'Configuration' },
+  {
     name: 'Signatories',
     icon: 'mdi-file-sign',
     to: { name: 'Signatories' },
@@ -44,4 +50,5 @@ export default [
     icon: 'mdi-database-search-outline',
     to: { name: 'Engas' },
   },
-]
+
+];

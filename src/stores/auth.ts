@@ -5,74 +5,76 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 export const useAuthStore = defineStore('auth', () => {
-    const token = ref<string | null>(localStorage.getItem('auth_token'))
+  const token = ref<string | null>(localStorage.getItem('auth_token'))
 
-    const isAuthenticated = computed(() => !!token.value)
+  const isAuthenticated = computed(() => !!token.value)
 
-    function setToken(newToken: string) {
-        token.value = newToken
-        localStorage.setItem('auth_token', newToken)
-        axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`
+  // --- Token helpers ---
+
+  function setToken(newToken: string) {
+    token.value = newToken
+    localStorage.setItem('auth_token', newToken)
+    axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`
+  }
+
+  function clearToken() {
+    token.value = null
+    localStorage.removeItem('auth_token')
+    delete axios.defaults.headers.common['Authorization']
+  }
+
+  // --- Auth actions ---
+
+  async function login(credentials: { username: string; password: string }): Promise<void> {
+    // 1. Authenticate and get token
+    const { data } = await axios.post('/api/auth/login', credentials)
+    setToken(data.accessToken)
+
+    const userStore = useUserStore()
+
+    // 2. Fetch full user object from /api/employee/me
+    await userStore.fetchUser()
+
+    // 3. Fetch profile picture (non-fatal — won't throw if it fails)
+    await userStore.fetchProfile()
+  }
+
+  async function logout(): Promise<void> {
+    try {
+      await axios.get('/api/auth/logout')
+    } catch (_) {
+      // Proceed with local cleanup even if the server call fails
+    } finally {
+      clearToken()
+      useUserStore().clearUser()       // clears user + profile from state + localStorage
+      usePayrollStore().clearPayroll() // clear payroll data
     }
+  }
 
-    function clearToken() {
-        token.value = null
-        localStorage.removeItem('auth_token')
-        delete axios.defaults.headers.common['Authorization']
-    }
+  /**
+   * Call this once on app startup (e.g. in App.vue or main.ts).
+   * Restores token + user + profile from localStorage if they exist.
+   */
+  function initialize(): void {
+    if (!token.value) return
 
-    async function login(credentials: { username: string; password: string }) {
-        const { data } = await axios.post('/api/auth/login', credentials)
-        setToken(data.accessToken) //adjust if your Laravel response key differs
+    // Re-attach token to axios so requests work immediately
+    axios.defaults.headers.common['Authorization'] = `Bearer ${token.value}`
 
-        localStorage.setItem('auth_user', JSON.stringify({
-            name: data.name
-        }))
+    const userStore = useUserStore()
 
-        const userStore = useUserStore()
-        userStore.setUser({ name: data.name })
+    // useUserStore already reads auth_user + auth_profile from localStorage
+    // on creation, so no extra work needed here unless you want a fresh fetch.
+    // Uncomment the lines below if you want to always re-validate on app load:
+    // userStore.fetchUser().catch(() => clearToken())
+    // userStore.fetchProfile()
+  }
 
-        // const MOCK_USERNAME = 'admin123'
-        // const MOCK_PASSWORD = 'admin123'
-
-        // if (credentials.username === MOCK_USERNAME && credentials.password === MOCK_PASSWORD) {
-        //     setToken('mock-token-123')
-        //     return
-        // }
-
-        // throw { response: { data: { message: 'Invalid credentials.' } } }
-    }
-
-    async function logout() {
-        try {
-            await axios.get('/api/auth/logout')
-        } finally {
-            clearToken()
-            useUserStore().clearUser() //clear user profile on logout
-            usePayrollStore().clearPayroll() //clear payroll data on logout
-        }
-
-        // clearToken()
-        // useUserStore().clearUser()
-        // usePayrollStore().clearPayroll()
-    }
-
-    function initialize() {
-        if (token.value) {
-            axios.defaults.headers.common['Authorization'] = `Bearer ${token.value}`
-
-            const storedUser = localStorage.getItem('auth_user')
-            if (storedUser) {
-                useUserStore().setUser(JSON.parse(storedUser))
-            }
-        }
-    }
-
-    return {
-        token,
-        isAuthenticated,
-        login,
-        logout,
-        initialize,
-    }
+  return {
+    token,
+    isAuthenticated,
+    login,
+    logout,
+    initialize,
+  }
 })
