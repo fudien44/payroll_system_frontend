@@ -82,6 +82,11 @@
             <span class="cm-legend-pill cm-legend-pill--cmp">CMP</span>
             Mon–Thu 7am–6pm
           </span>
+          <span class="cm-legend-item cm-legend-item--divider" />
+          <span class="cm-legend-item">
+            <span class="cm-legend-half-badge">½</span>
+            Half-day
+          </span>
         </div>
 
         <!-- Loading -->
@@ -156,6 +161,16 @@
                     >
                       SUSP
                     </VChip>
+                    <!-- Half-day badge: shown for special holidays and suspensions -->
+                    <VChip
+                      v-if="isHalfDay(cell)"
+                      size="x-small"
+                      color="purple"
+                      variant="tonal"
+                      class="cm-badge cm-badge--half"
+                    >
+                      ½
+                    </VChip>
                   </div>
                 </template>
               </div>
@@ -188,6 +203,7 @@
                   <VIcon icon="mdi-briefcase-outline" size="16" />
                 </VAvatar>
                 <div>
+                  <!-- Working days shown as decimal when half-days exist -->
                   <span class="cm-stat-value">{{ summary.totalWorkingDays }}</span>
                   <span class="cm-stat-label">Working Days</span>
                 </div>
@@ -263,7 +279,10 @@
                   <VChip size="x-small" color="warning" variant="tonal" label>
                     {{ formatDisplayDate(h.date) }}
                   </VChip>
-                  <span class="cm-list-item-label">{{ h.label }}</span>
+                  <span class="cm-list-item-label">
+                    {{ h.label }}
+                    <VChip v-if="h.is_half_day" size="x-small" color="purple" variant="tonal" class="ml-1">½</VChip>
+                  </span>
                 </div>
                 <div class="cm-list-item-actions">
                   <VBtn icon size="x-small" variant="text" color="primary" @click="openHolidayDialog(h)">
@@ -299,7 +318,10 @@
                 <VChip size="x-small" color="success" variant="tonal" label>
                   {{ formatDisplayDate(s.date) }}
                 </VChip>
-                <span class="cm-list-item-label">{{ s.label }}</span>
+                <span class="cm-list-item-label">
+                  {{ s.label }}
+                  <VChip v-if="s.is_half_day" size="x-small" color="purple" variant="tonal" class="ml-1">½</VChip>
+                </span>
               </div>
               <div class="cm-list-item-actions">
                 <VBtn icon size="x-small" variant="text" color="primary" @click="openSuspensionDialog(s)">
@@ -374,9 +396,8 @@
             />
           </div>
 
-          <div class="cm-field">
+          <div class="cm-field mb-3">
             <label class="cm-label">Holiday Type <span class="cm-required">*</span></label>
-            <!-- Holiday type as clickable cards -->
             <div class="d-flex gap-3 mt-1">
               <VCard
                 :variant="holidayDialog.type === 'regular' ? 'tonal' : 'outlined'"
@@ -384,7 +405,7 @@
                 rounded="lg"
                 flat
                 style="cursor: pointer; flex: 1;"
-                @click="holidayDialog.type = 'regular'"
+                @click="holidayDialog.type = 'regular'; holidayDialog.isHalfDay = false"
               >
                 <VCardText class="pa-3">
                   <div class="d-flex align-center gap-2 mb-1">
@@ -417,6 +438,44 @@
                 </VCardText>
               </VCard>
             </div>
+          </div>
+
+          <!-- Half-day toggle: only for special holidays -->
+          <div v-if="holidayDialog.type === 'special'" class="cm-field mb-3">
+            <VCard
+              :variant="holidayDialog.isHalfDay ? 'tonal' : 'outlined'"
+              :color="holidayDialog.isHalfDay ? 'purple' : undefined"
+              rounded="lg"
+              flat
+              style="cursor: pointer;"
+              @click="holidayDialog.isHalfDay = !holidayDialog.isHalfDay"
+            >
+              <VCardText class="pa-3">
+                <div class="d-flex align-center gap-3">
+                  <VAvatar
+                    :color="holidayDialog.isHalfDay ? 'purple' : 'medium-emphasis'"
+                    variant="tonal"
+                    size="32"
+                    rounded="lg"
+                  >
+                    <span style="font-size: 0.85rem; font-weight: 700;">½</span>
+                  </VAvatar>
+                  <div class="flex-1">
+                    <div class="text-body-2 font-weight-medium">Half-day holiday</div>
+                    <div class="text-caption text-medium-emphasis">
+                      4 hrs (STD) · 4 hrs 60 min (CMP) — counts as 0.5 working day
+                    </div>
+                  </div>
+                  <VSwitch
+                    :model-value="holidayDialog.isHalfDay"
+                    color="purple"
+                    density="compact"
+                    hide-details
+                    style="pointer-events: none;"
+                  />
+                </div>
+              </VCardText>
+            </VCard>
           </div>
 
           <VAlert v-if="holidayDialog.error" type="error" variant="tonal" density="compact" class="mt-3">
@@ -472,7 +531,7 @@
             />
           </div>
 
-          <div class="cm-field">
+          <div class="cm-field mb-3">
             <label class="cm-label">Label / Reason <span class="cm-required">*</span></label>
             <VTextField
               v-model="suspensionDialog.label"
@@ -482,6 +541,44 @@
               prepend-inner-icon="mdi-tag-outline"
               hide-details="auto"
             />
+          </div>
+
+          <!-- Half-day toggle for suspensions -->
+          <div class="cm-field">
+            <VCard
+              :variant="suspensionDialog.isHalfDay ? 'tonal' : 'outlined'"
+              :color="suspensionDialog.isHalfDay ? 'purple' : undefined"
+              rounded="lg"
+              flat
+              style="cursor: pointer;"
+              @click="suspensionDialog.isHalfDay = !suspensionDialog.isHalfDay"
+            >
+              <VCardText class="pa-3">
+                <div class="d-flex align-center gap-3">
+                  <VAvatar
+                    :color="suspensionDialog.isHalfDay ? 'purple' : 'medium-emphasis'"
+                    variant="tonal"
+                    size="32"
+                    rounded="lg"
+                  >
+                    <span style="font-size: 0.85rem; font-weight: 700;">½</span>
+                  </VAvatar>
+                  <div class="flex-1">
+                    <div class="text-body-2 font-weight-medium">Half-day suspension</div>
+                    <div class="text-caption text-medium-emphasis">
+                      4 hrs (STD) · 4 hrs 60 min (CMP) — counts as 0.5 working day
+                    </div>
+                  </div>
+                  <VSwitch
+                    :model-value="suspensionDialog.isHalfDay"
+                    color="purple"
+                    density="compact"
+                    hide-details
+                    style="pointer-events: none;"
+                  />
+                </div>
+              </VCardText>
+            </VCard>
           </div>
 
           <VAlert v-if="suspensionDialog.error" type="error" variant="tonal" density="compact" class="mt-3">
@@ -526,14 +623,7 @@
           </div>
 
           <div class="d-flex flex-column gap-2">
-            <VCard
-              variant="tonal"
-              color="error"
-              rounded="lg"
-              flat
-              style="cursor: pointer;"
-              @click="onPickerSelect('regular')"
-            >
+            <VCard variant="tonal" color="error" rounded="lg" flat style="cursor: pointer;" @click="onPickerSelect('regular')">
               <VCardText class="d-flex align-center gap-3 pa-3">
                 <VAvatar color="error" variant="tonal" size="32" rounded="lg">
                   <VIcon icon="mdi-calendar-star" size="16" />
@@ -547,14 +637,7 @@
               </VCardText>
             </VCard>
 
-            <VCard
-              variant="tonal"
-              color="warning"
-              rounded="lg"
-              flat
-              style="cursor: pointer;"
-              @click="onPickerSelect('special')"
-            >
+            <VCard variant="tonal" color="warning" rounded="lg" flat style="cursor: pointer;" @click="onPickerSelect('special')">
               <VCardText class="d-flex align-center gap-3 pa-3">
                 <VAvatar color="warning" variant="tonal" size="32" rounded="lg">
                   <VIcon icon="mdi-calendar-alert" size="16" />
@@ -568,14 +651,7 @@
               </VCardText>
             </VCard>
 
-            <VCard
-              variant="tonal"
-              color="success"
-              rounded="lg"
-              flat
-              style="cursor: pointer;"
-              @click="onPickerSelect('suspension')"
-            >
+            <VCard variant="tonal" color="success" rounded="lg" flat style="cursor: pointer;" @click="onPickerSelect('suspension')">
               <VCardText class="d-flex align-center gap-3 pa-3">
                 <VAvatar color="success" variant="tonal" size="32" rounded="lg">
                   <VIcon icon="mdi-calendar-remove" size="16" />
@@ -692,7 +768,7 @@ async function fetchWeekSchedules(year: number, month: number) {
   }
 }
 
-function isWeekCompressed(weekStart: string, fridayHasEvent: boolean): boolean {
+function isWeekCompressed(weekStart: string): boolean {
   const row = weekScheduleMap.value[weekStart]
   if (row !== undefined) return row.is_compressed
   return false
@@ -769,11 +845,6 @@ const MONTH_NAMES = ['January','February','March','April','May','June','July','A
 
 const monthLabel = computed(() => `${MONTH_NAMES[viewMonth.value - 1]} ${viewYear.value}`)
 
-const holidayTypeOptions = [
-  { title: 'Regular Holiday', value: 'regular' },
-  { title: 'Special Non-Working Holiday', value: 'special' },
-]
-
 function prevMonth() {
   if (viewMonth.value === 1) { viewMonth.value = 12; viewYear.value-- }
   else viewMonth.value--
@@ -816,6 +887,16 @@ interface CalendarWeek {
   isCompressed: boolean
   weekStart:    string
   hasMonday:    boolean
+}
+
+// ---------------------------------------------------------------------------
+// Half-day helper — true when cell has a half-day special holiday or suspension
+// (regular holidays are never half-day)
+// ---------------------------------------------------------------------------
+function isHalfDay(cell: CalendarCell): boolean {
+  if (cell.info.holiday?.type === 'special' && cell.info.holiday.is_half_day) return true
+  if (cell.info.suspension?.is_half_day) return true
+  return false
 }
 
 // ---------------------------------------------------------------------------
@@ -863,9 +944,8 @@ const calendarWeeks = computed<CalendarWeek[]>(() => {
       weekStart = `${yy}-${mm}-${dd}`
     }
 
-    const fridayHasEvent = !!cells.find(c => c.date?.getDay() === 5 && (c.info.holiday || c.info.suspension))
-    const isCompressed   = weekStart ? isWeekCompressed(weekStart, fridayHasEvent) : false
-    const hasMonday      = cells.some(c => c.date && c.date.getDay() === 1)
+    const isCompressed = weekStart ? isWeekCompressed(weekStart) : false
+    const hasMonday    = cells.some(c => c.date && c.date.getDay() === 1)
 
     weeks.push({ cells, isCompressed, weekStart, hasMonday })
   }
@@ -886,25 +966,43 @@ function cellClasses(cell: CalendarCell, isCompressed: boolean) {
     'cm-cell--rh':        cell.info.holiday?.type === 'regular',
     'cm-cell--sh':        cell.info.holiday?.type === 'special',
     'cm-cell--susp':      !!cell.info.suspension,
+    'cm-cell--half':      isHalfDay(cell),
     'cm-cell--clickable': true,
   }
 }
 
+// ---------------------------------------------------------------------------
+// Summary — working days count
+// Only suspensions reduce working days (holidays do NOT affect the count).
+// Full suspension = −1, half-day suspension = −0.5.
+// ---------------------------------------------------------------------------
 const summary = computed(() => {
   const base = getMonthSummary(viewYear.value, viewMonth.value)
   let workingDays = 0
+
   for (const week of calendarWeeks.value) {
     for (const cell of week.cells) {
       if (!cell.date) continue
       const dow = cell.date.getDay()
-      const isHolidayOrSusp = !!cell.info.holiday || !!cell.info.suspension
-      if (week.isCompressed) {
-        if (dow >= 1 && dow <= 4 && !isHolidayOrSusp) workingDays++
-      } else {
-        if (dow >= 1 && dow <= 5 && !isHolidayOrSusp) workingDays++
+
+      // Determine if this day is a working day slot in the week's schedule
+      const isWorkSlot = week.isCompressed
+        ? dow >= 1 && dow <= 4   // Mon–Thu
+        : dow >= 1 && dow <= 5   // Mon–Fri
+
+      if (!isWorkSlot) continue
+
+      if (!cell.info.suspension) {
+        // No suspension — counts as a full working day regardless of holidays
+        workingDays += 1
+      } else if (cell.info.suspension.is_half_day) {
+        // Half-day suspension — only half the day is lost
+        workingDays += 0.5
       }
+      // Full suspension — 0 contribution
     }
   }
+
   return { ...base, totalWorkingDays: workingDays }
 })
 
@@ -913,7 +1011,7 @@ const summary = computed(() => {
 // ---------------------------------------------------------------------------
 function onCellClick(cell: CalendarCell) {
   if (!cell.date) return
-  if (cell.info.suspension)  openSuspensionDialog(cell.info.suspension)
+  if (cell.info.suspension)   openSuspensionDialog(cell.info.suspension)
   else if (cell.info.holiday) openHolidayDialog(cell.info.holiday)
   else                        openPickerDialog(cell.date)
 }
@@ -929,6 +1027,7 @@ const holidayDialog = reactive({
   dateChanged:  false,
   label:        '',
   type:         'regular' as HolidayType,
+  isHalfDay:    false,
   error:        '',
   loading:      false,
 })
@@ -941,6 +1040,7 @@ function openHolidayDialog(holiday?: Holiday, prefillDate?: Date) {
   holidayDialog.dateChanged  = false
   holidayDialog.label        = holiday?.label ?? ''
   holidayDialog.type         = holiday?.type ?? 'regular'
+  holidayDialog.isHalfDay    = holiday?.is_half_day ?? false
   holidayDialog.error        = ''
   holidayDialog.loading      = false
   holidayDialog.visible      = true
@@ -953,9 +1053,14 @@ async function submitHoliday() {
   if (!holidayDialog.date)         { holidayDialog.error = 'Please select a date.';  return }
   if (!holidayDialog.label.trim()) { holidayDialog.error = 'Please enter a label.'; return }
   holidayDialog.loading = true
+
+  // Regular holidays are never half-day
+  const isHalfDay = holidayDialog.type === 'special' ? holidayDialog.isHalfDay : false
+
   const result = holidayDialog.editId
-    ? await updateHoliday(holidayDialog.editId, holidayDialog.date, holidayDialog.label, holidayDialog.type)
-    : await addHoliday(holidayDialog.date, holidayDialog.label, holidayDialog.type)
+    ? await updateHoliday(holidayDialog.editId, holidayDialog.date, holidayDialog.label, holidayDialog.type, isHalfDay)
+    : await addHoliday(holidayDialog.date, holidayDialog.label, holidayDialog.type, isHalfDay)
+
   holidayDialog.loading = false
   if (result === true) {
     invalidateMonth(viewYear.value, viewMonth.value)
@@ -971,21 +1076,23 @@ async function submitHoliday() {
 // Suspension dialog
 // ---------------------------------------------------------------------------
 const suspensionDialog = reactive({
-  visible: false,
-  editId:  null as number | null,
-  date:    '',
-  label:   '',
-  error:   '',
-  loading: false,
+  visible:   false,
+  editId:    null as number | null,
+  date:      '',
+  label:     '',
+  isHalfDay: false,
+  error:     '',
+  loading:   false,
 })
 
 function openSuspensionDialog(suspension?: SuspensionDay, prefillDate?: Date) {
-  suspensionDialog.editId  = suspension?.id ?? null
-  suspensionDialog.date    = suspension?.date ?? (prefillDate ? toISODate(prefillDate) : '')
-  suspensionDialog.label   = suspension?.label ?? ''
-  suspensionDialog.error   = ''
-  suspensionDialog.loading = false
-  suspensionDialog.visible = true
+  suspensionDialog.editId    = suspension?.id ?? null
+  suspensionDialog.date      = suspension?.date ?? (prefillDate ? toISODate(prefillDate) : '')
+  suspensionDialog.label     = suspension?.label ?? ''
+  suspensionDialog.isHalfDay = suspension?.is_half_day ?? false
+  suspensionDialog.error     = ''
+  suspensionDialog.loading   = false
+  suspensionDialog.visible   = true
 }
 
 function closeSuspensionDialog() { suspensionDialog.visible = false }
@@ -995,9 +1102,11 @@ async function submitSuspension() {
   if (!suspensionDialog.date)         { suspensionDialog.error = 'Please select a date.';  return }
   if (!suspensionDialog.label.trim()) { suspensionDialog.error = 'Please enter a label.'; return }
   suspensionDialog.loading = true
+
   const result = suspensionDialog.editId
-    ? await updateSuspensionDay(suspensionDialog.editId, suspensionDialog.date, suspensionDialog.label)
-    : await addSuspensionDay(suspensionDialog.date, suspensionDialog.label)
+    ? await updateSuspensionDay(suspensionDialog.editId, suspensionDialog.date, suspensionDialog.label, suspensionDialog.isHalfDay)
+    : await addSuspensionDay(suspensionDialog.date, suspensionDialog.label, suspensionDialog.isHalfDay)
+
   suspensionDialog.loading = false
   if (result === true) {
     invalidateMonth(viewYear.value, viewMonth.value)
@@ -1192,6 +1301,20 @@ async function executeDelete() {
   color: var(--purple-500, #9c27b0);
 }
 
+/* Half-day legend badge */
+.cm-legend-half-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--purple-500, #9c27b0) 15%, transparent);
+  color: var(--purple-500, #9c27b0);
+}
+
 /* ── Day Headers ────────────────────────────────────────────────────── */
 .cm-day-headers {
   display: grid;
@@ -1312,6 +1435,23 @@ async function executeDelete() {
 .cm-cell--sh   { background: color-mix(in srgb, var(--orange-500) 12%, transparent); }
 .cm-cell--susp { background: color-mix(in srgb, var(--green-500) 12%, transparent); }
 
+/* Half-day cells get a diagonal split to show partial day visually */
+.cm-cell--sh.cm-cell--half {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--orange-500) 12%, transparent) 50%,
+    transparent 50%
+  );
+}
+
+.cm-cell--susp.cm-cell--half {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--green-500) 12%, transparent) 50%,
+    transparent 50%
+  );
+}
+
 .cm-cell--rh.cm-cell--susp,
 .cm-cell--sh.cm-cell--susp {
   background: linear-gradient(
@@ -1338,6 +1478,11 @@ async function executeDelete() {
 .cm-badge {
   font-size: 0.6rem !important;
   height: 16px !important;
+}
+
+.cm-badge--half {
+  font-weight: 700 !important;
+  min-width: 18px !important;
 }
 
 /* ── Sidebar ────────────────────────────────────────────────────────── */
@@ -1442,6 +1587,9 @@ async function executeDelete() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 .cm-list-item-actions {
@@ -1469,4 +1617,6 @@ async function executeDelete() {
 }
 
 .cm-required { color: var(--red-500); }
+
+.flex-1 { flex: 1; }
 </style>

@@ -46,7 +46,7 @@ type AlertType = 'success' | 'error' | 'warning' | 'info'
    CONSTANTS
 ───────────────────────────────────────── */
 const PAGIBIG_MIN = 400
-const SSS_MIN     = 760
+const SSS_MIN     = 750
 const SG_CUTOFF   = 16
 
 const PREMIUM_OPTIONS = [

@@ -139,8 +139,32 @@ function validate(): boolean {
 async function fetchSignatories() {
   loading.value = true
   try {
+    // The controller now returns a structured object when called with params.
+    // When called with NO params (as this page does), we need the flat list.
+    // Pass a sentinel so the backend returns selectable_pool which contains all certified_by,
+    // then combine with approved_by to rebuild the flat list for this management page.
     const { data } = await axios.get('/api/signatories')
-    signatories.value = data.data ?? []
+    const payload = data.data
+
+    // Backend now returns structured object — flatten back into a list for this page
+    const flat: Signatory[] = []
+
+    if (payload?.approved_by) {
+      flat.push({ ...payload.approved_by, is_active: true })
+    }
+    if (Array.isArray(payload?.selectable_pool)) {
+      payload.selectable_pool.forEach((s: any) => {
+        flat.push({ ...s, is_active: s.is_active ?? true })
+      })
+    }
+
+    // Deduplicate by id in case of overlap
+    const seen = new Set<number>()
+    signatories.value = flat.filter(s => {
+      if (seen.has(s.id)) return false
+      seen.add(s.id)
+      return true
+    })
   } catch {
     showAlert('error', 'Failed to load signatories.')
   } finally {
@@ -316,9 +340,8 @@ onMounted(async () => {
         </VCol>
       </VRow>
 
-      <!-- ── Toolbar: Search + Filter Pills ── -->
+      <!-- ── Filter Pills ── -->
       <div class="d-flex align-center flex-wrap gap-3 mb-3">
-        <!-- Filter pills -->
         <div class="d-flex gap-2">
           <VChip
             v-for="opt in [
@@ -356,14 +379,9 @@ onMounted(async () => {
         @edit="openEdit"
         @delete="openDeleteConfirm"
       >
-        <!-- Employee cell with avatar -->
         <template #item.name="{ item }">
           <div class="d-flex align-center gap-3">
-            <VAvatar
-              :color="avatarColor(item.emp_id)"
-              variant="tonal"
-              size="36"
-            >
+            <VAvatar :color="avatarColor(item.emp_id)" variant="tonal" size="36">
               <span class="text-caption font-weight-medium">{{ initials(item.name) }}</span>
             </VAvatar>
             <div>
@@ -373,16 +391,12 @@ onMounted(async () => {
           </div>
         </template>
 
-        <!-- Role chip -->
         <template #item.role="{ item }">
           <VChip
             :color="item.role === 'approved_by' ? 'warning' : 'success'"
-            size="small"
-            variant="tonal"
-            label
+            size="small" variant="tonal" label
           >
-            <VIcon
-              start
+            <VIcon start
               :icon="item.role === 'approved_by' ? 'mdi-account-check-outline' : 'mdi-check-decagram-outline'"
               size="14"
             />
@@ -390,16 +404,12 @@ onMounted(async () => {
           </VChip>
         </template>
 
-        <!-- Status chip -->
         <template #item.is_active="{ item }">
           <VChip
             :color="item.is_active ? 'success' : 'default'"
-            size="small"
-            variant="tonal"
-            label
+            size="small" variant="tonal" label
           >
-            <VIcon
-              start
+            <VIcon start
               :icon="item.is_active ? 'mdi-check-circle-outline' : 'mdi-minus-circle-outline'"
               size="14"
             />
@@ -407,7 +417,6 @@ onMounted(async () => {
           </VChip>
         </template>
 
-        <!-- Action buttons -->
         <template #item.actions="{ item }">
           <div class="d-flex align-center justify-center gap-1">
             <VBtn icon size="small" variant="text" color="primary" @click.stop="openEdit(item)">
@@ -436,7 +445,6 @@ onMounted(async () => {
     >
       <VRow dense>
 
-        <!-- ── Employee ── -->
         <VCol cols="12">
           <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Employee</p>
           <VDivider class="mt-1 mb-3" />
@@ -461,17 +469,10 @@ onMounted(async () => {
             persistent-hint
             no-data-text="No available regular employees"
           >
-            <!-- Selected value display -->
             <template #selection="{ item }">
               <div class="d-flex align-center gap-2 py-1">
-                <VAvatar
-                  :color="avatarColor(item.raw.value)"
-                  variant="tonal"
-                  size="24"
-                >
-                  <span style="font-size: 10px; font-weight: 600;">
-                    {{ initials(item.raw.title) }}
-                  </span>
+                <VAvatar :color="avatarColor(item.raw.value)" variant="tonal" size="24">
+                  <span style="font-size: 10px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
                 </VAvatar>
                 <div>
                   <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
@@ -480,27 +481,15 @@ onMounted(async () => {
               </div>
             </template>
 
-            <!-- Dropdown item -->
             <template #item="{ item, props }">
               <VListItem v-bind="props" :title="undefined" class="py-2">
                 <template #prepend>
-                  <VAvatar
-                    :color="avatarColor(item.raw.value)"
-                    variant="tonal"
-                    size="36"
-                    class="mr-3"
-                  >
-                    <span style="font-size: 12px; font-weight: 600;">
-                      {{ initials(item.raw.title) }}
-                    </span>
+                  <VAvatar :color="avatarColor(item.raw.value)" variant="tonal" size="36" class="mr-3">
+                    <span style="font-size: 12px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
                   </VAvatar>
                 </template>
-                <VListItemTitle class="text-body-2 font-weight-medium">
-                  {{ item.raw.title }}
-                </VListItemTitle>
-                <VListItemSubtitle class="text-caption">
-                  {{ item.raw.subtitle }}
-                </VListItemSubtitle>
+                <VListItemTitle class="text-body-2 font-weight-medium">{{ item.raw.title }}</VListItemTitle>
+                <VListItemSubtitle class="text-caption">{{ item.raw.subtitle }}</VListItemSubtitle>
               </VListItem>
             </template>
           </VAutocomplete>
@@ -512,29 +501,25 @@ onMounted(async () => {
           </VAlert>
         </VCol>
 
-        <!-- ── Role ── -->
         <VCol cols="12" class="mt-3">
           <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Role</p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
-        <!-- Role selection cards -->
         <VCol cols="12" sm="6">
           <VCard
             :variant="form.role === 'certified_by' ? 'tonal' : 'outlined'"
             :color="form.role === 'certified_by' ? 'success' : undefined"
-            rounded="lg"
-            style="cursor: pointer;"
+            rounded="lg" style="cursor: pointer;"
             @click="form.role = 'certified_by'"
           >
             <VCardText class="pa-3">
               <div class="d-flex align-center gap-2 mb-1">
-                <VIcon icon="mdi-check-decagram-outline" size="18" :color="form.role === 'certified_by' ? 'success' : 'medium-emphasis'" />
+                <VIcon icon="mdi-check-decagram-outline" size="18"
+                  :color="form.role === 'certified_by' ? 'success' : 'medium-emphasis'" />
                 <span class="text-body-2 font-weight-medium">Certified By</span>
               </div>
-              <p class="text-caption text-medium-emphasis mb-0">
-                Certifies services rendered or cash availability.
-              </p>
+              <p class="text-caption text-medium-emphasis mb-0">Certifies services rendered or cash availability.</p>
             </VCardText>
           </VCard>
         </VCol>
@@ -543,18 +528,16 @@ onMounted(async () => {
           <VCard
             :variant="form.role === 'approved_by' ? 'tonal' : 'outlined'"
             :color="form.role === 'approved_by' ? 'warning' : undefined"
-            rounded="lg"
-            style="cursor: pointer;"
+            rounded="lg" style="cursor: pointer;"
             @click="form.role = 'approved_by'"
           >
             <VCardText class="pa-3">
               <div class="d-flex align-center gap-2 mb-1">
-                <VIcon icon="mdi-account-check-outline" size="18" :color="form.role === 'approved_by' ? 'warning' : 'medium-emphasis'" />
+                <VIcon icon="mdi-account-check-outline" size="18"
+                  :color="form.role === 'approved_by' ? 'warning' : 'medium-emphasis'" />
                 <span class="text-body-2 font-weight-medium">Approved By</span>
               </div>
-              <p class="text-caption text-medium-emphasis mb-0">
-                Approving authority for payment release.
-              </p>
+              <p class="text-caption text-medium-emphasis mb-0">Approving authority for payment release.</p>
             </VCardText>
           </VCard>
         </VCol>
@@ -563,7 +546,6 @@ onMounted(async () => {
           <p class="text-caption text-error mt-1 mb-0">{{ formErrors.role }}</p>
         </VCol>
 
-        <!-- ── Status ── -->
         <VCol cols="12" class="mt-3">
           <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Status</p>
           <VDivider class="mt-1 mb-3" />
@@ -573,20 +555,12 @@ onMounted(async () => {
           <VCard variant="tonal" :color="form.is_active ? 'success' : 'default'" rounded="lg" flat>
             <VCardText class="d-flex align-center justify-space-between pa-3">
               <div>
-                <div class="text-body-2 font-weight-medium">
-                  {{ form.is_active ? 'Active' : 'Inactive' }}
-                </div>
+                <div class="text-body-2 font-weight-medium">{{ form.is_active ? 'Active' : 'Inactive' }}</div>
                 <div class="text-caption text-medium-emphasis">
                   {{ form.is_active ? 'Will appear in payroll documents' : 'Hidden from payroll documents' }}
                 </div>
               </div>
-              <VSwitch
-                v-model="form.is_active"
-                color="success"
-                density="compact"
-                hide-details
-                inset
-              />
+              <VSwitch v-model="form.is_active" color="success" density="compact" hide-details inset />
             </VCardText>
           </VCard>
         </VCol>
@@ -614,23 +588,15 @@ onMounted(async () => {
         </VCardText>
         <VDivider />
         <VCardActions class="justify-end pa-4 gap-2">
-          <VBtn variant="text" :disabled="deleteLoading" @click="confirmDeleteDialog = false">
-            Cancel
-          </VBtn>
+          <VBtn variant="text" :disabled="deleteLoading" @click="confirmDeleteDialog = false">Cancel</VBtn>
           <VBtn color="error" variant="tonal" :loading="deleteLoading" @click="executeDelete">
-            <VIcon start size="16">mdi-delete-outline</VIcon>
-            Yes, Remove
+            <VIcon start size="16">mdi-delete-outline</VIcon>Yes, Remove
           </VBtn>
         </VCardActions>
       </VCard>
     </VDialog>
 
     <!-- ── Alert ── -->
-    <BaseAlert
-      v-model="alertVisible"
-      :message="alertMessage"
-      :type="alertType"
-      :timeout="3500"
-    />
+    <BaseAlert v-model="alertVisible" :message="alertMessage" :type="alertType" :timeout="3500" />
   </div>
 </template>

@@ -52,6 +52,27 @@ const router = createRouter({
         requiresAuth: true,
       },
     },
+    // ── Payroll Runs ──
+    {
+      path: '/payroll-runs',
+      name: 'payroll-runs',
+      component: () => import('@/views/PayrollRuns.vue'),
+      meta: {
+        title: 'Payroll Runs',
+        layout: 'content',
+        requiresAuth: true,
+      },
+    },
+    {
+      path: '/payroll-runs/:id',
+      name: 'payroll-run-detail',
+      component: () => import('@/views/PayrollRunDetail.vue'),
+      meta: {
+        title: 'Payroll Run Detail',
+        layout: 'content',
+        requiresAuth: true,
+      },
+    },
     // {
     //   path: '/employees',
     //   name: 'employees',

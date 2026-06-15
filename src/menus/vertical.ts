@@ -11,6 +11,11 @@ export default [
     icon: 'mdi-cash-multiple',
     to: { name: 'payroll' },
   },
+  // {
+  //   name: 'Payroll Runs',
+  //   icon: 'mdi-file-document-multiple-outline',
+  //   to: { name: 'payroll-runs' },
+  // },
   { heading: 'Management' },
   {
     name: 'DTR',
@@ -39,4 +44,4 @@ export default [
     icon: 'mdi-database-search-outline',
     to: { name: 'Engas' },
   },
-];
+]
