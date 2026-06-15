@@ -2,7 +2,7 @@ type LayoutOptions = 'content' | 'blank'
 
 declare module 'vue-router' {
   interface RouteMeta {
-    layout: LayoutOptions
+    layout?: LayoutOptions
     redirectIfLoggedIn?: boolean
     requiresAuth?: boolean
   }

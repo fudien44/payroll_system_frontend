@@ -9,28 +9,30 @@ import { computed, ref } from 'vue'
 export type HolidayType = 'regular' | 'special'
 
 export interface Holiday {
-  id: number
-  date: string       // ISO: YYYY-MM-DD
-  label: string
-  type: HolidayType
+  id:          number
+  date:        string       // ISO: YYYY-MM-DD
+  label:       string
+  type:        HolidayType
+  is_half_day: boolean      // only meaningful when type === 'special'
 }
 
 export interface SuspensionDay {
-  id: number
-  date: string       // ISO: YYYY-MM-DD
-  label: string
-  created_at: string
+  id:          number
+  date:        string       // ISO: YYYY-MM-DD
+  label:       string
+  is_half_day: boolean
+  created_at:  string
 }
 
 export interface MonthSummary {
-  regularHolidays: Holiday[]
-  specialHolidays: Holiday[]
-  suspensions: SuspensionDay[]
+  regularHolidays:     Holiday[]
+  specialHolidays:     Holiday[]
+  suspensions:         SuspensionDay[]
   totalNonWorkingDays: number
 }
 
 export interface DateInfo {
-  holiday?: Holiday
+  holiday?:    Holiday
   suspension?: SuspensionDay
 }
 
@@ -69,14 +71,14 @@ const fetchedKeys = new Set<string>()
 
 export function usePayrollCalendar() {
 
-  // ── #1 Cache invalidation ────────────────────────────────────────────────
+  // ── Cache invalidation ───────────────────────────────────────────────────
   // Call this after any mutation so the next fetchMonth re-hits the API.
 
   function invalidateMonth(year: number, month: number): void {
     const key = `${year}-${month}`
     fetchedKeys.delete(key)
 
-    // Also evict cached records for this month so stale data isn't shown
+    // Evict cached records for this month so stale data isn't shown
     // while the re-fetch is in flight.
     const prefix = `${year}-${String(month).padStart(2, '0')}-`
     holidays.value    = holidays.value.filter(h => !h.date.startsWith(prefix))
@@ -94,7 +96,7 @@ export function usePayrollCalendar() {
 
     try {
       const [holidayRes, suspensionRes] = await Promise.all([
-        axiosInstance.get('/api/calendar/holidays', { params: { year, month } }),
+        axiosInstance.get('/api/calendar/holidays',    { params: { year, month } }),
         axiosInstance.get('/api/calendar/suspensions', { params: { year, month } }),
       ])
 
@@ -168,15 +170,34 @@ export function usePayrollCalendar() {
       ...monthSuspensions.map(s => s.date),
     ])
 
-    return { regularHolidays, specialHolidays, suspensions: monthSuspensions, totalNonWorkingDays: allDates.size }
+    return {
+      regularHolidays,
+      specialHolidays,
+      suspensions:         monthSuspensions,
+      totalNonWorkingDays: allDates.size,
+    }
   }
 
   // ── Holiday CRUD ─────────────────────────────────────────────────────────
 
-  async function addHoliday(isoDate: string, label: string, type: HolidayType): Promise<true | string> {
+  async function addHoliday(
+    isoDate:    string,
+    label:      string,
+    type:       HolidayType,
+    isHalfDay = false,
+  ): Promise<true | string> {
     try {
-      const res = await axiosInstance.post('/api/calendar/holidays', { date: isoDate, label: label.trim(), type })
-      if (res.data.success) { holidays.value.push(res.data.data); return true }
+      const res = await axiosInstance.post('/api/calendar/holidays', {
+        date:        isoDate,
+        label:       label.trim(),
+        type,
+        // Regular holidays are never half-day; guard here too for safety
+        is_half_day: type === 'special' ? isHalfDay : false,
+      })
+      if (res.data.success) {
+        holidays.value.push(res.data.data)
+        return true
+      }
       return res.data.message ?? 'Failed to add holiday.'
     }
     catch (err: any) {
@@ -186,9 +207,20 @@ export function usePayrollCalendar() {
     }
   }
 
-  async function updateHoliday(id: number, isoDate: string, label: string, type: HolidayType): Promise<true | string> {
+  async function updateHoliday(
+    id:         number,
+    isoDate:    string,
+    label:      string,
+    type:       HolidayType,
+    isHalfDay = false,
+  ): Promise<true | string> {
     try {
-      const res = await axiosInstance.post(`/api/calendar/holidays/update/${id}`, { date: isoDate, label: label.trim(), type })
+      const res = await axiosInstance.post(`/api/calendar/holidays/update/${id}`, {
+        date:        isoDate,
+        label:       label.trim(),
+        type,
+        is_half_day: type === 'special' ? isHalfDay : false,
+      })
       if (res.data.success) {
         const idx = holidays.value.findIndex(h => h.id === id)
         if (idx !== -1) holidays.value[idx] = res.data.data
@@ -206,7 +238,10 @@ export function usePayrollCalendar() {
   async function removeHoliday(id: number): Promise<true | string> {
     try {
       const res = await axiosInstance.post(`/api/calendar/holidays/delete/${id}`)
-      if (res.data.success) { holidays.value = holidays.value.filter(h => h.id !== id); return true }
+      if (res.data.success) {
+        holidays.value = holidays.value.filter(h => h.id !== id)
+        return true
+      }
       return res.data.message ?? 'Failed to remove holiday.'
     }
     catch (err: any) {
@@ -216,10 +251,21 @@ export function usePayrollCalendar() {
 
   // ── Suspension CRUD ──────────────────────────────────────────────────────
 
-  async function addSuspensionDay(isoDate: string, label: string): Promise<true | string> {
+  async function addSuspensionDay(
+    isoDate:    string,
+    label:      string,
+    isHalfDay = false,
+  ): Promise<true | string> {
     try {
-      const res = await axiosInstance.post('/api/calendar/suspensions', { date: isoDate, label: label.trim() })
-      if (res.data.success) { suspensions.value.push(res.data.data); return true }
+      const res = await axiosInstance.post('/api/calendar/suspensions', {
+        date:        isoDate,
+        label:       label.trim(),
+        is_half_day: isHalfDay,
+      })
+      if (res.data.success) {
+        suspensions.value.push(res.data.data)
+        return true
+      }
       return res.data.message ?? 'Failed to add suspension day.'
     }
     catch (err: any) {
@@ -229,9 +275,18 @@ export function usePayrollCalendar() {
     }
   }
 
-  async function updateSuspensionDay(id: number, isoDate: string, label: string): Promise<true | string> {
+  async function updateSuspensionDay(
+    id:         number,
+    isoDate:    string,
+    label:      string,
+    isHalfDay = false,
+  ): Promise<true | string> {
     try {
-      const res = await axiosInstance.post(`/api/calendar/suspensions/update/${id}`, { date: isoDate, label: label.trim() })
+      const res = await axiosInstance.post(`/api/calendar/suspensions/update/${id}`, {
+        date:        isoDate,
+        label:       label.trim(),
+        is_half_day: isHalfDay,
+      })
       if (res.data.success) {
         const idx = suspensions.value.findIndex(s => s.id === id)
         if (idx !== -1) suspensions.value[idx] = res.data.data
@@ -249,7 +304,10 @@ export function usePayrollCalendar() {
   async function removeSuspensionDay(id: number): Promise<true | string> {
     try {
       const res = await axiosInstance.post(`/api/calendar/suspensions/delete/${id}`)
-      if (res.data.success) { suspensions.value = suspensions.value.filter(s => s.id !== id); return true }
+      if (res.data.success) {
+        suspensions.value = suspensions.value.filter(s => s.id !== id)
+        return true
+      }
       return res.data.message ?? 'Failed to remove suspension day.'
     }
     catch (err: any) {
@@ -266,7 +324,7 @@ export function usePayrollCalendar() {
     allSuspensions: computed(() => suspensions.value),
 
     fetchMonth,
-    invalidateMonth,   // ← new: exposed for cache busting after mutations
+    invalidateMonth,
 
     getHolidaysForMonth,
     getHolidayByDate,
