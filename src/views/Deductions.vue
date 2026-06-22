@@ -32,12 +32,14 @@ interface Employee {
   deductions:      Deductions | null
 }
 
-interface PayrollBatch {
+interface PayrollRun {
   id:            number
-  payroll_month: number
-  payroll_year:  number
+  period_month:  number   // PayrollRun uses period_month / period_year
+  period_year:   number
   status:        'draft' | 'finalized'
-  period_label?: string
+  payroll_no?:   string
+  division_name?: string
+  section_name?:  string
 }
 
 type AlertType = 'success' | 'error' | 'warning' | 'info'
@@ -108,9 +110,9 @@ const resetLoading       = ref(false)
 const exportDialog    = ref(false)
 const exportFormat    = ref<'excel' | 'pdf'>('excel')
 const exportLoading   = ref(false)
-const payrollBatches  = ref<PayrollBatch[]>([])
+const payrollRuns     = ref<PayrollRun[]>([])
 const batchesLoading  = ref(false)
-const selectedBatchId = ref<number | null>(null)
+const selectedRunId   = ref<number | null>(null)
 
 /* ─────────────────────────────────────────
    COMPUTED
@@ -184,21 +186,22 @@ const preview = computed(() => {
   }
 })
 
-const batchOptions = computed(() =>
-  payrollBatches.value.map(b => ({
-    title: `${MONTH_NAMES[b.payroll_month - 1]} ${b.payroll_year}${b.status === 'finalized' ? ' ✓' : ''}`,
-    value: b.id,
+const runOptions = computed(() =>
+  payrollRuns.value.map(r => ({
+    title:    `${MONTH_NAMES[r.period_month - 1]} ${r.period_year}  ${r.status === 'finalized' ? '✓' : '●'}`,
+    subtitle: `${r.payroll_no ?? '—'}  ·  ${r.division_name ?? ''}${r.section_name ? ` · ${r.section_name}` : ''}`,
+    value:    r.id,
   }))
 )
-
-const selectedBatch = computed(() =>
-  payrollBatches.value.find(b => b.id === selectedBatchId.value) ?? null
+ 
+const selectedRun = computed(() =>
+  payrollRuns.value.find(r => r.id === selectedRunId.value) ?? null
 )
-
+ 
 const exportPeriodLabel = computed(() => {
-  if (!selectedBatch.value) return ''
-  const { payroll_month, payroll_year } = selectedBatch.value
-  return `${MONTH_NAMES[payroll_month - 1]} ${payroll_year}`
+  if (!selectedRun.value) return ''
+  const { period_month, period_year } = selectedRun.value
+  return `${MONTH_NAMES[period_month - 1]} ${period_year}`
 })
 
 /* ─────────────────────────────────────────
@@ -274,6 +277,12 @@ function validate(): boolean {
    EXPORT HELPERS
 ───────────────────────────────────────── */
 async function fetchExportData(): Promise<Employee[]> {
+  if (selectedRunId.value) {
+    // Filter to employees actually in this payroll run's batch items
+    const { data } = await axios.get(`/api/wage/export-run/${selectedRunId.value}`)
+    return (data.data ?? []) as Employee[]
+  }
+  // No run selected — fall back to all employees with deductions set
   const { data } = await axios.get('/api/wage', { params: { export: true } })
   return (data.data ?? []) as Employee[]
 }
@@ -327,7 +336,7 @@ async function handleExportExcel() {
 
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Remittances')
-    const batchSuffix = selectedBatch.value ? `${MONTH_NAMES[selectedBatch.value.payroll_month-1]}_${selectedBatch.value.payroll_year}` : 'All'
+    const batchSuffix = selectedRun.value ? `${MONTH_NAMES[selectedRun.value.period_month-1]}_${selectedRun.value.period_year}` : 'All'
     XLSX.writeFile(wb, `DOH_R12_Remittances_${batchSuffix}.xlsx`)
     showAlert('success', 'Excel exported successfully.')
     exportDialog.value = false
@@ -467,13 +476,13 @@ async function fetchEmployees() {
   }
 }
 
-async function fetchBatches() {
+async function fetchRuns() {
   batchesLoading.value = true
   try {
-    const { data } = await axios.get('/api/payroll-batch')
-    payrollBatches.value = data ?? []
+    const { data } = await axios.get('/api/payroll-run')
+    payrollRuns.value = data.data ?? []
   } catch {
-    showAlert('error', 'Failed to load payroll batches.')
+    showAlert('error', 'Failed to load payroll runs.')
   } finally {
     batchesLoading.value = false
   }
@@ -553,10 +562,10 @@ function openDeleteConfirm(item: Record<string, any>) {
 }
 
 function openExportDialog(format: 'excel' | 'pdf') {
-  exportFormat.value    = format
-  selectedBatchId.value = null
-  exportDialog.value    = true
-  fetchBatches()
+  exportFormat.value  = format
+  selectedRunId.value = null
+  exportDialog.value  = true
+  fetchRuns()
 }
 
 /* ─────────────────────────────────────────
@@ -1157,14 +1166,14 @@ onMounted(fetchEmployees)
           </div>
 
           <VAlert type="info" variant="tonal" density="compact" icon="mdi-information-outline" class="mb-4">
-            All employees with deductions set will be included. The selected payroll batch
-            is used as the <strong>period label</strong> on the report.
+            Select a payroll run to export only its batch employees and use it as the
+            <strong>period label</strong>. Leave blank to export all employees with deductions set.
           </VAlert>
 
           <VSelect
-            v-model="selectedBatchId"
-            label="Payroll Batch (Period Label)"
-            :items="batchOptions"
+            v-model="selectedRunId"
+            label="Payroll Run (Period)"
+            :items="runOptions"
             item-title="title"
             item-value="value"
             variant="outlined"
@@ -1173,17 +1182,37 @@ onMounted(fetchEmployees)
             :loading="batchesLoading"
             clearable
             hide-details
-            :no-data-text="batchesLoading ? 'Loading...' : 'No payroll batches found'"
-          />
-
-          <p v-if="exportPeriodLabel" class="text-caption text-medium-emphasis mt-3 mb-0">
-            <VIcon icon="mdi-tag-outline" size="13" class="mr-1" />
-            Period label: <strong>{{ exportPeriodLabel }}</strong>
-          </p>
-          <p v-else class="text-caption text-medium-emphasis mt-3 mb-0">
-            <VIcon icon="mdi-information-outline" size="13" class="mr-1" />
-            No batch selected — report will show "All Periods".
-          </p>
+            :no-data-text="batchesLoading ? 'Loading...' : 'No payroll runs found'"
+          >
+            <template #item="{ props, item }">
+              <VListItem v-bind="props" :title="item.raw.title">
+                <template #title>
+                  <div class="d-flex align-center justify-space-between gap-2">
+                    <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
+                  </div>
+                </template>
+                <template #subtitle>
+                  <span class="text-caption text-medium-emphasis">{{ item.raw.subtitle }}</span>
+                </template>
+              </VListItem>
+            </template>
+            <template #selection="{ item }">
+              <div class="d-flex flex-column" style="line-height: 1.3; padding: 4px 0;">
+                <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
+                <span class="text-caption text-medium-emphasis">{{ item.raw.subtitle }}</span>
+              </div>
+            </template>
+          </VSelect>
+        
+        <p v-if="selectedRun" class="text-caption text-medium-emphasis mt-3 mb-0">
+          <VIcon icon="mdi-account-group-outline" size="13" class="mr-1" />
+          Exports only employees in this run's batch.
+          Period label: <strong>{{ exportPeriodLabel }}</strong>
+        </p>
+        <p v-else class="text-caption text-medium-emphasis mt-3 mb-0">
+          <VIcon icon="mdi-information-outline" size="13" class="mr-1" />
+          No run selected — exports all employees with deductions set.
+        </p>
         </VCardText>
 
         <VDivider />

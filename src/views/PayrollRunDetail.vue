@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import BaseAlert from '@/components/base/BaseAlert.vue'
+import PayrollItemAdjustmentsDialog from '@/components/payroll/PayrollItemAdjustmentsDialog.vue'
 import axios from '@axios'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -53,6 +54,9 @@ interface BatchItem {
   net_pay:                 number
   remarks:                 string | null
   is_overridden:           boolean
+  dtr_absent_days:         number
+  dtr_late_minutes:        number
+  dtr_undertime_minutes:   number
 }
 
 interface SectionGroup {
@@ -143,6 +147,10 @@ const editDialog     = ref(false)
 const removeTarget  = ref<BatchItem | null>(null)
 const removeDialog  = ref(false)
 const removeLoading = ref(false)
+
+// ── Adjustments ──
+const adjustmentTarget  = ref<BatchItem | null>(null)
+const adjustmentDialog  = ref(false)
 
 // ── Recompute ──
 const recomputeTarget  = ref<BatchItem | null>(null)
@@ -519,6 +527,27 @@ function openEngasEdit(item: BatchItem) {
   engasEditingItemId.value = item.id
   engasEditValue.value     = item.engas_no ?? ''
 }
+
+function openAdjustmentDialog(item: BatchItem) {
+  adjustmentTarget.value = item
+  adjustmentDialog.value = true
+}
+ 
+// Called by the dialog's @updated emit — patches the item in-place
+// so the table row updates without a full fetchRun()
+function onAdjustmentUpdated(updatedItem: BatchItem) {
+  if (!run.value) return
+  for (const div of run.value.groups) {
+    for (const sec of div.sections) {
+      const idx = sec.employees.findIndex(e => e.id === updatedItem.id)
+      if (idx !== -1) {
+        sec.employees[idx] = { ...sec.employees[idx], ...updatedItem }
+        return
+      }
+    }
+  }
+}
+ 
 
 function openRecomputeDialog(item: BatchItem) {
   recomputeTarget.value = item
@@ -1628,6 +1657,11 @@ onMounted(async () => {
                             </td>
                             <td class="text-center">
                               <div class="d-flex align-center justify-center gap-1">
+                                <VBtn v-if="isDraft" icon size="x-small" variant="text" color="indigo"
+                                  @click="openAdjustmentDialog(emp)">
+                                  <VIcon size="15">mdi-calendar-edit-outline</VIcon>
+                                  <VTooltip activator="parent" location="top">Attendance Adjustments</VTooltip>
+                                </VBtn>
                                 <VBtn v-if="isDraft" icon size="x-small" variant="text" color="primary"
                                   @click="openEditDialog(emp)">
                                   <VIcon size="15">mdi-pencil-outline</VIcon>
@@ -2024,5 +2058,11 @@ onMounted(async () => {
 
     <!-- ── Alert ── -->
     <BaseAlert v-model="alertVisible" :message="alertMessage" :type="alertType" :timeout="3500" />
+    <PayrollItemAdjustmentsDialog
+  v-model="adjustmentDialog"
+  :run-id="run?.id ?? 0"
+  :item="adjustmentTarget"
+  @updated="onAdjustmentUpdated"
+/>
   </div>
 </template>
