@@ -9,7 +9,7 @@ export default [
   {
     name: 'Payroll',
     icon: 'mdi-cash-multiple',
-    to: { name: 'payroll' },
+    to: { name: 'payroll-runs' },
   },
   // {
   //   name: 'Payroll Runs',

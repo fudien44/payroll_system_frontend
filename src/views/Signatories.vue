@@ -266,7 +266,6 @@ onMounted(async () => {
 
 <template>
   <div>
-<<<<<<< HEAD
     <VContainer fluid class="pa-6">
 
       <!-- ── Page Header ── -->
@@ -599,8 +598,5 @@ onMounted(async () => {
 
     <!-- ── Alert ── -->
     <BaseAlert v-model="alertVisible" :message="alertMessage" :type="alertType" :timeout="3500" />
-=======
-    <h1>Signatories</h1>
->>>>>>> e8f972f8ab4455f0dcdf71812d913d7af94893e7
   </div>
 </template>
