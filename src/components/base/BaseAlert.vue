@@ -29,14 +29,14 @@ const typeIcon = computed(() => {
 
 <template>
     <VSnackbar
-        :model-value="modelValue"
-        :timeout="timeout"
-        :color="type"
-        location="bottom end"
-        variant="tonal"
-        elevation="4"
-        @update:model-value="emit('update:modelValue', $event)"
-    >
+    :model-value="modelValue"
+    :timeout="timeout"
+    :color="type"
+    location="bottom end"
+    variant="flat"
+    elevation="8"
+    @update:model-value="emit('update:modelValue', $event)"
+>
         <div class="d-flex align-center gap-3">
             <VIcon :icon="typeIcon" />
             <span>{{ message }}</span>
