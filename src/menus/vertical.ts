@@ -32,7 +32,6 @@ export default [
     icon: 'mdi-minus-box-outline',
     to: { name: 'Deductions' },
   },
-  { heading: 'Configuration' },
   {
     name: 'Reports',
     icon: 'mdi mdi-file-chart-outline',
