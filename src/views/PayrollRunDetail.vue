@@ -1546,6 +1546,7 @@ onMounted(async () => {
                               if (idx === -1) selectedEmpIds.push(emp.emp_id)
                               else selectedEmpIds.splice(idx, 1)
                             }"
+                            
                           />
                           </template>
                           <VListItemTitle class="text-body-2 font-weight-medium">{{ emp.name }}</VListItemTitle>
