@@ -41,12 +41,16 @@ interface BatchItem {
 }
 
 interface Adjustment {
-  id:           number
-  type:         'pass_slip' | 'official_travel' | 'leave'
-  date:         string   // 'YYYY-MM-DD'
-  minutes:      number
-  is_whole_day: boolean
-  notes:        string | null
+  id:                   number
+  type:                 'pass_slip' | 'official_travel' | 'leave'
+  date:                 string
+  date_to:              string | null   // ← add
+  minutes:              number
+  is_whole_day:         boolean
+  notes:                string | null
+  is_compressed_week:   boolean
+  days_in_month:        number          // ← add
+  compressed_mins_offset: number        // ← add
 }
 
 type AlertType = 'success' | 'error' | 'warning' | 'info'
@@ -55,9 +59,11 @@ type AlertType = 'success' | 'error' | 'warning' | 'info'
    PROPS / EMITS
 ───────────────────────────────────────── */
 const props = defineProps<{
-  modelValue: boolean
-  runId:      number
-  item:       BatchItem | null
+  modelValue:   boolean
+  runId:        number
+  item:         BatchItem | null
+  periodMonth:  number    // ← add
+  periodYear:   number    // ← add
 }>()
 
 const emit = defineEmits<{
@@ -80,10 +86,12 @@ const alertType    = ref<AlertType>('success')
 
 // ── Add form ──
 const BLANK_FORM = () => ({
-  type:    '' as 'pass_slip' | 'official_travel' | 'leave' | '',
-  date:    '',
-  minutes: null as number | null,
-  notes:   '',
+  type:           '' as 'pass_slip' | 'official_travel' | 'leave' | '',
+  pass_slip_type: '' as 'personal' | 'official' | '',
+  date:           '',
+  date_to:        '',    // ← add
+  minutes:        null as number | null,
+  notes:          '',
 })
 const form       = ref(BLANK_FORM())
 const formErrors = ref<Record<string, string>>({})
@@ -95,9 +103,29 @@ const isOpen = computed({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v),
 })
+const batchMonthMin = computed(() => {
+  if (!props.item) return ''
+  // We need period_month and period_year — pass them as props or derive from runId
+  // For now expose via a new prop (see prop update below)
+  return `${props.periodYear}-${String(props.periodMonth).padStart(2, '0')}-01`
+})
+
+const batchMonthMax = computed(() => {
+  if (!props.item) return ''
+  const lastDay = new Date(props.periodYear, props.periodMonth, 0).getDate()
+  return `${props.periodYear}-${String(props.periodMonth).padStart(2, '0')}-${lastDay}`
+})
+
+const compressedMinuteOffset = computed(() =>
+  adjustments.value
+    .filter(a => a.is_whole_day)
+    .reduce((sum, a) => sum + (a.compressed_mins_offset ?? 0), 0)
+)
 
 const wholeDayCount = computed(() =>
-  adjustments.value.filter(a => a.is_whole_day).length
+  adjustments.value
+    .filter(a => a.is_whole_day)
+    .reduce((sum, a) => sum + (a.days_in_month ?? 1), 0)
 )
 
 const passSlipMinutesTotal = computed(() =>
@@ -112,7 +140,9 @@ const previewAbsentDays = computed(() => {
 
 const previewLateMinutes = computed(() => {
   if (!props.item) return 0
-  return Number(props.item.dtr_late_minutes) + passSlipMinutesTotal.value
+  return Math.max(0,
+    Number(props.item.dtr_late_minutes) - compressedMinuteOffset.value + passSlipMinutesTotal.value
+  )
 })
 
 const typeLabel = (type: string) => {
@@ -136,6 +166,21 @@ const typeIcon = (type: string) => {
   return 'mdi-help-circle-outline'
 }
 
+const selectedDateIsCompressed = ref(false)
+
+watch(() => form.value.date, async (dateStr) => {
+  selectedDateIsCompressed.value = false
+  if (!dateStr || form.value.type === 'pass_slip') return
+  try {
+    const { data } = await axios.get('/api/week-schedules/check-compressed', {
+      params: { date: dateStr },
+    })
+    selectedDateIsCompressed.value = data.is_compressed ?? false
+  } catch {
+    // silently ignore — it's just informational
+  }
+})
+
 const fmt = (v: number) =>
   new Intl.NumberFormat('en-PH', {
     style: 'currency', currency: 'PHP', minimumFractionDigits: 2,
@@ -155,7 +200,17 @@ watch(() => props.modelValue, (open) => {
 
 // When type changes to a whole-day type, clear minutes
 watch(() => form.value.type, (t) => {
-  if (t !== 'pass_slip') form.value.minutes = null
+  if (t !== 'pass_slip') {
+    form.value.minutes        = null
+    form.value.pass_slip_type = ''
+    // Pre-fill date to first day of batch month so picker opens there
+    if (!form.value.date) {
+      form.value.date = batchMonthMin.value
+    }
+  } else {
+    form.value.date    = ''
+    form.value.date_to = ''
+  }
 })
 
 /* ─────────────────────────────────────────
@@ -178,13 +233,24 @@ async function fetchAdjustments() {
 
 function validate(): boolean {
   const errs: Record<string, string> = {}
+
   if (!form.value.type) errs.type = 'Type is required.'
-  if (!form.value.date) errs.date = 'Date is required.'
+  if (!form.value.date) errs.date = 'Date (from) is required.'
+
   if (form.value.type === 'pass_slip') {
-    if (!form.value.minutes || form.value.minutes < 1) {
+    if (!form.value.pass_slip_type)
+      errs.pass_slip_type = 'Please select Personal or Official.'
+    if (!form.value.minutes || form.value.minutes < 1)
       errs.minutes = 'Minutes must be at least 1 for a pass slip.'
+  } else {
+    // Whole-day: date_to required, must be >= date
+    if (!form.value.date_to) {
+      errs.date_to = 'End date is required.'
+    } else if (form.value.date && form.value.date_to < form.value.date) {
+      errs.date_to = 'End date must be on or after the start date.'
     }
   }
+
   formErrors.value = errs
   return Object.keys(errs).length === 0
 }
@@ -193,13 +259,23 @@ async function addAdjustment() {
   if (!validate() || !props.item) return
   saving.value = true
   try {
+    // Build notes: prefix with [Personal Pass Slip] or [Official Pass Slip] if applicable
+    let notesValue = form.value.notes?.trim() || null
+    if (form.value.type === 'pass_slip' && form.value.pass_slip_type) {
+      const label = form.value.pass_slip_type === 'official'
+        ? '[Official Pass Slip]'
+        : '[Personal Pass Slip]'
+      notesValue = notesValue ? `${label} ${notesValue}` : label
+    }
+
     const { data } = await axios.post(
       `/api/payroll-run/${props.runId}/items/${props.item.id}/adjustments`,
       {
         type:    form.value.type,
         date:    form.value.date,
+        date_to: form.value.type !== 'pass_slip' ? (form.value.date_to || form.value.date) : null,
         minutes: form.value.type === 'pass_slip' ? form.value.minutes : 0,
-        notes:   form.value.notes?.trim() || null,
+        notes:   notesValue,
       }
     )
     if (!data.success) throw new Error(data.message)
@@ -309,15 +385,18 @@ function showAlert(type: AlertType, message: string) {
                     </span>
                   </strong>
                 </div>
-                <div class="d-flex justify-space-between text-body-2 mt-1">
-                  <span class="text-medium-emphasis">Late Minutes</span>
-                  <strong :class="passSlipMinutesTotal > 0 ? 'text-warning' : ''">
-                    {{ previewLateMinutes }}
-                    <span v-if="passSlipMinutesTotal > 0" class="text-caption text-warning">
-                      (+{{ passSlipMinutesTotal }})
-                    </span>
-                  </strong>
-                </div>
+               <div class="d-flex justify-space-between text-body-2 mt-1">
+                <span class="text-medium-emphasis">Late Minutes</span>
+                <strong :class="compressedMinuteOffset > 0 ? 'text-success' : passSlipMinutesTotal > 0 ? 'text-warning' : ''">
+                  {{ previewLateMinutes }}
+                  <span v-if="compressedMinuteOffset > 0" class="text-caption text-success">
+                    (−{{ compressedMinuteOffset }})
+                  </span>
+                  <span v-if="passSlipMinutesTotal > 0" class="text-caption text-warning">
+                    (+{{ passSlipMinutesTotal }})
+                  </span>
+                </strong>
+              </div>
                 <div class="d-flex justify-space-between text-body-2 mt-1">
                   <span class="text-medium-emphasis">Net Pay</span>
                   <strong class="text-success">{{ fmt(item?.net_pay ?? 0) }}</strong>
@@ -361,7 +440,15 @@ function showAlert(type: AlertType, message: string) {
                     {{ typeLabel(adj.type) }}
                   </VChip>
                 </td>
-                <td class="text-caption font-monospace">{{ adj.date }}</td>
+                <td class="text-caption font-monospace">
+                  {{ adj.date }}
+                  <template v-if="adj.date_to && adj.date_to !== adj.date">
+                    <span class="text-medium-emphasis"> → {{ adj.date_to }}</span>
+                    <VChip size="x-small" color="primary" variant="tonal" label class="ml-1">
+                      {{ adj.days_in_month }}d in month
+                    </VChip>
+                  </template>
+                </td>
                 <td class="text-right text-caption">
                   <template v-if="adj.type === 'pass_slip'">
                     {{ adj.minutes }} min
@@ -438,20 +525,55 @@ function showAlert(type: AlertType, message: string) {
             </VSelect>
           </VCol>
 
-          <!-- Date -->
-          <VCol cols="12" sm="4">
+          <!-- Pass Slip Sub-type (personal / official) -->
+<VCol v-if="form.type === 'pass_slip'" cols="12" sm="4">
+  <VSelect
+    v-model="form.pass_slip_type"
+    label="Pass Slip Type"
+    :items="[
+      { title: 'Personal', value: 'personal' },
+      { title: 'Official', value: 'official' },
+    ]"
+    item-title="title"
+    item-value="value"
+    variant="outlined"
+    density="compact"
+    prepend-inner-icon="mdi-account-question-outline"
+    :error-messages="formErrors.pass_slip_type"
+    hide-details="auto"
+  />
+</VCol>
+
+         <!-- Date From -->
+         <VCol cols="12" sm="4">
+          <VTextField
+            v-model="form.date"
+            :label="form.type === 'pass_slip' ? 'Date' : 'Date From'"
+            type="date"
+            variant="outlined"
+            density="compact"
+            prepend-inner-icon="mdi-calendar-outline"
+            :error-messages="formErrors.date"
+            :min="batchMonthMin || undefined"
+            :max="batchMonthMax || undefined"
+            hide-details="auto"
+          />
+        </VCol>
+
+          <!-- Date To (whole-day types only) -->
+          <VCol v-if="form.type && form.type !== 'pass_slip'" cols="12" sm="4">
             <VTextField
-              v-model="form.date"
-              label="Date"
+              v-model="form.date_to"
+              label="Date To"
               type="date"
               variant="outlined"
               density="compact"
-              prepend-inner-icon="mdi-calendar-outline"
-              :error-messages="formErrors.date"
+              prepend-inner-icon="mdi-calendar-end-outline"
+              :min="form.date || batchMonthMin || undefined"
               hide-details="auto"
+              :error-messages="formErrors.date_to"
             />
           </VCol>
-
           <!-- Minutes (pass slip only) -->
           <VCol cols="12" sm="4">
             <VTextField
@@ -473,22 +595,38 @@ function showAlert(type: AlertType, message: string) {
 
           <!-- Helper text for whole-day types -->
           <VCol v-if="form.type && form.type !== 'pass_slip'" cols="12">
-            <VAlert density="compact" variant="tonal"
-              :color="form.type === 'official_travel' ? 'blue' : 'teal'"
-              :icon="typeIcon(form.type)"
-              class="text-body-2">
-              <template v-if="form.type === 'official_travel'">
-                <strong>Official Travel</strong> — this date will be subtracted from the employee's absent days.
-              </template>
-              <template v-else>
-                <strong>Leave</strong> — this date will be subtracted from the employee's absent days.
-              </template>
-            </VAlert>
-          </VCol>
+  <VAlert density="compact" variant="tonal"
+    :color="form.type === 'official_travel' ? 'blue' : 'teal'"
+    :icon="typeIcon(form.type)"
+    class="text-body-2">
+    <template v-if="form.type === 'official_travel'">
+      <strong>Official Travel</strong> — this date will be subtracted from absent days.
+    </template>
+    <template v-else>
+      <strong>Leave</strong> — this date will be subtracted from absent days.
+    </template>
+    <template v-if="selectedDateIsCompressed && form.date">
+      <br>
+      <VIcon size="13" class="mr-1">mdi-clock-minus-outline</VIcon>
+      This falls on a <strong>compressed week</strong> — an additional
+      <strong>120 minutes</strong> will also be deducted from late minutes.
+    </template>
+  </VAlert>
+</VCol>
 
           <VCol v-if="form.type === 'pass_slip'" cols="12">
             <VAlert density="compact" variant="tonal" color="orange" icon="mdi-door-open" class="text-body-2">
-              <strong>Pass Slip</strong> — the minutes entered will be <strong>added</strong> to the employee's late/UT minutes for deduction purposes.
+              <template v-if="form.pass_slip_type === 'official'">
+                <strong>Official Pass Slip</strong> — only minutes <strong>beyond the 2-hour (120 min) grace period</strong>
+                will be added to late/UT. Enter only the excess minutes (e.g. 2 hrs 15 min away → enter <strong>15</strong>).
+              </template>
+              <template v-else-if="form.pass_slip_type === 'personal'">
+                <strong>Personal Pass Slip</strong> — all minutes entered will be
+                <strong>added</strong> to the employee's late/UT minutes for deduction purposes.
+              </template>
+              <template v-else>
+                <strong>Pass Slip</strong> — select Personal or Official to see how minutes are computed.
+              </template>
             </VAlert>
           </VCol>
 
