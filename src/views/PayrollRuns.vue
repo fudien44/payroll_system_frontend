@@ -188,7 +188,9 @@ async function fetchDivisions() {
     showAlert('error', 'Failed to load divisions.')
   }
 }
-
+const dtrNotSavedDialog  = ref(false)
+const dtrNotSavedMessage = ref('')
+const dtrNotSavedPeriod  = ref('')
 async function handleCreate() {
   if (!validate()) return
   modalLoading.value = true
@@ -197,15 +199,22 @@ async function handleCreate() {
     if (!data.success) throw new Error(data.message ?? 'Failed to create.')
     showAlert('success', `Payroll run created: ${data.data.payroll_no}`)
     modalOpen.value = false
-    // Navigate directly to the detail page
     router.push({ name: 'payroll-run-detail', params: { id: data.data.id } })
   } catch (err: any) {
+    const resData = err.response?.data
+    if (resData?.dtr_not_saved) {
+      modalOpen.value          = false
+      dtrNotSavedMessage.value = resData.message
+      dtrNotSavedPeriod.value  = `${MONTH_NAMES[form.value.period_month - 1]} ${form.value.period_year}`
+      dtrNotSavedDialog.value  = true
+      return
+    }
     if (err.response?.data?.errors) {
       formErrors.value = Object.fromEntries(
         Object.entries(err.response.data.errors).map(([k, v]) => [k, (v as string[])[0]])
       )
     }
-    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to create.')
+    showAlert('error', resData?.message ?? err.message ?? 'Failed to create.')
   } finally {
     modalLoading.value = false
   }
@@ -637,5 +646,43 @@ onMounted(() => {
       :type="alertType"
       :timeout="3500"
     />
+    <!-- ── DTR Not Saved Dialog ── -->
+<VDialog v-model="dtrNotSavedDialog" max-width="460" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar color="warning" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-calendar-alert-outline" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">DTR Not Yet Saved</div>
+          <div class="text-caption text-medium-emphasis">{{ dtrNotSavedPeriod }}</div>
+        </div>
+      </div>
+      <VAlert type="warning" variant="tonal" density="compact" icon="mdi-alert-outline" class="mb-4 text-body-2">
+        {{ dtrNotSavedMessage }}
+      </VAlert>
+      <p class="text-body-2 text-medium-emphasis mb-0">
+        Go to the <strong class="text-high-emphasis">DTR module</strong> and click
+        <strong class="text-high-emphasis">Save DTR</strong> for
+        <strong class="text-high-emphasis">{{ dtrNotSavedPeriod }}</strong> first,
+        then come back to create this payroll run.
+      </p>
+    </VCardText>
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" @click="dtrNotSavedDialog = false">Cancel</VBtn>
+      <VBtn
+        color="warning"
+        variant="tonal"
+        prepend-icon="mdi-clock-outline"
+        @click="dtrNotSavedDialog = false; router.push('/dtr')"
+
+      >
+        Go to DTR Module
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
   </div>
 </template>

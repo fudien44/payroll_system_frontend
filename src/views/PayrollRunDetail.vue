@@ -125,7 +125,9 @@ const metaForm    = ref({
   fund_cluster: '', saa_no: '', ors_no: '',
   dv_no: '', jev_no: '', uacs_code: '',
 })
-
+// ── DTR not saved blocking state ──
+const dtrNotSavedDialog = ref(false)
+const dtrNotSavedMessage = ref('')
 // ── Status ──
 const finalizeLoading = ref(false)
 const revertLoading   = ref(false)
@@ -379,7 +381,15 @@ async function addSelectedEmployees() {
       `/api/payroll-run/${route.params.id}/add-employees`,
       { emp_ids: selectedEmpIds.value }
     )
-    if (!data.success) throw new Error(data.message ?? 'Failed to add.')
+    if (!data.success) {
+      if (data.dtr_not_saved) {
+        dtrNotSavedMessage.value = data.message
+        dtrNotSavedDialog.value  = true
+      } else {
+        throw new Error(data.message ?? 'Failed to add.')
+      }
+      return
+    }
     showAlert('success', data.message)
     selectedEmpIds.value = []
     await fetchRun()
@@ -1523,14 +1533,20 @@ onMounted(async () => {
                           }"
                         >
                           <template #prepend>
-                            <VCheckboxBtn
-                              :model-value="selectedEmpIds.includes(emp.emp_id)"
-                              :disabled="!emp.has_wage"
-                              density="compact"
-                              color="primary"
-                              hide-details
-                              @click.stop
-                            />
+                           <VCheckboxBtn
+                            :model-value="selectedEmpIds.includes(emp.emp_id)"
+                            :disabled="!emp.has_wage"
+                            density="compact"
+                            color="primary"
+                            hide-details
+                            @click.stop
+                            @update:model-value="() => {
+                              if (!emp.has_wage) return
+                              const idx = selectedEmpIds.indexOf(emp.emp_id)
+                              if (idx === -1) selectedEmpIds.push(emp.emp_id)
+                              else selectedEmpIds.splice(idx, 1)
+                            }"
+                          />
                           </template>
                           <VListItemTitle class="text-body-2 font-weight-medium">{{ emp.name }}</VListItemTitle>
                           <VListItemSubtitle class="text-caption">{{ emp.position }}</VListItemSubtitle>
@@ -2058,11 +2074,50 @@ onMounted(async () => {
 
     <!-- ── Alert ── -->
     <BaseAlert v-model="alertVisible" :message="alertMessage" :type="alertType" :timeout="3500" />
-    <PayrollItemAdjustmentsDialog
+   <PayrollItemAdjustmentsDialog
   v-model="adjustmentDialog"
   :run-id="run?.id ?? 0"
   :item="adjustmentTarget"
+  :period-month="run?.period_month ?? 1"
+  :period-year="run?.period_year ?? new Date().getFullYear()"
   @updated="onAdjustmentUpdated"
 />
+<!-- ── DTR Not Saved Dialog ── -->
+<VDialog v-model="dtrNotSavedDialog" max-width="460" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar color="warning" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-calendar-alert-outline" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">DTR Not Yet Saved</div>
+          <div class="text-caption text-medium-emphasis">{{ periodLabel }}</div>
+        </div>
+      </div>
+      <VAlert type="warning" variant="tonal" density="compact" icon="mdi-alert-outline" class="mb-4 text-body-2">
+        {{ dtrNotSavedMessage }}
+      </VAlert>
+      <p class="text-body-2 text-medium-emphasis mb-0">
+        Go to the <strong class="text-high-emphasis">DTR module</strong> and click
+        <strong class="text-high-emphasis">Save DTR</strong> for
+        <strong class="text-high-emphasis">{{ periodLabel }}</strong> first,
+        then come back to add employees.
+      </p>
+    </VCardText>
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" @click="dtrNotSavedDialog = false">Cancel</VBtn>
+      <VBtn
+        color="warning"
+        variant="tonal"
+        prepend-icon="mdi-clock-outline"
+        @click="dtrNotSavedDialog = false; router.push({ name: 'dtr' })"
+      >
+        Go to DTR Module
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
   </div>
 </template>
