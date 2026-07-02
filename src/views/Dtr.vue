@@ -153,6 +153,8 @@ const dtrData       = ref<DtrData | null>(null)
 // ── Save DTR state ──────────────────────────────────────────────────
 const savingDtr        = ref(false)
 const confirmSaveOpen  = ref(false)
+const savingElapsedSecs = ref(0)
+let   savingTimer: ReturnType<typeof setInterval> | null = null
 
 // Period selector inside Save DTR dialog — defaults to preceding month
 const saveDtrMonth = ref<number>(new Date().getMonth() === 0 ? 12 : new Date().getMonth())
@@ -178,11 +180,26 @@ const modalTitle = computed(() => {
   return `DTR — ${selectedEmp.value.full_name} — ${dtrData.value.month} ${dtrData.value.year}`
 })
 
-const canSaveDtr = computed(() => !savingDtr.value && !loading.value)
+const isMonthComplete = computed(() => {
+  const lastDay = new Date(saveDtrYear.value, saveDtrMonth.value, 0) // day 0 = last day of prev month
+  const today   = new Date()
+  today.setHours(0, 0, 0, 0)
+  return lastDay < today
+})
+
+const canSaveDtr = computed(() => !savingDtr.value && isMonthComplete.value)
 
 const saveDtrLabel = computed(() => {
   const m = MONTH_ITEMS.find(x => x.value === saveDtrMonth.value)
   return `${m?.title ?? ''} ${saveDtrYear.value}`
+})
+
+const savingElapsedLabel = computed(() => {
+  const s = savingElapsedSecs.value
+  if (s < 60) return `${s}s elapsed`
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}m ${r}s elapsed`
 })
 
 const attendanceRows = computed<AttendanceRow[]>(() => {
@@ -211,13 +228,13 @@ const deviceChipColor = (status: DeviceStatus['status']) => ({
   connected:    'success',
   disconnected: 'warning',
   error:        'error',
-}[status])
+}[status] ?? 'default')
 
 const deviceChipIcon = (status: DeviceStatus['status']) => ({
   connected:    'mdi-check-circle-outline',
   disconnected: 'mdi-alert-circle-outline',
   error:        'mdi-close-circle-outline',
-}[status])
+}[status] ?? 'mdi-help-circle-outline')
 
 /* ─────────────────────────────────────────
    HELPERS
@@ -283,9 +300,10 @@ async function fetchDtr() {
 
 // ── Save DTR for all JO employees (preceding month) ────────────────
 async function saveDtr() {
-  confirmSaveOpen.value = false
-  savingDtr.value       = true
-
+  if (savingDtr.value) return
+  savingDtr.value         = true
+  savingElapsedSecs.value = 0
+  savingTimer = setInterval(() => { savingElapsedSecs.value++ }, 1000)
   try {
     const { data } = await axios.post('/api/dtr/save', {
       month: saveDtrMonth.value,
@@ -297,13 +315,18 @@ async function saveDtr() {
     const message = err?.response?.data?.message
 
     if (status === 409) {
-      // Already saved for this month
       showAlert('warning', message ?? `DTR for ${saveDtrLabel.value} has already been saved.`)
+    } else if (status === 422) {
+      showAlert('warning', message ?? `DTR for ${saveDtrLabel.value} is not yet complete.`)
     } else {
       showAlert('error', message ?? 'Failed to save DTR. Please try again.')
     }
   } finally {
-    savingDtr.value = false
+    if (savingTimer) clearInterval(savingTimer)
+    savingTimer              = null
+    savingDtr.value          = false
+    confirmSaveOpen.value    = false
+    savingElapsedSecs.value  = 0
   }
 }
 
@@ -358,12 +381,18 @@ onMounted(fetchData)
                 prepend-icon="mdi-content-save-outline"
                 :loading="savingDtr"
                 :disabled="!canSaveDtr"
-                @click="confirmSaveOpen = true"
+                @click="{ savingElapsedSecs = 0; confirmSaveOpen = true }"
               >
                 Save DTR
               </VBtn>
             </template>
-            <span>Save DTR summaries — select period in dialog</span>
+            <span>
+              {{
+                !isMonthComplete
+                  ? `${saveDtrLabel} is not yet complete — DTR can only be saved after the month ends`
+                  : 'Save DTR summaries — select period in dialog'
+              }}
+            </span>
           </VTooltip>
         </div>
       </div>
@@ -754,7 +783,7 @@ onMounted(fetchData)
                             ½ Day
                           </VChip>
                           <VChip v-if="row.total_late_minutes > 0" color="warning" size="x-small" variant="tonal" label>
-                            Late {{ row.total_late_minutes }}m
+                            {{ row.is_absent && row.schedule_type === 'compressed' ? '+ ' : '' }}Late {{ row.total_late_minutes }}m
                           </VChip>
                           <VChip v-if="row.total_undertime_minutes > 0" color="info" size="x-small" variant="tonal" label>
                             UT {{ row.total_undertime_minutes }}m
@@ -836,13 +865,27 @@ onMounted(fetchData)
             {{ saveDtrLabel }}
           </p>
 
+          <VAlert
+            v-if="!isMonthComplete"
+            type="warning"
+            variant="tonal"
+            density="compact"
+            class="mb-3"
+            icon="mdi-calendar-alert"
+          >
+            {{ saveDtrLabel }} is not yet complete. DTR can only be saved after the month has fully ended.
+          </VAlert>
+
           <p class="text-caption text-medium-emphasis">
             This action cannot be undone. If DTR for the selected period has already been saved, the request will be blocked.
           </p>
         </VCardText>
         <VCardActions class="pa-4 pt-0 gap-2 justify-end">
           <VBtn variant="text" @click="confirmSaveOpen = false">Cancel</VBtn>
-          <VBtn color="success" variant="tonal" prepend-icon="mdi-content-save-outline" :loading="savingDtr" @click="saveDtr">
+          <span v-if="savingDtr" class="text-caption text-medium-emphasis me-2">
+            {{ savingElapsedLabel }}
+          </span>
+          <VBtn color="success" variant="tonal" prepend-icon="mdi-content-save-outline" :loading="savingDtr" :disabled="savingDtr || !isMonthComplete" @click="saveDtr">
             Save
           </VBtn>
         </VCardActions>
