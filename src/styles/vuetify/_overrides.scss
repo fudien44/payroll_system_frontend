@@ -260,16 +260,23 @@ a {
 
 /* For Webkit browsers (Chrome, Safari, Opera) */
 ::-webkit-scrollbar {
-  block-size: 3px; /* Adjust the height as per your preference */
-  inline-size: 3px; /* Adjust the width as per your preference */
+  block-size: 10px; /* Adjust the height as per your preference */
+  inline-size: 10px; /* Adjust the width as per your preference */
 }
 
 ::-webkit-scrollbar-track {
-  background-color: transparent; /* Background color of the scrollbar track */
+  background-color: rgba(var(--v-border-color), 0.08); /* Faint track so the thumb has visible contrast */
 }
 
 ::-webkit-scrollbar-thumb {
   background-color: rgb(var(--v-scrollbar-thumb)); /* Color of the scrollbar thumb */
+  border-radius: 6px;
+  border: 2px solid transparent; /* Creates padding so the thumb reads as a rounded pill, not edge-to-edge */
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(var(--v-theme-on-surface), 0.5); /* Darker on hover for extra feedback */
 }
 
 /* For Firefox */
@@ -278,9 +285,9 @@ a {
 
 /* To adjust the width and height of the scrollbar */
 .scrollbar {
-  -ms-overflow-style: thin; /* You can use "auto" or "thin" */
-  scrollbar-color: rgb(var(--v-scrollbar-thumb)) transparent; /* Color of the thumb and track */
-  scrollbar-width: thin; /* You can use "auto" or "thin" */
+  -ms-overflow-style: auto; /* You can use "auto" or "thin" */
+  scrollbar-color: rgb(var(--v-scrollbar-thumb)) rgba(var(--v-border-color), 0.08); /* Color of the thumb and track */
+  scrollbar-width: auto; /* You can use "auto" or "thin" */
 }
 
 // custom label and icon style

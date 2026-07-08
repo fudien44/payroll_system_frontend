@@ -977,34 +977,35 @@ function cellClasses(cell: CalendarCell, isCompressed: boolean) {
 // Full suspension = −1, half-day suspension = −0.5.
 // ---------------------------------------------------------------------------
 const summary = computed(() => {
-  const base = getMonthSummary(viewYear.value, viewMonth.value)
-  let workingDays = 0
+   const base = getMonthSummary(viewYear.value, viewMonth.value)
+   let workingDays = 0
 
-  for (const week of calendarWeeks.value) {
-    for (const cell of week.cells) {
-      if (!cell.date) continue
-      const dow = cell.date.getDay()
+   for (const week of calendarWeeks.value) {
+     for (const cell of week.cells) {
+       if (!cell.date) continue
+       const dow = cell.date.getDay()
 
-      // Determine if this day is a working day slot in the week's schedule
-      const isWorkSlot = week.isCompressed
-        ? dow >= 1 && dow <= 4   // Mon–Thu
-        : dow >= 1 && dow <= 5   // Mon–Fri
+     // Working day slots are always Mon–Fri, regardless of compressed
+    // vs standard schedule — compressed weeks just compress the hours
+     // worked on Mon–Thu and leave Friday off duty, but Friday still
+     // counts as a regular working day unless a suspension removes it.
+      const isWorkSlot = dow >= 1 && dow <= 5
 
-      if (!isWorkSlot) continue
+       if (!isWorkSlot) continue
 
-      if (!cell.info.suspension) {
-        // No suspension — counts as a full working day regardless of holidays
-        workingDays += 1
-      } else if (cell.info.suspension.is_half_day) {
-        // Half-day suspension — only half the day is lost
-        workingDays += 0.5
-      }
-      // Full suspension — 0 contribution
-    }
-  }
+       if (!cell.info.suspension) {
+         // No suspension — counts as a full working day regardless of holidays
+         workingDays += 1
+       } else if (cell.info.suspension.is_half_day) {
+         // Half-day suspension — only half the day is lost
+         workingDays += 0.5
+       }
+       // Full suspension — 0 contribution
+     }
+   }
 
-  return { ...base, totalWorkingDays: workingDays }
-})
+   return { ...base, totalWorkingDays: workingDays }
+ })
 
 // ---------------------------------------------------------------------------
 // Cell click

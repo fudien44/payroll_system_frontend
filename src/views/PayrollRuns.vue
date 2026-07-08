@@ -28,6 +28,7 @@ interface PayrollRun {
   period_year:   number
   division_id:   number
   division_name: string
+  section_name:  string | null   // NEW: backend already returns this, type was just missing it
   fund_cluster:  string
   saa_no:        string | null
   ors_no:        string | null
@@ -53,7 +54,7 @@ const MONTH_NAMES = [
 const TABLE_HEADERS = [
   { title: 'Payroll No.',   key: 'payroll_no',    sortable: true                         },
   { title: 'Period',        key: 'period',         sortable: true                         },
-  { title: 'Division',      key: 'division_name',  sortable: true                         },
+  { title: 'Section / Division', key: 'division_name',  sortable: true                         },
   { title: 'Fund Cluster',  key: 'fund_cluster',   sortable: false                        },
   { title: 'Employees',     key: 'employee_count', sortable: true,  align: 'center' as const },
   { title: 'Total Net Pay', key: 'netPayDisp',     sortable: false, align: 'end'    as const },
@@ -365,6 +366,7 @@ onMounted(() => {
         :loading="loading"
         :items-per-page="10"
         searchable
+        :filter-keys="['payroll_no', 'period', 'division_name', 'section_name', 'fund_cluster', 'status']"
         @edit="openDetail"
         @delete="openDeleteConfirm"
       >
@@ -381,11 +383,17 @@ onMounted(() => {
           </div>
         </template>
 
-        <!-- Division -->
+        <!-- Section / Division -->
         <template #item.division_name="{ item }">
           <div class="d-flex align-center gap-2">
             <VIcon icon="mdi-domain" size="15" class="text-medium-emphasis" />
-            <span class="text-body-2">{{ item.division_name }}</span>
+            <div>
+              <div v-if="item.section_name" class="text-body-2">{{ item.section_name }}</div>
+              <div class="d-flex align-center gap-1 text-caption text-medium-emphasis" :class="{ 'text-body-2': !item.section_name }">
+                <VIcon v-if="item.section_name" icon="mdi-subdirectory-arrow-right" size="11" />
+                {{ item.division_name }}
+              </div>
+            </div>
           </div>
         </template>
 
