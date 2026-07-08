@@ -176,6 +176,11 @@ const editForm       = ref<Partial<BatchItem> & { days_absent?: number; minutes_
 const editSaving     = ref(false)
 const editDialog     = ref(false)
 
+// Remarks auto-sync: true once the user has typed into Remarks directly,
+// which stops it from being overwritten by the auto-generated text.
+const remarksDirty        = ref(false)
+const isAutoRemarksUpdate = ref(false)
+
 // ── Remove ──
 const removeTarget  = ref<BatchItem | null>(null)
 const removeDialog  = ref(false)
@@ -591,19 +596,66 @@ async function confirmRecompute() {
 /* ─────────────────────────────────────────
    HANDLERS
 ───────────────────────────────────────── */
+function buildAutoRemarks(days: number, mins: number): string {
+  const parts: string[] = []
+  if (days > 0) parts.push(`ABSENT ${days} DAY${days !== 1 ? 'S' : ''}`)
+  if (mins > 0) parts.push(`${mins} MINS LATE`)
+  return parts.join(', ')
+}
+
+function resetRemarksToAuto() {
+  remarksDirty.value        = false
+  isAutoRemarksUpdate.value = true
+  editForm.value.remarks = buildAutoRemarks(
+    Number(editForm.value.days_absent ?? 0),
+    Number(editForm.value.minutes_late_ut ?? 0)
+  ) || null
+  nextTick(() => { isAutoRemarksUpdate.value = false })
+}
+
 function openEditDialog(item: BatchItem) {
   editingItem.value = item
+  const days = Number(item.total_absent_days)
+  const mins = Number(item.total_late_minutes) + Number(item.total_undertime_minutes)
+  const autoRemarks = buildAutoRemarks(days, mins)
+
+  remarksDirty.value = (item.remarks ?? '') !== autoRemarks
+
   editForm.value = {
-    days_absent:     Number(item.total_absent_days),
-    minutes_late_ut: Number(item.total_late_minutes) + Number(item.total_undertime_minutes),
+    days_absent:     days,
+    minutes_late_ut: mins,
     philhealth:      Number(item.philhealth),
     pag_ibig:        Number(item.pag_ibig),
     sss:             Number(item.sss),
     ewt:             Number(item.ewt),
-    remarks:         item.remarks ?? null,
+    remarks:         item.remarks ?? (autoRemarks || null),
   }
   editDialog.value = true
 }
+
+watch(
+  [() => editForm.value.days_absent, () => editForm.value.minutes_late_ut],
+  ([days, mins]) => {
+    if (remarksDirty.value) return
+    isAutoRemarksUpdate.value = true
+    editForm.value.remarks = buildAutoRemarks(Number(days ?? 0), Number(mins ?? 0)) || null
+    nextTick(() => { isAutoRemarksUpdate.value = false })
+  }
+)
+
+watch(() => editForm.value.remarks, (val) => {
+  if (isAutoRemarksUpdate.value) return
+  if (!editDialog.value) return
+
+  // Clearing the field manually re-enables auto-sync instead of
+  // leaving Remarks permanently blank.
+  if (!val || !val.trim()) {
+    resetRemarksToAuto()
+    return
+  }
+
+  remarksDirty.value = true
+})
 
 function openRemoveDialog(item: BatchItem) {
   removeTarget.value = item
@@ -1592,7 +1644,22 @@ onMounted(async () => {
               <VTextField v-model.number="editForm.ewt" label="EWT" type="number" prefix="₱" variant="outlined" density="compact" min="0" />
             </VCol>
             <VCol cols="12">
-              <VTextField v-model="editForm.remarks" label="Remarks" variant="outlined" density="compact" prepend-inner-icon="mdi-note-outline" />
+              <VTextField
+                v-model="editForm.remarks"
+                label="Remarks"
+                variant="outlined"
+                density="compact"
+                prepend-inner-icon="mdi-note-outline"
+                :hint="remarksDirty ? 'Manually edited — no longer follows the fields above' : 'Auto-filled from Days Absent / Minutes Late-UT'"
+                persistent-hint
+              >
+                <template v-if="remarksDirty" #append-inner>
+                  <VBtn icon size="x-small" variant="text" color="primary" @click="resetRemarksToAuto">
+                    <VIcon size="14">mdi-refresh</VIcon>
+                    <VTooltip activator="parent" location="top">Reset to auto-generated remarks</VTooltip>
+                  </VBtn>
+                </template>
+              </VTextField>
             </VCol>
             <VCol cols="12">
               <VCard variant="tonal" color="success" rounded="lg" flat>
