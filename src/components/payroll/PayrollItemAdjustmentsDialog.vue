@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import BaseAlert from '@/components/base/BaseAlert.vue'
+import AdjustmentDatePicker from '@/components/payroll/AdjustmentDatePicker.vue'
 import axios from '@axios'
 
 /* ─────────────────────────────────────────
@@ -44,13 +45,14 @@ interface Adjustment {
   id:                   number
   type:                 'pass_slip' | 'official_travel' | 'leave'
   date:                 string
-  date_to:              string | null   // ← add
+  date_to:              string | null
   minutes:              number
   is_whole_day:         boolean
   notes:                string | null
   is_compressed_week:   boolean
-  days_in_month:        number          // ← add
-  compressed_mins_offset: number        // ← add
+  days_in_month:        number
+  compressed_mins_offset: number
+  is_hrmis_imported:    boolean
 }
 
 type AlertType = 'success' | 'error' | 'warning' | 'info'
@@ -62,8 +64,8 @@ const props = defineProps<{
   modelValue:   boolean
   runId:        number
   item:         BatchItem | null
-  periodMonth:  number    // ← add
-  periodYear:   number    // ← add
+  periodMonth:  number
+  periodYear:   number
 }>()
 
 const emit = defineEmits<{
@@ -89,7 +91,7 @@ const BLANK_FORM = () => ({
   type:           '' as 'pass_slip' | 'official_travel' | 'leave' | '',
   pass_slip_type: '' as 'personal' | 'official' | '',
   date:           '',
-  date_to:        '',    // ← add
+  date_to:        '' as string | null,
   minutes:        null as number | null,
   notes:          '',
 })
@@ -102,18 +104,6 @@ const formErrors = ref<Record<string, string>>({})
 const isOpen = computed({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v),
-})
-const batchMonthMin = computed(() => {
-  if (!props.item) return ''
-  // We need period_month and period_year — pass them as props or derive from runId
-  // For now expose via a new prop (see prop update below)
-  return `${props.periodYear}-${String(props.periodMonth).padStart(2, '0')}-01`
-})
-
-const batchMonthMax = computed(() => {
-  if (!props.item) return ''
-  const lastDay = new Date(props.periodYear, props.periodMonth, 0).getDate()
-  return `${props.periodYear}-${String(props.periodMonth).padStart(2, '0')}-${lastDay}`
 })
 
 const compressedMinuteOffset = computed(() =>
@@ -198,18 +188,14 @@ watch(() => props.modelValue, (open) => {
   }
 })
 
-// When type changes to a whole-day type, clear minutes
+// When type changes, reset the date selection since pass-slip (single day)
+// and whole-day (range) pickers aren't interchangeable.
 watch(() => form.value.type, (t) => {
+  form.value.date    = ''
+  form.value.date_to = ''
   if (t !== 'pass_slip') {
     form.value.minutes        = null
     form.value.pass_slip_type = ''
-    // Pre-fill date to first day of batch month so picker opens there
-    if (!form.value.date) {
-      form.value.date = batchMonthMin.value
-    }
-  } else {
-    form.value.date    = ''
-    form.value.date_to = ''
   }
 })
 
@@ -224,6 +210,9 @@ async function fetchAdjustments() {
       `/api/payroll-run/${props.runId}/items/${props.item.id}/adjustments`
     )
     adjustments.value = data.data ?? []
+    if (data.item) {
+      emit('updated', data.item)   // NEW — syncs parent table if an auto-import recomputed totals
+    }
   } catch {
     showAlert('error', 'Failed to load adjustments.')
   } finally {
@@ -235,20 +224,15 @@ function validate(): boolean {
   const errs: Record<string, string> = {}
 
   if (!form.value.type) errs.type = 'Type is required.'
-  if (!form.value.date) errs.date = 'Date (from) is required.'
+  if (!form.value.date) errs.date = 'Please pick a date.'
 
   if (form.value.type === 'pass_slip') {
     if (!form.value.pass_slip_type)
       errs.pass_slip_type = 'Please select Personal or Official.'
     if (!form.value.minutes || form.value.minutes < 1)
       errs.minutes = 'Minutes must be at least 1 for a pass slip.'
-  } else {
-    // Whole-day: date_to required, must be >= date
-    if (!form.value.date_to) {
-      errs.date_to = 'End date is required.'
-    } else if (form.value.date && form.value.date_to < form.value.date) {
-      errs.date_to = 'End date must be on or after the start date.'
-    }
+  } else if (form.value.date && !form.value.date_to) {
+    errs.date = 'Please pick a date range.'
   }
 
   formErrors.value = errs
@@ -439,6 +423,18 @@ function showAlert(type: AlertType, message: string) {
                     <VIcon start :icon="typeIcon(adj.type)" size="11" />
                     {{ typeLabel(adj.type) }}
                   </VChip>
+                   <VChip
+                    v-if="adj.is_hrmis_imported"
+                    size="x-small"
+                    color="indigo"
+                    variant="outlined"
+                    label
+                    class="ml-1"
+                  >
+                    <VIcon start icon="mdi-cloud-sync-outline" size="10" />
+                    HRMIS
+                    <VTooltip activator="parent" location="top">Auto-imported from an approved pass slip</VTooltip>
+                  </VChip>
                 </td>
                 <td class="text-caption font-monospace">
                   {{ adj.date }}
@@ -526,54 +522,39 @@ function showAlert(type: AlertType, message: string) {
           </VCol>
 
           <!-- Pass Slip Sub-type (personal / official) -->
-<VCol v-if="form.type === 'pass_slip'" cols="12" sm="4">
-  <VSelect
-    v-model="form.pass_slip_type"
-    label="Pass Slip Type"
-    :items="[
-      { title: 'Personal', value: 'personal' },
-      { title: 'Official', value: 'official' },
-    ]"
-    item-title="title"
-    item-value="value"
-    variant="outlined"
-    density="compact"
-    prepend-inner-icon="mdi-account-question-outline"
-    :error-messages="formErrors.pass_slip_type"
-    hide-details="auto"
-  />
-</VCol>
-
-         <!-- Date From -->
-         <VCol cols="12" sm="4">
-          <VTextField
-            v-model="form.date"
-            :label="form.type === 'pass_slip' ? 'Date' : 'Date From'"
-            type="date"
-            variant="outlined"
-            density="compact"
-            prepend-inner-icon="mdi-calendar-outline"
-            :error-messages="formErrors.date"
-            :min="batchMonthMin || undefined"
-            :max="batchMonthMax || undefined"
-            hide-details="auto"
-          />
-        </VCol>
-
-          <!-- Date To (whole-day types only) -->
-          <VCol v-if="form.type && form.type !== 'pass_slip'" cols="12" sm="4">
-            <VTextField
-              v-model="form.date_to"
-              label="Date To"
-              type="date"
+          <VCol v-if="form.type === 'pass_slip'" cols="12" sm="4">
+            <VSelect
+              v-model="form.pass_slip_type"
+              label="Pass Slip Type"
+              :items="[
+                { title: 'Personal', value: 'personal' },
+                { title: 'Official', value: 'official' },
+              ]"
+              item-title="title"
+              item-value="value"
               variant="outlined"
               density="compact"
-              prepend-inner-icon="mdi-calendar-end-outline"
-              :min="form.date || batchMonthMin || undefined"
+              prepend-inner-icon="mdi-account-question-outline"
+              :error-messages="formErrors.pass_slip_type"
               hide-details="auto"
-              :error-messages="formErrors.date_to"
             />
           </VCol>
+
+          <!-- Calendar-style date / date-range picker -->
+          <VCol cols="12" :sm="form.type === 'pass_slip' ? 4 : 8">
+            <AdjustmentDatePicker
+              :type="form.type"
+              :period-month="periodMonth"
+              :period-year="periodYear"
+              :date="form.date"
+              :date-to="form.date_to"
+              :disabled="!form.type"
+              :error-messages="formErrors.date || formErrors.date_to"
+              @update:date="form.date = $event"
+              @update:date-to="form.date_to = $event"
+            />
+          </VCol>
+
           <!-- Minutes (pass slip only) -->
           <VCol cols="12" sm="4">
             <VTextField
@@ -595,24 +576,18 @@ function showAlert(type: AlertType, message: string) {
 
           <!-- Helper text for whole-day types -->
           <VCol v-if="form.type && form.type !== 'pass_slip'" cols="12">
-  <VAlert density="compact" variant="tonal"
-    :color="form.type === 'official_travel' ? 'blue' : 'teal'"
-    :icon="typeIcon(form.type)"
-    class="text-body-2">
-    <template v-if="form.type === 'official_travel'">
-      <strong>Official Travel</strong> — this date will be subtracted from absent days.
-    </template>
-    <template v-else>
-      <strong>Leave</strong> — this date will be subtracted from absent days.
-    </template>
-    <template v-if="selectedDateIsCompressed && form.date">
-      <br>
-      <VIcon size="13" class="mr-1">mdi-clock-minus-outline</VIcon>
-      This falls on a <strong>compressed week</strong> — an additional
-      <strong>120 minutes</strong> will also be deducted from late minutes.
-    </template>
-  </VAlert>
-</VCol>
+            <VAlert density="compact" variant="tonal"
+              :color="form.type === 'official_travel' ? 'blue' : 'teal'"
+              :icon="typeIcon(form.type)"
+              class="text-body-2">
+              <template v-if="form.type === 'official_travel'">
+                <strong>Official Travel</strong> — the selected date(s) will be subtracted from absent days.
+              </template>
+              <template v-else>
+                <strong>Leave</strong> — the selected date(s) will be subtracted from absent days.
+              </template>
+            </VAlert>
+          </VCol>
 
           <VCol v-if="form.type === 'pass_slip'" cols="12">
             <VAlert density="compact" variant="tonal" color="orange" icon="mdi-door-open" class="text-body-2">

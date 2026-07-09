@@ -15,13 +15,18 @@ interface Signatory {
 }
 
 interface SelectableEmployee {
-  emp_id:        number
-  name:          string
-  position:      string
-  section_name:  string | null
-  has_wage:      boolean
-  wage:          number
-  already_added: boolean
+  emp_id:          number
+  name:            string
+  position:        string
+  section_name:    string | null
+  salary_grade:    number
+  has_wage:        boolean
+  wage:            number
+  hrmis_wage:      number | null   
+  has_hrmis_wage:  boolean 
+  already_added:   boolean
+  already_paid:    boolean          // NEW: finalized in another run for this same period
+  paid_payroll_no: string | null    // NEW: which run they were paid under, for the tooltip/chip
 }
 
 interface BatchItem {
@@ -107,6 +112,21 @@ const MONTH_NAMES = [
   'January','February','March','April','May','June',
   'July','August','September','October','November','December',
 ]
+const HARDCODED_APPROVED_BY_PAYROLL: Signatory = {
+  id: 0,
+  name: 'EXUPERIA B. SABALBERINO, MD, MPH, CESE',
+  position: 'DIRECTOR IV',
+  role: 'approved_by',
+}
+const WAGE_SG_CUTOFF     = 16
+const WAGE_PAGIBIG_MIN   = 400
+const WAGE_SSS_MIN       = 750
+const WAGE_PREMIUM_OPTIONS = [
+  { title: '5%',  value: 0.05 },
+  { title: '10%', value: 0.10 },
+  { title: '15%', value: 0.15 },
+  { title: '20%', value: 0.20 },
+]
 
 /* ─────────────────────────────────────────
    STATE
@@ -139,11 +159,27 @@ const selectedEmpIds    = ref<number[]>([])
 const addingEmployees   = ref(false)
 const empSearch         = ref('')
 
+// ── Quick Set Deduction (from Add Employees panel) ──
+const wageDialog       = ref(false)
+const wageSaving       = ref(false)
+const wageSssOptIn     = ref(false)
+const wageTargetEmp    = ref<SelectableEmployee | null>(null)
+const wageForm         = ref({
+  wage: 0, premium_percent: 0.05, philhealth: 500,
+  pag_ibig: WAGE_PAGIBIG_MIN, sss: 0, ewt_rate: 5,
+})
+const wageFormErrors   = ref<Partial<Record<keyof typeof wageForm.value, string>>>({})
+
 // ── Inline Edit ──
 const editingItem    = ref<BatchItem | null>(null)
 const editForm       = ref<Partial<BatchItem> & { days_absent?: number; minutes_late_ut?: number }>({})
 const editSaving     = ref(false)
 const editDialog     = ref(false)
+
+// Remarks auto-sync: true once the user has typed into Remarks directly,
+// which stops it from being overwritten by the auto-generated text.
+const remarksDirty        = ref(false)
+const isAutoRemarksUpdate = ref(false)
 
 // ── Remove ──
 const removeTarget  = ref<BatchItem | null>(null)
@@ -210,6 +246,19 @@ const grandTotal = computed((): GroupTotals => {
   }, z())
 })
 
+const wagePhilhealthMin = computed(() => {
+  if (!wageTargetEmp.value) return 500
+  return (wageTargetEmp.value.salary_grade ?? 0) >= WAGE_SG_CUTOFF
+    ? Math.round(Number(wageForm.value.wage) * 0.05 * 100) / 100
+    : 500
+})
+
+watch(() => wageForm.value.wage, (newWage) => {
+  if ((wageTargetEmp.value?.salary_grade ?? 0) >= WAGE_SG_CUTOFF) {
+    wageForm.value.philhealth = Math.round(Number(newWage) * 0.05 * 100) / 100
+  }
+})
+
 const canFinalize = computed(() => run.value?.status === 'draft' && (run.value?.employee_count ?? 0) > 0)
 const canRevert   = computed(() => run.value?.status === 'finalized')
 const canGenerate = computed(() => run.value?.status === 'finalized')
@@ -234,11 +283,17 @@ const docTypeLabel = computed(() => {
 })
 
 // Approved By — always static, shown as read-only text
-const approvedByLabel = computed(() =>
-  approvedBySig.value
-    ? `${approvedBySig.value.name} — ${approvedBySig.value.position}`
-    : '—'
-)
+const approvedByName = computed(() => {
+  const useHardcoded = docType.value === 'payroll_sheet' || docType.value === 'dv'
+  const sig = useHardcoded ? HARDCODED_APPROVED_BY_PAYROLL : approvedBySig.value
+  return sig?.name ?? '—'
+})
+
+const approvedByPosition = computed(() => {
+  const useHardcoded = docType.value === 'payroll_sheet' || docType.value === 'dv'
+  const sig = useHardcoded ? HARDCODED_APPROVED_BY_PAYROLL : approvedBySig.value
+  return sig?.position ?? ''
+})
 
 // Dropdown options for slot 1 when division is not mapped
 const slot1Options = computed(() =>
@@ -264,8 +319,9 @@ async function generateORSFromBackend() {
       {},
       { responseType: 'blob' }
     )
-    const blob = new Blob([response.data], { type: 'application/pdf' })
-    const url  = URL.createObjectURL(blob)
+    const filename = `ORS-${run.value.payroll_no}.pdf`
+    const file = new File([response.data], filename, { type: 'application/pdf' })
+    const url  = URL.createObjectURL(file)
     const tab  = window.open(url, '_blank')
     if (!tab) {
       showAlert('warning', 'Popup blocked. Please allow popups and try again.')
@@ -275,6 +331,32 @@ async function generateORSFromBackend() {
     showAlert('error', 'Failed to generate ORS.')
   } finally {
     orsLoading.value = false
+  }
+}
+
+const dvLoading = ref(false)
+
+async function generateDVFromBackend() {
+  if (!run.value) return
+  dvLoading.value = true
+  try {
+    const response = await axios.post(
+      `/api/payroll-run/${run.value.id}/generate-dv`,
+      {},
+      { responseType: 'blob' }
+    )
+    const filename = `DV-${run.value.payroll_no}.pdf`
+    const file = new File([response.data], filename, { type: 'application/pdf' })
+    const url  = URL.createObjectURL(file)
+    const tab  = window.open(url, '_blank')
+    if (!tab) {
+      showAlert('warning', 'Popup blocked. Please allow popups and try again.')
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (err: any) {
+    showAlert('error', 'Failed to generate DV.')
+  } finally {
+    dvLoading.value = false
   }
 }
 
@@ -514,19 +596,66 @@ async function confirmRecompute() {
 /* ─────────────────────────────────────────
    HANDLERS
 ───────────────────────────────────────── */
+function buildAutoRemarks(days: number, mins: number): string {
+  const parts: string[] = []
+  if (days > 0) parts.push(`ABSENT ${days} DAY${days !== 1 ? 'S' : ''}`)
+  if (mins > 0) parts.push(`${mins} MINS LATE`)
+  return parts.join(', ')
+}
+
+function resetRemarksToAuto() {
+  remarksDirty.value        = false
+  isAutoRemarksUpdate.value = true
+  editForm.value.remarks = buildAutoRemarks(
+    Number(editForm.value.days_absent ?? 0),
+    Number(editForm.value.minutes_late_ut ?? 0)
+  ) || null
+  nextTick(() => { isAutoRemarksUpdate.value = false })
+}
+
 function openEditDialog(item: BatchItem) {
   editingItem.value = item
+  const days = Number(item.total_absent_days)
+  const mins = Number(item.total_late_minutes) + Number(item.total_undertime_minutes)
+  const autoRemarks = buildAutoRemarks(days, mins)
+
+  remarksDirty.value = (item.remarks ?? '') !== autoRemarks
+
   editForm.value = {
-    days_absent:     Number(item.total_absent_days),
-    minutes_late_ut: Number(item.total_late_minutes) + Number(item.total_undertime_minutes),
+    days_absent:     days,
+    minutes_late_ut: mins,
     philhealth:      Number(item.philhealth),
     pag_ibig:        Number(item.pag_ibig),
     sss:             Number(item.sss),
     ewt:             Number(item.ewt),
-    remarks:         item.remarks ?? null,
+    remarks:         item.remarks ?? (autoRemarks || null),
   }
   editDialog.value = true
 }
+
+watch(
+  [() => editForm.value.days_absent, () => editForm.value.minutes_late_ut],
+  ([days, mins]) => {
+    if (remarksDirty.value) return
+    isAutoRemarksUpdate.value = true
+    editForm.value.remarks = buildAutoRemarks(Number(days ?? 0), Number(mins ?? 0)) || null
+    nextTick(() => { isAutoRemarksUpdate.value = false })
+  }
+)
+
+watch(() => editForm.value.remarks, (val) => {
+  if (isAutoRemarksUpdate.value) return
+  if (!editDialog.value) return
+
+  // Clearing the field manually re-enables auto-sync instead of
+  // leaving Remarks permanently blank.
+  if (!val || !val.trim()) {
+    resetRemarksToAuto()
+    return
+  }
+
+  remarksDirty.value = true
+})
 
 function openRemoveDialog(item: BatchItem) {
   removeTarget.value = item
@@ -562,6 +691,60 @@ function onAdjustmentUpdated(updatedItem: BatchItem) {
 function openRecomputeDialog(item: BatchItem) {
   recomputeTarget.value = item
   recomputeDialog.value = true
+}
+
+function openWageDialog(emp: SelectableEmployee) {
+  wageTargetEmp.value = emp
+  wageSssOptIn.value  = false
+  const prefillWage = emp.has_hrmis_wage && emp.hrmis_wage ? emp.hrmis_wage : (emp.wage || 0)
+  wageForm.value = {
+    wage: prefillWage,
+    premium_percent: 0.05,
+    philhealth: (emp.salary_grade ?? 0) >= WAGE_SG_CUTOFF
+      ? Math.round(prefillWage * 0.05 * 100) / 100
+      : 500,
+    pag_ibig: WAGE_PAGIBIG_MIN,
+    sss: 0,
+    ewt_rate: 5,
+  }
+  wageFormErrors.value = {}
+  wageDialog.value = true
+}
+
+function validateWageForm(): boolean {
+  const errs: Partial<Record<keyof typeof wageForm.value, string>> = {}
+  if (!wageForm.value.wage || Number(wageForm.value.wage) <= 0)
+    errs.wage = 'Monthly wage is required and must be greater than ₱0.'
+  if (Number(wageForm.value.philhealth) < wagePhilhealthMin.value)
+    errs.philhealth = `PhilHealth must be at least ${fmt(wagePhilhealthMin.value)}.`
+  if (Number(wageForm.value.pag_ibig) < WAGE_PAGIBIG_MIN)
+    errs.pag_ibig = `Pag-IBIG must be at least ${fmt(WAGE_PAGIBIG_MIN)}.`
+  if (wageSssOptIn.value && Number(wageForm.value.sss) < WAGE_SSS_MIN)
+    errs.sss = `SSS must be at least ${fmt(WAGE_SSS_MIN)} if deducting.`
+  wageFormErrors.value = errs
+  return Object.keys(errs).length === 0
+}
+
+async function saveWage() {
+  if (!wageTargetEmp.value || !validateWageForm()) return
+  wageSaving.value = true
+  try {
+    const payload = { ...wageForm.value, sss: wageSssOptIn.value ? wageForm.value.sss : 0 }
+    const { data } = await axios.post(`/api/wage/upsert/${wageTargetEmp.value.emp_id}`, payload)
+    if (!data.success) throw new Error(data.message ?? 'Save failed.')
+    showAlert('success', `Deductions saved for ${wageTargetEmp.value.name}.`)
+    wageDialog.value = false
+    await fetchSelectableEmployees()   // refreshes chip + unlocks checkbox
+  } catch (err: any) {
+    if (err.response?.data?.errors) {
+      wageFormErrors.value = Object.fromEntries(
+        Object.entries(err.response.data.errors).map(([k, v]) => [k, (v as string[])[0]])
+      )
+    }
+    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to save deduction.')
+  } finally {
+    wageSaving.value = false
+  }
 }
 
 async function saveEngasNo(item: BatchItem) {
@@ -624,6 +807,17 @@ const editPreviewNet = computed(() => {
 ───────────────────────────────────────── */
 async function generateDocument() {
   if (!run.value) return
+  // ORS/DV — dialog is a read-only confirmation; backend resolves signatories itself
+  if (docType.value === 'ors') {
+    await generateORSFromBackend()
+    docDialog.value = false
+    return
+  }
+  if (docType.value === 'dv') {
+    await generateDVFromBackend()
+    docDialog.value = false
+    return
+  }
   docLoading.value = true
   try {
     if (!(window as any).jspdf) {
@@ -644,7 +838,9 @@ async function generateDocument() {
     }
 
     // Approved By — always the static ref
-    const approvedSig = approvedBySig.value
+    const approvedSig = docType.value === 'payroll_sheet'
+  ? HARDCODED_APPROVED_BY_PAYROLL
+  : approvedBySig.value
 
     // Certified By — resolve slot 1 from user pick if free, otherwise use locked slot
     const resolvedCertified: (Signatory | null)[] = certifiedBySlots.value.map((slot, i) => {
@@ -657,9 +853,7 @@ async function generateDocument() {
 
     const certSigs = resolvedCertified.slice(0, certifiedSlotCount.value)
 
-    if      (docType.value === 'payroll_sheet') generatePayrollSheet(approvedSig, certSigs)
-    else if (docType.value === 'ors')           generateORS(approvedSig, certSigs)
-    else                                        generateDV(approvedSig, certSigs)
+   generatePayrollSheet(approvedSig, certSigs)
 
     showAlert('success', `${docTypeLabel.value} opened in a new tab.`)
     docDialog.value = false
@@ -763,7 +957,7 @@ function generatePayrollSheet(approvedSig: Signatory | null, certSigs: (Signator
       { content: 'Name',                rowSpan: 2, styles: { valign:'middle' } },
       { content: 'Position',            rowSpan: 2, styles: { valign:'middle' } },
       { content: 'Wage',                rowSpan: 2, styles: { valign:'middle', halign:'center' } },
-      { content: '5%\nPremium',         rowSpan: 2, styles: { valign:'middle', halign:'center' } },
+      { content: '20%\nPremium',         rowSpan: 2, styles: { valign:'middle', halign:'center' } },
       { content: 'COMPENSATION',        colSpan: 4, styles: { halign:'center' } },
       { content: 'D E D U C T I O N S',colSpan: 4, styles: { halign:'center' } },
       { content: 'Net Amount\nDue',     rowSpan: 2, styles: { valign:'middle', halign:'center' } },
@@ -898,445 +1092,11 @@ function generatePayrollSheet(approvedSig: Signatory | null, certSigs: (Signator
   openPdf(doc)
 }
 
-function generateORS(_approvedSig: Signatory | null, certSigs: (Signatory | null)[]) {
-  const { jsPDF } = (window as any).jspdf
-  const doc   = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-  const r     = run.value!
-  const pageW = doc.internal.pageSize.getWidth()
-  const BLK   = [0,0,0]       as [number,number,number]
-  const GRAY  = [80,80,80]    as [number,number,number]
-  const WHITE = [255,255,255] as [number,number,number]
-
-  const emps = allEmployees()
-  const gt   = grandTotal.value
-  const payeeText = emps.length > 1
-    ? `${emps[0].emp_name} & ${emps.length - 1} OTHERS`
-    : emps[0]?.emp_name ?? '—'
-
-  const uacs   = r.uacs_code || '224003020200000'
-  const L  = 14
-  const MW = pageW - 28   // 182mm usable on A4
-
-  // ── Column widths derived from Excel A-M proportions ───────────────────
-  // Excel total A-M ≈ 381mm. Scale to 182mm (factor 0.478)
-  // A+B+C = 19+19+21.8 = 59.8 → ~28mm  (label col, used as Resp.Center)
-  // D+E+F+G+H = 19+16.7+15.8+24.1+65.2 = 140.8 → ~68mm (Particulars)
-  // I+J = 11.2+28.6 = 39.8 → ~18mm (MFO/PAP)
-  // K = 52 → ~25mm (UACS)
-  // L+M = 53.1+36 = 89.1 → ~43mm (Amount)
-  // Total: 28+68+18+25+43 = 182 ✓
-  const cAC = 28   // A:C  — Resp.Center / sig "A." label / Date
-  const cDH = 68   // D:H  — Particulars / sig left text / Particulars(status)
-  const cIJ = 18   // I:J  — MFO/PAP / sig "B." label / ORS No (partial)
-  const cK  = 25   // K    — UACS / Payment
-  const cLM = 43   // L:M  — Amount / Balance cols
-
-  // For status table sub-columns we need finer splits:
-  // Reference = A:G = cAC + cDH + part of cIJ
-  //   Date(A)    = cAC * (19/59.8) ≈ 9mm
-  //   Partic(B-D)= cAC * (19+21.8)/59.8 + cDH * (19/140.8) ≈ 28mm (use cAC)
-  //   ORS(E-G)   = rest of D:H up to G ≈ 19mm + cIJ bits
-  // It's cleaner to define 7 status cols that sum to 182mm:
-  const s0 = 14   // Date (A)
-  const s1 = 32   // Particulars (B-D)
-  const s2 = 30   // ORS/JEV No (E-G)
-  const s3 = 24   // Obligation H  (a)
-  const s4 = 22   // Payable I-J   (b)
-  const s5 = 20   // Payment K     (c)
-  const s6 = 20   // Not Yet Due L (a-b)
-  const s7 = 20   // Due&Demand M  (b-c)
-  // 14+32+30+24+22+20+20+20 = 182 ✓
-
-  const reqSig  = certSigs[0] ?? null
-  const budgSig = certSigs[1] ?? null
-
-  const CS = {
-    fontSize: 7.5, cellPadding: 2,
-    textColor: BLK, lineColor: BLK, lineWidth: 0.3,
-    valign: 'top' as const, overflow: 'linebreak' as const,
-  }
-  const HS = { fillColor: WHITE, textColor: BLK, fontStyle: 'bold' as const, lineColor: BLK, lineWidth: 0.3 }
-
-  // ── Appendix 11 ────────────────────────────────────────────────────────
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...GRAY)
-  doc.text('Appendix 11', pageW - 14, 10, { align: 'right' })
-
-  // ════════════════════════════════════════════════════════════════════════
-  // TABLE 1 — Rows 2-5: Title block (A:J) | Serial/Date/Fund (K:M)
-  // A:J width = cAC + cDH + cIJ = 28+68+18 = 114mm
-  // K:M width = cK + cLM = 25+43 = 68mm
-  // ════════════════════════════════════════════════════════════════════════
-  const tW  = cAC + cDH + cIJ   // 114mm — left title block
-  const rW  = cK  + cLM         //  68mm — right info block
-
-  ;(doc as any).autoTable({
-    startY: 12, theme: 'grid', styles: { ...CS },
-    columnStyles: { 0: { cellWidth: tW }, 1: { cellWidth: rW } },
-    margin: { left: L, right: L },
-    body: [[
-      {
-        content: 'OBLIGATION REQUEST AND STATUS\n\nDEPARTMENT OF HEALTH - CENTER FOR HEALTH DEVELOPMENT\nSOCCSKSARGEN REGION\n\nEntity Name',
-        styles: { fontStyle: 'bold', halign: 'center', valign: 'middle', fontSize: 9,
-                  cellPadding: { top: 4, bottom: 4, left: 3, right: 3 } },
-      },
-      {
-        content: `Serial No. : ${r.ors_no || '____________________'}\n\nDate : ________________________________\n\nFund Cluster :`,
-        styles: { halign: 'left', valign: 'top', fontSize: 7.5,
-                  cellPadding: { top: 4, bottom: 4, left: 3, right: 3 } },
-      },
-    ]],
-  })
-  const y1 = (doc as any).lastAutoTable.finalY
-
-  // ════════════════════════════════════════════════════════════════════════
-  // TABLE 2 — Rows 6-11: Payee / Office / Address
-  // Label col = A:C = 28mm | Value col = D:M = 154mm
-  // ════════════════════════════════════════════════════════════════════════
-  ;(doc as any).autoTable({
-    startY: y1, theme: 'grid', styles: { ...CS, cellPadding: { top: 2, bottom: 2, left: 3, right: 3 } },
-    columnStyles: { 0: { cellWidth: cAC }, 1: { cellWidth: cDH + cIJ + cK + cLM } },
-    margin: { left: L, right: L },
-    body: [
-      [
-        { content: 'Payee',   styles: { fontStyle: 'bold', valign: 'middle' } },
-        { content: payeeText, styles: { fontStyle: 'bold', fontSize: 9, valign: 'middle' } },
-      ],
-      [
-        { content: 'Office',  styles: { fontStyle: 'bold', valign: 'middle' } },
-        { content: 'DOH-CHD, SOCCSKSARGEN Region', styles: { valign: 'middle' } },
-      ],
-      [
-        { content: 'Address', styles: { fontStyle: 'bold', valign: 'middle' } },
-        { content: 'KORONADAL CITY', styles: { valign: 'middle' } },
-      ],
-    ],
-  })
-  const y2 = (doc as any).lastAutoTable.finalY
-
-  // ════════════════════════════════════════════════════════════════════════
-  // TABLE 3 — Rows 12-28: Particulars header + data + total
-  // 5 cols: A:C(28) | D:H(68) | I:J(18) | K(25) | L:M(43)
-  // ════════════════════════════════════════════════════════════════════════
-  ;(doc as any).autoTable({
-    startY: y2, theme: 'grid',
-    styles: { ...CS },
-    headStyles: { ...HS, halign: 'center', valign: 'middle' },
-    columnStyles: {
-      0: { cellWidth: cAC, halign: 'center' },
-      1: { cellWidth: cDH },
-      2: { cellWidth: cIJ, halign: 'center' },
-      3: { cellWidth: cK,  halign: 'center' },
-      4: { cellWidth: cLM, halign: 'right'  },
-    },
-    margin: { left: L, right: L },
-    head: [[
-      { content: 'Responsibility\nCenter', styles: { halign: 'center', valign: 'middle' } },
-      { content: 'Particulars',            styles: { halign: 'center', valign: 'middle' } },
-      { content: 'MFO/PAP',               styles: { halign: 'center', valign: 'middle' } },
-      { content: 'UACS Object\nCode',      styles: { halign: 'center', valign: 'middle' } },
-      { content: 'Amount',                 styles: { halign: 'center', valign: 'middle' } },
-    ]],
-    body: [
-      // Data row — tall, amount bottom-aligned
-      [
-        { content: '13-001-03-00012-\n224003020200000',
-          styles: { halign: 'center', valign: 'top', minCellHeight: 38 } },
-        { content: `Obligation of payment of service\nrendered for the month\nof ${MONTH_NAMES[r.period_month - 1].toUpperCase()} for CY ${r.period_year}.`,
-          styles: { halign: 'left', valign: 'top', fontStyle: 'bold', minCellHeight: 38 } },
-        { content: uacs,
-          styles: { halign: 'center', valign: 'top', minCellHeight: 38 } },
-        { content: uacs,
-          styles: { halign: 'center', valign: 'top', minCellHeight: 38 } },
-        { content: fmtNum(gt.net_pay),
-          styles: { halign: 'right', valign: 'bottom', fontStyle: 'bold', minCellHeight: 38 } },
-      ],
-      // Total row — blank left, amount right
-      [
-        { content: '', colSpan: 4, styles: { minCellHeight: 7 } },
-        { content: fmtNum(gt.net_pay), styles: { halign: 'right', fontStyle: 'bold', fontSize: 8 } },
-      ],
-    ],
-  })
-  const y3 = (doc as any).lastAutoTable.finalY
-
-  // ════════════════════════════════════════════════════════════════════════
-  // TABLE 4 — Rows 29-44: Signatories A & B
-  // 4 cols: A(narrow "A.") | B:H(left text) | I(narrow "B.") | J:M(right text)
-  // A col  = narrow label: ~12mm
-  // B:H    = cAC + cDH - 12 = 84mm
-  // I col  = narrow label: ~12mm
-  // J:M    = cIJ + cK + cLM - 12 = 74mm
-  // Total: 12+84+12+74 = 182 ✓
-  // ════════════════════════════════════════════════════════════════════════
-  const sigLbl = 12   // narrow "A." / "B." col
-  const sigL   = cAC + cDH - sigLbl   // 84mm left text
-  const sigR   = cIJ + cK + cLM - sigLbl  // 74mm right text
-
-  const sigAtext = [
-    'Certified:  Charges to appropriation/allotment are',
-    'necessary, lawful and under my direct supervision;and',
-    'supporting documents valid, proper and legal',
-    '',
-    'Signature      : ___________________________________',
-    '',
-    `Printed Name:  ${reqSig?.name ?? '________________________________'}`,
-    `Position         :   ${reqSig?.position ?? '____________________________'}`,
-    reqSig ? '                 Head, Requesting Office/Authorized Representative' : '',
-    'Date               : ___________________________________',
-  ].join('\n')
-
-  const sigBtext = [
-    'Certified:  Allotment available and obligated',
-    'for the purpose/adjustment necessary as',
-    'indicated above',
-    '',
-    'Signature      : ______________________________',
-    '',
-    `Printed Name:  ${budgSig?.name ?? '________________________________'}`,
-    `Position         :   ${budgSig?.position ?? '____________________________'}`,
-    budgSig ? '                 Head, Budget Division/Unit/Authorized Representative' : '',
-    'Date              : ____________________________',
-  ].join('\n')
-
-  ;(doc as any).autoTable({
-    startY: y3, theme: 'grid', styles: { ...CS },
-    columnStyles: {
-      0: { cellWidth: sigLbl },
-      1: { cellWidth: sigL   },
-      2: { cellWidth: sigLbl },
-      3: { cellWidth: sigR   },
-    },
-    margin: { left: L, right: L },
-    body: [[
-      { content: 'A.', styles: { fontStyle: 'bold', halign: 'left', valign: 'top',
-                                  cellPadding: { top: 3, left: 2, right: 1, bottom: 3 } } },
-      { content: sigAtext, styles: { halign: 'left', valign: 'top', fontSize: 7, cellPadding: 3 } },
-      { content: 'B.', styles: { fontStyle: 'bold', halign: 'left', valign: 'top',
-                                  cellPadding: { top: 3, left: 2, right: 1, bottom: 3 } } },
-      { content: sigBtext, styles: { halign: 'left', valign: 'top', fontSize: 7, cellPadding: 3 } },
-    ]],
-  })
-  const y4 = (doc as any).lastAutoTable.finalY
-
-  // ════════════════════════════════════════════════════════════════════════
-  // TABLE 5 — Rows 45-55: C. + Status of Obligation
-  // 8 data cols: s0-s7 = 14+32+30+24+22+20+20+20 = 182mm
-  //
-  // Header structure:
-  //   Row C. : [C.(s0)] [STATUS OF OBLIGATION colspan 7]
-  //   Row 1  : [Reference colspan 3] [Amount colspan 5]
-  //   Row 2  : [  ] [  ] [ORS/JEV] [Oblig] [Payable] [Payment] [Balance colspan 2]
-  //   Row 3  : [Date] [Partic] [  ] [(a)] [(b)] [(c)] [Not Yet Due] [Due&Dem]
-  //   Data   : [  ] [SALARY] [ORS no] [amt] [amt] [  ] [  ] [  ]
-  // ════════════════════════════════════════════════════════════════════════
-  ;(doc as any).autoTable({
-    startY: y4, theme: 'grid',
-    styles: { ...CS, fontSize: 7 },
-    columnStyles: {
-      0: { cellWidth: s0, halign: 'center' },
-      1: { cellWidth: s1, halign: 'center' },
-      2: { cellWidth: s2, halign: 'center' },
-      3: { cellWidth: s3, halign: 'right'  },
-      4: { cellWidth: s4, halign: 'right'  },
-      5: { cellWidth: s5, halign: 'right'  },
-      6: { cellWidth: s6, halign: 'right'  },
-      7: { cellWidth: s7, halign: 'right'  },
-    },
-    margin: { left: L, right: L },
-    body: [
-      // C. | STATUS OF OBLIGATION
-      [
-        { content: 'C.', styles: { fontStyle: 'bold', halign: 'left', valign: 'middle', fontSize: 8,
-                                    cellPadding: { top: 2, bottom: 2, left: 3, right: 2 } } },
-        { content: 'STATUS OF OBLIGATION', colSpan: 7,
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'middle', fontSize: 9,
-                    cellPadding: { top: 2, bottom: 2, left: 2, right: 2 } } },
-      ],
-      // Reference | Amount  (group headers)
-      [
-        { content: 'Reference', colSpan: 3,
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'middle' } },
-        { content: 'Amount', colSpan: 5,
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'middle' } },
-      ],
-      // Sub-header row 1: blank | blank | ORS | Obligation | Payable | Payment | Balance(colspan2)
-      [
-        { content: '', styles: { halign: 'center' } },
-        { content: '', styles: { halign: 'center' } },
-        { content: 'ORS/JEV/Check/\nADA/TRA No.',
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'middle' } },
-        { content: 'Obligation',
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'bottom' } },
-        { content: 'Payable',
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'bottom' } },
-        { content: 'Payment',
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'bottom' } },
-        { content: 'Balance', colSpan: 2,
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'bottom' } },
-      ],
-      // Sub-header row 2: Date | Particulars | blank | (a) | (b) | (c) | Not Yet Due | Due&Dem
-      [
-        { content: 'Date',
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'middle' } },
-        { content: 'Particulars',
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'middle' } },
-        { content: '',  styles: { halign: 'center' } },
-        { content: '(a)', styles: { fontStyle: 'bold', halign: 'center', valign: 'top' } },
-        { content: '(b)', styles: { fontStyle: 'bold', halign: 'center', valign: 'top' } },
-        { content: '(c)', styles: { fontStyle: 'bold', halign: 'center', valign: 'top' } },
-        { content: 'Not Yet Due\n(a-b)',
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'middle' } },
-        { content: 'Due and\nDemandable\n(b-c)',
-          styles: { fontStyle: 'bold', halign: 'center', valign: 'middle' } },
-      ],
-      // Data row
-      [
-        { content: '',            styles: { minCellHeight: 12 } },
-        { content: 'SALARY',      styles: { halign: 'left'   } },
-        { content: r.ors_no || '', styles: { halign: 'center' } },
-        { content: fmtNum(gt.net_pay), styles: { halign: 'right' } },
-        { content: fmtNum(gt.net_pay), styles: { halign: 'right' } },
-        { content: '', styles: { halign: 'right' } },
-        { content: '', styles: { halign: 'right' } },
-        { content: '', styles: { halign: 'right' } },
-      ],
-    ],
-  })
-
-  openPdf(doc)
-}
-
-
-function generateDV(approvedSig: Signatory | null, certSigs: (Signatory | null)[]) {
-  const { jsPDF } = (window as any).jspdf
-  const doc   = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-  const r     = run.value!
-  const pageW = doc.internal.pageSize.getWidth()
-  const BLK   = [0,0,0]       as [number,number,number]
-  const GRAY  = [80,80,80]    as [number,number,number]
-  const LGRAY = [180,180,180] as [number,number,number]
-  const WHITE = [255,255,255] as [number,number,number]
-
-  const emps = allEmployees()
-  const gt   = grandTotal.value
-  const payeeText = emps.length > 1
-    ? `${emps[0].emp_name} & ${emps.length - 1} OTHERS`
-    : emps[0]?.emp_name ?? '—'
-  const uacs = r.uacs_code || '224003020200000'
-
-  doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(...GRAY)
-  doc.text('Appendix 32', pageW - 14, 10, { align:'right' })
-  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(...BLK)
-  doc.text('DISBURSEMENT VOUCHER', pageW/2, 18, { align:'center' })
-
-  doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(...BLK)
-  doc.setLineWidth(0.3); doc.setDrawColor(...LGRAY)
-  doc.rect(14, 21, pageW - 28, 26)
-  doc.setFont('helvetica','bold')
-  doc.text('Entity Name :', 16, 27); doc.text('Fund cluster :', 16, 33); doc.text('Date :', 16, 39)
-  doc.text('DV No. :', pageW/2+2, 27); doc.text('TIN/Employee No. :', pageW/2+2, 33); doc.text('ORS/BURS No. :', pageW/2+2, 39)
-  doc.text('Payee :', 16, 44); doc.text('Address :', pageW/2+2, 44)
-  doc.setFont('helvetica','normal'); doc.setTextColor(...GRAY)
-  doc.text('DEPARTMENT OF HEALTH - CENTER FOR HEALTH DEVELOPMENT', 42, 27)
-  doc.text('SOCCSKSARGEN REGION', 42, 31)
-  doc.text(r.fund_cluster || '___________', 42, 33)
-  doc.text('___________________________', 30, 39)
-  doc.text(r.dv_no || '___________________________', pageW/2+24, 27)
-  doc.text('___________________________', pageW/2+38, 33)
-  doc.text(r.ors_no || '___________________________', pageW/2+34, 39)
-  doc.text(payeeText, 30, 44)
-  doc.text('LAND BANK OF THE PHILIPPINES', pageW/2+22, 44)
-
-  ;(doc as any).autoTable({
-    startY: 50,
-    head: [['Particulars','Responsibility\nCenter','MFO/PAP','Amount']],
-    body: [[
-      `Obligation of payment of services rendered for the month of ${MONTH_NAMES[r.period_month-1]} for CY ${r.period_year}.\n\n${uacs}`,
-      '13-001-03-00012-\n224003020200000', uacs,
-      { content: fmtNum(gt.net_pay), styles: { halign:'right', fontStyle:'bold' } },
-    ]],
-    theme: 'grid',
-    styles: { fontSize:8, cellPadding:3, valign:'middle', textColor:BLK, lineColor:LGRAY, lineWidth:0.2 },
-    headStyles: { fillColor:WHITE, textColor:BLK, fontStyle:'bold', halign:'center', fontSize:8, lineColor:BLK, lineWidth:0.3 },
-    columnStyles: { 0:{cellWidth:90},1:{cellWidth:34},2:{cellWidth:26},3:{halign:'right',cellWidth:28} },
-    margin: { left:14, right:14 },
-  })
-
-  const t1End = (doc as any).lastAutoTable.finalY
-  doc.setLineWidth(0.3); doc.setDrawColor(...LGRAY); doc.rect(14, t1End, pageW - 28, 8)
-  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...BLK)
-  doc.text('Amount Due', 16, t1End + 5.5)
-  doc.text(fmtNum(gt.net_pay), pageW - 16, t1End + 5.5, { align:'right' })
-
-  const modeY = t1End + 14
-  doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(...BLK)
-  doc.text('Mode of Payment:', 14, modeY)
-  doc.rect(40, modeY-3.5, 4, 4); doc.text('MDS Check', 46, modeY)
-  doc.rect(75, modeY-3.5, 4, 4); doc.text('Commercial Check', 81, modeY)
-  doc.rect(118, modeY-3.5, 4, 4)
-  doc.setFont('helvetica','bold'); doc.text('✓', 119, modeY)
-  doc.setFont('helvetica','normal'); doc.text('ADA', 124, modeY)
-  doc.rect(135, modeY-3.5, 4, 4); doc.text('Others _______________', 141, modeY)
-
-  const accY = modeY + 10
-  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...BLK)
-  doc.text('B. Accounting Entry:', 14, accY)
-  ;(doc as any).autoTable({
-    startY: accY + 4,
-    head: [['Account Title','UACS Code','Debit','Credit']],
-    body: [
-      ['Due to Officers and Employees', uacs, { content: fmtNum(gt.net_pay), styles:{halign:'right'} }, ''],
-      ['Cash — Modified Disbursements System (MDS), Regular', '10104040', '', { content: fmtNum(gt.net_pay), styles:{halign:'right'} }],
-    ],
-    theme: 'grid',
-    styles: { fontSize:7.5, cellPadding:2.5, textColor:BLK, lineColor:LGRAY, lineWidth:0.2 },
-    headStyles: { fillColor:WHITE, textColor:BLK, fontStyle:'bold', halign:'center', fontSize:7.5, lineColor:BLK, lineWidth:0.3 },
-    columnStyles: { 0:{cellWidth:82},1:{cellWidth:40},2:{halign:'right',cellWidth:26},3:{halign:'right',cellWidth:26} },
-    margin: { left:14, right:14 },
-  })
-
-  const sigY    = (doc as any).lastAutoTable.finalY + 10
-  const certSig = certSigs[0] ?? null
-  const rx      = pageW / 2 + 4
-
-  doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(...GRAY)
-  doc.text('C. Certified: Expenses/Cash Advance necessary, lawful and', 14, sigY)
-  doc.text('incurred under my direct supervision.', 14, sigY + 4)
-  if (certSig) {
-    doc.setFont('helvetica','bold'); doc.setTextColor(...BLK)
-    doc.text(certSig.name, 14, sigY + 16)
-    doc.setFont('helvetica','normal'); doc.setTextColor(...GRAY)
-    doc.text(certSig.position, 14, sigY + 20)
-    doc.text('Head, Accounting Unit/Authorized Representative', 14, sigY + 24)
-  }
-  doc.text('Signature : _______________________', 14, sigY + 30)
-  doc.text('Date : _______________________', 14, sigY + 36)
-
-  if (approvedSig) {
-    doc.text('D. Approved for Payment', rx, sigY)
-    doc.setFont('helvetica','bold'); doc.setTextColor(...BLK)
-    doc.text(approvedSig.name, rx, sigY + 16)
-    doc.setFont('helvetica','normal'); doc.setTextColor(...GRAY)
-    doc.text(approvedSig.position, rx, sigY + 20)
-    doc.text('Agency Head/Authorized Representative', rx, sigY + 24)
-    doc.text('Signature : _______________________', rx, sigY + 30)
-    doc.text('Date : _______________________', rx, sigY + 36)
-  }
-
-  const receiptY = sigY + 48
-  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...BLK)
-  doc.text('E. Receipt of Payment', 14, receiptY)
-  doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(...GRAY)
-  doc.text(`JEV No. : ${r.jev_no || '___________________________'}`, 14, receiptY + 6)
-  doc.text('Date : ___________________________', pageW - 14, receiptY + 6, { align:'right' })
-  doc.text('Check/ADA No. : ___________________________', 14, receiptY + 12)
-  doc.text('Date : ___________________________', pageW - 14, receiptY + 12, { align:'right' })
-  doc.text('Bank Name & Account Number : _________________________________________________', 14, receiptY + 18)
-  doc.text('Official Receipt No. & Date/Other Documents : ________________________________', 14, receiptY + 24)
-  doc.text('Signature : _____________________ Printed Name : _____________________ Date : _____________', 14, receiptY + 32)
-
-  openPdf(doc)
-}
+const docGenerateLoading = computed(() => {
+  if (docType.value === 'ors') return orsLoading.value
+  if (docType.value === 'dv')  return dvLoading.value
+  return docLoading.value
+})
 
 /* ─────────────────────────────────────────
    INIT
@@ -1443,13 +1203,13 @@ onMounted(async () => {
                   </VBtn>
                   <VBtn block :disabled="!canGenerate" color="indigo" variant="tonal"
                     prepend-icon="mdi-file-document-outline"
-                    :loading="orsLoading"
-                    @click="generateORSFromBackend">
-                    ORS
+                    @click="openDocDialog('ors')">
+                    Obligation Request & Status
                   </VBtn>
                   <VBtn block :disabled="!canGenerate" color="deep-purple" variant="tonal"
-                    prepend-icon="mdi-receipt-text-outline" @click="openDocDialog('dv')">
-                    Disbursement Voucher
+                  prepend-icon="mdi-receipt-text-outline"
+                  @click="openDocDialog('dv')">
+                  Disbursement Voucher
                   </VBtn>
                 </div>
               </VCardText>
@@ -1519,47 +1279,60 @@ onMounted(async () => {
                     <div v-else style="max-height:260px; overflow-y:auto; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 8px;">
                       <VList density="compact" lines="two">
                         <VListItem
-                          v-for="emp in availableEmps"
-                          :key="emp.emp_id"
-                          :disabled="!emp.has_wage"
-                          :active="selectedEmpIds.includes(emp.emp_id)"
-                          active-color="primary"
-                          rounded="0"
-                          @click="() => {
-                            if (!emp.has_wage) return
+                        v-for="emp in availableEmps"
+                        :key="emp.emp_id"
+                        :style="{ opacity: (!emp.has_wage || emp.already_paid) ? 0.55 : 1, cursor: (!emp.has_wage || emp.already_paid) ? 'default' : 'pointer' }"
+                        :active="selectedEmpIds.includes(emp.emp_id)"
+                        active-color="primary"
+                        rounded="0"
+                        @click="() => {
+                          if (!emp.has_wage || emp.already_paid) return
+                          const idx = selectedEmpIds.indexOf(emp.emp_id)
+                          if (idx === -1) selectedEmpIds.push(emp.emp_id)
+                          else selectedEmpIds.splice(idx, 1)
+                        }"
+                      >
+                        <template #prepend>
+                        <VCheckboxBtn
+                          :model-value="selectedEmpIds.includes(emp.emp_id)"
+                          :disabled="!emp.has_wage || emp.already_paid"
+                          density="compact"
+                          color="primary"
+                          hide-details
+                          @click.stop
+                          @update:model-value="() => {
+                            if (!emp.has_wage || emp.already_paid) return
                             const idx = selectedEmpIds.indexOf(emp.emp_id)
                             if (idx === -1) selectedEmpIds.push(emp.emp_id)
                             else selectedEmpIds.splice(idx, 1)
                           }"
-                        >
-                          <template #prepend>
-                           <VCheckboxBtn
-                            :model-value="selectedEmpIds.includes(emp.emp_id)"
-                            :disabled="!emp.has_wage"
-                            density="compact"
-                            color="primary"
-                            hide-details
-                            @click.stop
-                            @update:model-value="() => {
-                              if (!emp.has_wage) return
-                              const idx = selectedEmpIds.indexOf(emp.emp_id)
-                              if (idx === -1) selectedEmpIds.push(emp.emp_id)
-                              else selectedEmpIds.splice(idx, 1)
-                            }"
-                            
-                          />
-                          </template>
-                          <VListItemTitle class="text-body-2 font-weight-medium">{{ emp.name }}</VListItemTitle>
-                          <VListItemSubtitle class="text-caption">{{ emp.position }}</VListItemSubtitle>
-                          <template #append>
-                            <VChip v-if="emp.has_wage" size="x-small" color="success" variant="tonal" label>
-                              {{ fmt(emp.wage) }}
-                            </VChip>
-                            <VChip v-else size="x-small" color="warning" variant="tonal" label>
-                              No wage set
-                            </VChip>
-                          </template>
-                        </VListItem>
+                          
+                        />
+                        </template>
+                        <VListItemTitle class="text-body-2 font-weight-medium">{{ emp.name }}</VListItemTitle>
+                        <VListItemSubtitle class="text-caption">{{ emp.position }}</VListItemSubtitle>
+                        <template #append>
+                          <VChip v-if="emp.already_paid" size="x-small" color="error" variant="tonal" label>
+                            <VIcon start size="10">mdi-cash-check</VIcon>
+                            Already Finalized — {{ emp.paid_payroll_no ?? 'another run' }}
+                          </VChip>
+                          <VChip v-else-if="emp.has_wage" size="x-small" color="success" variant="tonal" label>
+                            {{ fmt(emp.wage) }}
+                          </VChip>
+                          <VBtn
+                              v-else
+                              icon
+                              size="large"
+                              variant="tonal"
+                              color="amber-darken-4"
+                              density="comfortable"
+                              @click.stop="openWageDialog(emp)"
+                            >
+                              <VIcon size="18">mdi-cash-plus</VIcon>
+                              <VTooltip activator="parent" location="top">No deductions set yet — click to set</VTooltip>
+                            </VBtn>
+                        </template>
+                      </VListItem>
                       </VList>
                     </div>
                   </VCardText>
@@ -1599,6 +1372,7 @@ onMounted(async () => {
                             <th class="text-right">PhilHealth</th>
                             <th class="text-right">Pag-IBIG</th>
                             <th class="text-right">SSS</th>
+                            <th class="text-right">Total Deductions</th>
                             <th class="text-right text-success">Net Pay</th>
                             <th class="text-left">Remarks</th>
                             <th class="text-center">Actions</th>
@@ -1668,6 +1442,7 @@ onMounted(async () => {
                             <td class="text-right text-caption text-error">{{ fmt(emp.philhealth) }}</td>
                             <td class="text-right text-caption text-error">{{ fmt(emp.pag_ibig) }}</td>
                             <td class="text-right text-caption text-error">{{ emp.sss > 0 ? fmt(emp.sss) : '—' }}</td>
+                            <td class="text-right text-caption font-weight-bold text-error">{{ fmt(emp.total_deductions) }}</td>
                             <td class="text-right text-caption font-weight-bold text-success">{{ fmt(emp.net_pay) }}</td>
                             <td class="text-caption text-medium-emphasis" style="max-width:120px;white-space:pre-wrap">
                               {{ emp.remarks || '—' }}
@@ -1703,7 +1478,7 @@ onMounted(async () => {
                             <td class="text-right text-caption font-weight-bold pr-2">Section Total</td>
                             <td colspan="2"></td>
                             <td class="text-right text-caption font-weight-bold">{{ fmt(secGroup.subtotal.gross) }}</td>
-                            <td colspan="5" class="text-right text-caption font-weight-bold text-error">
+                            <td colspan="6" class="text-right text-caption font-weight-bold text-error">
                               Deductions: {{ fmt(secGroup.subtotal.total_deductions) }}
                             </td>
                             <td class="text-right text-caption font-weight-bold text-success">{{ fmt(secGroup.subtotal.net_pay) }}</td>
@@ -1869,7 +1644,22 @@ onMounted(async () => {
               <VTextField v-model.number="editForm.ewt" label="EWT" type="number" prefix="₱" variant="outlined" density="compact" min="0" />
             </VCol>
             <VCol cols="12">
-              <VTextField v-model="editForm.remarks" label="Remarks" variant="outlined" density="compact" prepend-inner-icon="mdi-note-outline" />
+              <VTextField
+                v-model="editForm.remarks"
+                label="Remarks"
+                variant="outlined"
+                density="compact"
+                prepend-inner-icon="mdi-note-outline"
+                :hint="remarksDirty ? 'Manually edited — no longer follows the fields above' : 'Auto-filled from Days Absent / Minutes Late-UT'"
+                persistent-hint
+              >
+                <template v-if="remarksDirty" #append-inner>
+                  <VBtn icon size="x-small" variant="text" color="primary" @click="resetRemarksToAuto">
+                    <VIcon size="14">mdi-refresh</VIcon>
+                    <VTooltip activator="parent" location="top">Reset to auto-generated remarks</VTooltip>
+                  </VBtn>
+                </template>
+              </VTextField>
             </VCol>
             <VCol cols="12">
               <VCard variant="tonal" color="success" rounded="lg" flat>
@@ -1947,6 +1737,94 @@ onMounted(async () => {
       </VCard>
     </VDialog>
 
+    <!-- ── Set Deduction Dialog (quick-set from Add Employees panel) ── -->
+      <VDialog v-model="wageDialog" max-width="560" persistent>
+        <VCard rounded="lg">
+          <VCardText class="pa-6">
+            <div class="d-flex align-center gap-3 mb-4">
+              <VAvatar color="primary" variant="tonal" size="44" rounded="lg">
+                <VIcon icon="mdi-cash-plus" size="22" />
+              </VAvatar>
+              <div>
+                <div class="text-body-1 font-weight-medium">Set Deduction</div>
+                <div class="text-caption text-medium-emphasis">{{ wageTargetEmp?.name }}</div>
+              </div>
+            </div>
+
+            <VAlert v-if="wageTargetEmp?.has_hrmis_wage" type="info" variant="tonal" density="compact" icon="mdi-database-sync-outline" class="mb-4">
+              <span class="text-body-2">
+                Wage pre-filled from HRMIS
+                (<strong>{{ fmt(wageTargetEmp.hrmis_wage!) }}</strong>).
+                Saving will also update the HRMIS record.
+              </span>
+            </VAlert>
+
+            <VRow dense>
+              <VCol cols="12" sm="7">
+                <VTextField
+                  v-model.number="wageForm.wage" label="Monthly Wage" type="number" prefix="₱"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-cash-outline"
+                  :error-messages="wageFormErrors.wage" min="0.01"
+                />
+              </VCol>
+              <VCol cols="12" sm="5">
+                <VSelect
+                  v-model="wageForm.premium_percent" label="Premium Rate" :items="WAGE_PREMIUM_OPTIONS"
+                  item-title="title" item-value="value" variant="outlined" density="compact"
+                  prepend-inner-icon="mdi-percent-outline"
+                />
+              </VCol>
+              <VCol cols="12" sm="6">
+                <VTextField
+                  v-model.number="wageForm.philhealth" label="PhilHealth" type="number" prefix="₱"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-hospital-box-outline"
+                  :error-messages="wageFormErrors.philhealth"
+                  :hint="(wageTargetEmp?.salary_grade ?? 0) >= WAGE_SG_CUTOFF ? '5% of wage — monthly' : 'Min ₱500, deducted ×3 on Jan/Apr/Jul/Oct'"
+                  persistent-hint
+                  :readonly="(wageTargetEmp?.salary_grade ?? 0) >= WAGE_SG_CUTOFF"
+                />
+              </VCol>
+              <VCol cols="12" sm="6">
+                <VTextField
+                  v-model.number="wageForm.pag_ibig" label="Pag-IBIG" type="number" prefix="₱"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-home-outline"
+                  :error-messages="wageFormErrors.pag_ibig" hint="Min ₱400/month" persistent-hint
+                />
+              </VCol>
+              <VCol cols="12" sm="6">
+                <div class="d-flex align-center justify-space-between mb-1">
+                  <span class="text-body-2">SSS</span>
+                  <VSwitch
+                    v-model="wageSssOptIn" color="primary" density="compact" hide-details inset
+                    @update:model-value="val => { if (!val) wageForm.sss = 0; else if (wageForm.sss === 0) wageForm.sss = WAGE_SSS_MIN }"
+                  />
+                </div>
+                <VTextField
+                  v-if="wageSssOptIn" v-model.number="wageForm.sss" label="SSS Amount" type="number" prefix="₱"
+                  variant="outlined" density="compact" :error-messages="wageFormErrors.sss"
+                  hint="Min ₱750/month" persistent-hint
+                />
+                <p v-else class="text-caption text-medium-emphasis mb-0">Opted out — recorded as ₱0.</p>
+              </VCol>
+              <VCol cols="12" sm="6">
+                <VTextField
+                  v-model.number="wageForm.ewt_rate" label="EWT Rate" type="number" suffix="%"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-percent-outline"
+                  hint="Default 5%. Applies after ₱250,000 annual gross." persistent-hint min="0" max="100"
+                />
+              </VCol>
+            </VRow>
+          </VCardText>
+          <VDivider />
+          <VCardActions class="justify-end pa-4 gap-2">
+            <VBtn variant="text" :disabled="wageSaving" @click="wageDialog = false">Cancel</VBtn>
+            <VBtn color="primary" variant="tonal" :loading="wageSaving" @click="saveWage">
+              <VIcon start size="16">mdi-content-save-outline</VIcon>Save Deduction
+            </VBtn>
+          </VCardActions>
+        </VCard>
+      </VDialog>
+
     <!-- ── Document Generation Dialog ── -->
     <!-- FIX #1 & #2: Moved to root level, old VSelect-based dialog removed -->
     <VDialog v-model="docDialog" max-width="500" persistent>
@@ -1979,7 +1857,10 @@ onMounted(async () => {
                 <VCardText class="py-2 px-4">
                   <div class="d-flex align-center gap-2">
                     <VIcon icon="mdi-account-check-outline" size="16" />
-                    <span class="text-body-2 font-weight-medium">{{ approvedByLabel }}</span>
+                     <div>
+                      <div class="text-body-2 font-weight-medium">{{ approvedByName }}</div>
+                      <div class="text-caption">{{ approvedByPosition }}</div>
+                    </div>
                   </div>
                 </VCardText>
               </VCard>
@@ -2061,10 +1942,10 @@ onMounted(async () => {
 
         <VDivider />
         <VCardActions class="justify-end pa-4 gap-2">
-          <VBtn variant="text" :disabled="docLoading" @click="docDialog = false">Cancel</VBtn>
+          <VBtn variant="text" :disabled="docGenerateLoading" @click="docDialog = false">Cancel</VBtn>
           <VBtn
             :color="docType === 'payroll_sheet' ? 'primary' : docType === 'ors' ? 'indigo' : 'deep-purple'"
-            variant="tonal" prepend-icon="mdi-file-pdf-box" :loading="docLoading"
+            variant="tonal" prepend-icon="mdi-file-pdf-box" :loading="docGenerateLoading"
             @click="generateDocument"
           >
             Generate PDF
