@@ -31,6 +31,8 @@ interface AttendanceRow {
   total_undertime_minutes:  number
   dtr_absent_days:          number
   dtr_late_minutes:         number
+  pass_slip_late_minutes:   number
+  absent_penalty_removed_minutes:       number
   has_adjustment:           boolean
 }
 
@@ -989,7 +991,12 @@ watch(activeTab, (tab) => {
                       <template #activator="{ props }">
                         <VChip v-bind="props" color="info" size="x-small" variant="tonal" label>adj</VChip>
                       </template>
-                      DTR: {{ fmtMins(item.dtr_late_minutes) }} + pass slip: {{ fmtMins(item.total_late_minutes - item.dtr_late_minutes) }} = {{ fmtMins(item.total_late_minutes) }}
+                      <span>
+                        DTR: {{ fmtMins(item.dtr_late_minutes) }}
+                        <template v-if="item.pass_slip_late_minutes > 0"> + pass slip: {{ fmtMins(item.pass_slip_late_minutes) }}</template>
+                        <template v-if="item.absent_penalty_removed_minutes > 0"> − Official Travel/Leave: {{ fmtMins(item.absent_penalty_removed_minutes) }}</template>
+                        = {{ fmtMins(item.total_late_minutes) }}
+                      </span>                    
                     </VTooltip>
                   </div>
                 </template>
