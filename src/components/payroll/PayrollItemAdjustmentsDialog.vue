@@ -87,16 +87,42 @@ const alertMessage = ref('')
 const alertType    = ref<AlertType>('success')
 
 // ── Add form ──
-const BLANK_FORM = () => ({
-  type:           '' as 'pass_slip' | 'official_travel' | 'leave' | '',
-  pass_slip_type: '' as 'personal' | 'official' | '',
-  date:           '',
-  date_to:        '' as string | null,
-  minutes:        null as number | null,
-  notes:          '',
+interface BatchRow {
+  _uid:           number
+  type:           'pass_slip' | 'official_travel' | 'leave' | ''
+  pass_slip_type: 'personal' | 'official' | ''
+  date:           string
+  date_to:        string | null
+  minutes:        number | null
+  notes:          string
+}
+
+let rowUidSeq = 0
+const BLANK_ROW = (): BatchRow => ({
+  _uid: ++rowUidSeq, type: '', pass_slip_type: '',
+  date: '', date_to: '', minutes: null, notes: '',
 })
-const form       = ref(BLANK_FORM())
-const formErrors = ref<Record<string, string>>({})
+
+const rows      = ref<BatchRow[]>([BLANK_ROW()])
+const rowErrors = ref<Record<number, Record<string, string>>>({})
+
+function addRow() {
+  rows.value.push(BLANK_ROW())
+}
+function removeRow(uid: number) {
+  rows.value = rows.value.filter(r => r._uid !== uid)
+  delete rowErrors.value[uid]
+  if (rows.value.length === 0) rows.value.push(BLANK_ROW())
+}
+function onRowTypeChange(row: BatchRow, val: BatchRow['type']) {
+  row.type    = val
+  row.date    = ''
+  row.date_to = ''
+  if (val !== 'pass_slip') {
+    row.minutes        = null
+    row.pass_slip_type = ''
+  }
+}
 
 /* ─────────────────────────────────────────
    COMPUTED
@@ -156,20 +182,7 @@ const typeIcon = (type: string) => {
   return 'mdi-help-circle-outline'
 }
 
-const selectedDateIsCompressed = ref(false)
 
-watch(() => form.value.date, async (dateStr) => {
-  selectedDateIsCompressed.value = false
-  if (!dateStr || form.value.type === 'pass_slip') return
-  try {
-    const { data } = await axios.get('/api/week-schedules/check-compressed', {
-      params: { date: dateStr },
-    })
-    selectedDateIsCompressed.value = data.is_compressed ?? false
-  } catch {
-    // silently ignore — it's just informational
-  }
-})
 
 const fmt = (v: number) =>
   new Intl.NumberFormat('en-PH', {
@@ -182,20 +195,9 @@ const fmt = (v: number) =>
 watch(() => props.modelValue, (open) => {
   if (open && props.item) {
     fetchAdjustments()
-    form.value       = BLANK_FORM()
-    formErrors.value = {}
+    rows.value       = [BLANK_ROW()]
+    rowErrors.value  = {}
     deleteTarget.value = null
-  }
-})
-
-// When type changes, reset the date selection since pass-slip (single day)
-// and whole-day (range) pickers aren't interchangeable.
-watch(() => form.value.type, (t) => {
-  form.value.date    = ''
-  form.value.date_to = ''
-  if (t !== 'pass_slip') {
-    form.value.minutes        = null
-    form.value.pass_slip_type = ''
   }
 })
 
@@ -220,56 +222,75 @@ async function fetchAdjustments() {
   }
 }
 
-function validate(): boolean {
+function validateRow(row: BatchRow): Record<string, string> {
   const errs: Record<string, string> = {}
+  if (!row.type) errs.type = 'Type is required.'
+  if (!row.date) errs.date = 'Please pick a date.'
 
-  if (!form.value.type) errs.type = 'Type is required.'
-  if (!form.value.date) errs.date = 'Please pick a date.'
-
-  if (form.value.type === 'pass_slip') {
-    if (!form.value.pass_slip_type)
-      errs.pass_slip_type = 'Please select Personal or Official.'
-    if (!form.value.minutes || form.value.minutes < 1)
-      errs.minutes = 'Minutes must be at least 1 for a pass slip.'
-  } else if (form.value.date && !form.value.date_to) {
+  if (row.type === 'pass_slip') {
+    if (!row.pass_slip_type) errs.pass_slip_type = 'Please select Personal or Official.'
+    if (!row.minutes || row.minutes < 1) errs.minutes = 'Minutes must be at least 1 for a pass slip.'
+  } else if (row.date && !row.date_to) {
     errs.date = 'Please pick a date range.'
   }
-
-  formErrors.value = errs
-  return Object.keys(errs).length === 0
+  return errs
 }
 
-async function addAdjustment() {
-  if (!validate() || !props.item) return
+function validateAllRows(): boolean {
+  const allErrors: Record<number, Record<string, string>> = {}
+  let valid = true
+  for (const row of rows.value) {
+    const errs = validateRow(row)
+    if (Object.keys(errs).length > 0) {
+      allErrors[row._uid] = errs
+      valid = false
+    }
+  }
+  rowErrors.value = allErrors
+  return valid
+}
+
+async function saveBatch() {
+  if (!validateAllRows() || !props.item) return
   saving.value = true
   try {
-    // Build notes: prefix with [Personal Pass Slip] or [Official Pass Slip] if applicable
-    let notesValue = form.value.notes?.trim() || null
-    if (form.value.type === 'pass_slip' && form.value.pass_slip_type) {
-      const label = form.value.pass_slip_type === 'official'
-        ? '[Official Pass Slip]'
-        : '[Personal Pass Slip]'
-      notesValue = notesValue ? `${label} ${notesValue}` : label
-    }
-
-    const { data } = await axios.post(
-      `/api/payroll-run/${props.runId}/items/${props.item.id}/adjustments`,
-      {
-        type:    form.value.type,
-        date:    form.value.date,
-        date_to: form.value.type !== 'pass_slip' ? (form.value.date_to || form.value.date) : null,
-        minutes: form.value.type === 'pass_slip' ? form.value.minutes : 0,
+    const payload = rows.value.map(row => {
+      let notesValue = row.notes?.trim() || null
+      if (row.type === 'pass_slip' && row.pass_slip_type) {
+        const label = row.pass_slip_type === 'official' ? '[Official Pass Slip]' : '[Personal Pass Slip]'
+        notesValue = notesValue ? `${label} ${notesValue}` : label
+      }
+      return {
+        type:    row.type,
+        date:    row.date,
+        date_to: row.type !== 'pass_slip' ? (row.date_to || row.date) : null,
+        minutes: row.type === 'pass_slip' ? row.minutes : 0,
         notes:   notesValue,
       }
+    })
+
+    const { data } = await axios.post(
+      `/api/payroll-run/${props.runId}/items/${props.item.id}/adjustments/batch`,
+      { adjustments: payload }
     )
     if (!data.success) throw new Error(data.message)
-    showAlert('success', 'Adjustment added and deductions recomputed.')
-    adjustments.value = [...adjustments.value, data.data.adjustment]
+
+    showAlert('success', `${data.data.adjustments.length} adjustment(s) added and deductions recomputed.`)
+    adjustments.value = [...adjustments.value, ...data.data.adjustments]
     emit('updated', data.data.item)
-    form.value       = BLANK_FORM()
-    formErrors.value = {}
+    rows.value      = [BLANK_ROW()]
+    rowErrors.value = {}
   } catch (err: any) {
-    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to add adjustment.')
+    // Map backend row_errors (keyed by array index) back onto the matching row's _uid
+    if (err.response?.data?.row_errors) {
+  const mapped: Record<number, Record<string, string>> = {}
+  for (const [idx, msg] of Object.entries(err.response.data.row_errors)) {
+    const row = rows.value[Number(idx)]
+    if (row) mapped[row._uid] = { _general: msg as string }
+  }
+  rowErrors.value = mapped
+}
+    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to save adjustments.')
   } finally {
     saving.value = false
   }
@@ -487,145 +508,165 @@ function showAlert(type: AlertType, message: string) {
 
         <VDivider class="mb-4" />
 
-        <!-- ── Add New Adjustment Form ── -->
-        <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
-          Add Adjustment
-        </p>
+        <!-- ── Add New Adjustments (batch) ── -->
+<p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
+  Add Adjustments
+</p>
 
-        <VRow dense>
-          <!-- Type -->
-          <VCol cols="12" sm="4">
-            <VSelect
-              v-model="form.type"
-              label="Type"
-              :items="[
-                { title: 'Pass Slip',        value: 'pass_slip'       },
-                { title: 'Official Travel',  value: 'official_travel' },
-                { title: 'Leave',            value: 'leave'           },
-              ]"
-              item-title="title"
-              item-value="value"
-              variant="outlined"
-              density="compact"
-              prepend-inner-icon="mdi-tag-outline"
-              :error-messages="formErrors.type"
-              hide-details="auto"
-            >
-              <template #item="{ props: itemProps, item: i }">
-                <VListItem v-bind="itemProps">
-                  <template #prepend>
-                    <VIcon :icon="typeIcon(i.value)" size="16" :color="typeColor(i.value)" class="mr-2" />
-                  </template>
-                </VListItem>
-              </template>
-            </VSelect>
-          </VCol>
+<div
+  v-for="(row, idx) in rows"
+  :key="row._uid"
+  class="mb-4 pa-3"
+  style="border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 8px;"
+>
+  <div class="d-flex justify-space-between align-center mb-2">
+    <span class="text-caption text-medium-emphasis font-weight-medium">Row {{ idx + 1 }}</span>
+    <VBtn v-if="rows.length > 1" icon size="x-small" variant="text" color="error" @click="removeRow(row._uid)">
+      <VIcon size="14">mdi-close</VIcon>
+    </VBtn>
+  </div>
 
-          <!-- Pass Slip Sub-type (personal / official) -->
-          <VCol v-if="form.type === 'pass_slip'" cols="12" sm="4">
-            <VSelect
-              v-model="form.pass_slip_type"
-              label="Pass Slip Type"
-              :items="[
-                { title: 'Personal', value: 'personal' },
-                { title: 'Official', value: 'official' },
-              ]"
-              item-title="title"
-              item-value="value"
-              variant="outlined"
-              density="compact"
-              prepend-inner-icon="mdi-account-question-outline"
-              :error-messages="formErrors.pass_slip_type"
-              hide-details="auto"
-            />
-          </VCol>
+  <VAlert v-if="rowErrors[row._uid]?._general" density="compact" variant="tonal" type="error" class="mb-2 text-caption">
+    {{ rowErrors[row._uid]._general }}
+  </VAlert>
 
-          <!-- Calendar-style date / date-range picker -->
-          <VCol cols="12" :sm="form.type === 'pass_slip' ? 4 : 8">
-            <AdjustmentDatePicker
-              :type="form.type"
-              :period-month="periodMonth"
-              :period-year="periodYear"
-              :date="form.date"
-              :date-to="form.date_to"
-              :disabled="!form.type"
-              :error-messages="formErrors.date || formErrors.date_to"
-              @update:date="form.date = $event"
-              @update:date-to="form.date_to = $event"
-            />
-          </VCol>
+  <VRow dense>
+    <!-- Type -->
+    <VCol cols="12" sm="4">
+      <VSelect
+        :model-value="row.type"
+        label="Type"
+        :items="[
+          { title: 'Pass Slip',        value: 'pass_slip'       },
+          { title: 'Official Travel',  value: 'official_travel' },
+          { title: 'Leave',            value: 'leave'           },
+        ]"
+        item-title="title"
+        item-value="value"
+        variant="outlined"
+        density="compact"
+        prepend-inner-icon="mdi-tag-outline"
+        :error-messages="rowErrors[row._uid]?.type"
+        hide-details="auto"
+        @update:model-value="(val: any) => onRowTypeChange(row, val)"
+      >
+        <template #item="{ props: itemProps, item: i }">
+          <VListItem v-bind="itemProps">
+            <template #prepend>
+              <VIcon :icon="typeIcon(i.value)" size="16" :color="typeColor(i.value)" class="mr-2" />
+            </template>
+          </VListItem>
+        </template>
+      </VSelect>
+    </VCol>
 
-          <!-- Minutes (pass slip only) -->
-          <VCol cols="12" sm="4">
-            <VTextField
-              v-model.number="form.minutes"
-              label="Minutes (pass slip)"
-              type="number"
-              variant="outlined"
-              density="compact"
-              prepend-inner-icon="mdi-clock-outline"
-              :disabled="form.type !== 'pass_slip'"
-              :error-messages="formErrors.minutes"
-              hide-details="auto"
-              min="1"
-              max="480"
-              :hint="form.type === 'pass_slip' ? 'Time away from office' : 'N/A for this type'"
-              :persistent-hint="form.type === 'pass_slip'"
-            />
-          </VCol>
+    <!-- Pass Slip Sub-type -->
+    <VCol v-if="row.type === 'pass_slip'" cols="12" sm="4">
+      <VSelect
+        v-model="row.pass_slip_type"
+        label="Pass Slip Type"
+        :items="[
+          { title: 'Personal', value: 'personal' },
+          { title: 'Official', value: 'official' },
+        ]"
+        item-title="title"
+        item-value="value"
+        variant="outlined"
+        density="compact"
+        prepend-inner-icon="mdi-account-question-outline"
+        :error-messages="rowErrors[row._uid]?.pass_slip_type"
+        hide-details="auto"
+      />
+    </VCol>
 
-          <!-- Helper text for whole-day types -->
-          <VCol v-if="form.type && form.type !== 'pass_slip'" cols="12">
-            <VAlert density="compact" variant="tonal"
-              :color="form.type === 'official_travel' ? 'blue' : 'teal'"
-              :icon="typeIcon(form.type)"
-              class="text-body-2">
-              <template v-if="form.type === 'official_travel'">
-                <strong>Official Travel</strong> — the selected date(s) will be subtracted from absent days.
-              </template>
-              <template v-else>
-                <strong>Leave</strong> — the selected date(s) will be subtracted from absent days.
-              </template>
-            </VAlert>
-          </VCol>
+    <!-- Date / Date range picker -->
+    <VCol cols="12" :sm="row.type === 'pass_slip' ? 4 : 8">
+      <AdjustmentDatePicker
+        :type="row.type"
+        :period-month="periodMonth"
+        :period-year="periodYear"
+        :date="row.date"
+        :date-to="row.date_to"
+        :disabled="!row.type"
+        :error-messages="rowErrors[row._uid]?.date || rowErrors[row._uid]?.date_to"
+        @update:date="row.date = $event"
+        @update:date-to="row.date_to = $event"
+      />
+    </VCol>
 
-          <VCol v-if="form.type === 'pass_slip'" cols="12">
-            <VAlert density="compact" variant="tonal" color="orange" icon="mdi-door-open" class="text-body-2">
-              <template v-if="form.pass_slip_type === 'official'">
-                <strong>Official Pass Slip</strong> — only minutes <strong>beyond the 2-hour (120 min) grace period</strong>
-                will be added to late/UT. Enter only the excess minutes (e.g. 2 hrs 15 min away → enter <strong>15</strong>).
-              </template>
-              <template v-else-if="form.pass_slip_type === 'personal'">
-                <strong>Personal Pass Slip</strong> — all minutes entered will be
-                <strong>added</strong> to the employee's late/UT minutes for deduction purposes.
-              </template>
-              <template v-else>
-                <strong>Pass Slip</strong> — select Personal or Official to see how minutes are computed.
-              </template>
-            </VAlert>
-          </VCol>
+    <!-- Minutes (pass slip only) -->
+    <VCol cols="12" sm="4">
+      <VTextField
+        v-model.number="row.minutes"
+        label="Minutes (pass slip)"
+        type="number"
+        variant="outlined"
+        density="compact"
+        prepend-inner-icon="mdi-clock-outline"
+        :disabled="row.type !== 'pass_slip'"
+        :error-messages="rowErrors[row._uid]?.minutes"
+        hide-details="auto"
+        min="1"
+        max="480"
+      />
+    </VCol>
 
-          <!-- Notes -->
-          <VCol cols="12">
-            <VTextField
-              v-model="form.notes"
-              label="Notes (optional)"
-              variant="outlined"
-              density="compact"
-              prepend-inner-icon="mdi-note-outline"
-              placeholder="e.g. Filed SP-2026-001, approved by division head"
-              hide-details
-            />
-          </VCol>
+    <!-- Helper text -->
+    <VCol v-if="row.type && row.type !== 'pass_slip'" cols="12">
+      <VAlert density="compact" variant="tonal"
+        :color="row.type === 'official_travel' ? 'blue' : 'teal'"
+        :icon="typeIcon(row.type)"
+        class="text-body-2">
+        <template v-if="row.type === 'official_travel'">
+          <strong>Official Travel</strong> — the selected date(s) will be subtracted from absent days.
+        </template>
+        <template v-else>
+          <strong>Leave</strong> — the selected date(s) will be subtracted from absent days.
+        </template>
+      </VAlert>
+    </VCol>
 
-          <!-- Submit -->
-          <VCol cols="12" class="d-flex justify-end">
-            <VBtn color="primary" variant="tonal" size="small" :loading="saving" @click="addAdjustment">
-              <VIcon start size="16">mdi-plus-circle-outline</VIcon>
-              Add Adjustment
-            </VBtn>
-          </VCol>
-        </VRow>
+    <VCol v-if="row.type === 'pass_slip'" cols="12">
+      <VAlert density="compact" variant="tonal" color="orange" icon="mdi-door-open" class="text-body-2">
+        <template v-if="row.pass_slip_type === 'official'">
+          <strong>Official Pass Slip</strong> — only minutes <strong>beyond the 2-hour (120 min) grace period</strong>
+          will be added to late/UT. Enter only the excess minutes.
+        </template>
+        <template v-else-if="row.pass_slip_type === 'personal'">
+          <strong>Personal Pass Slip</strong> — all minutes entered will be
+          <strong>added</strong> to the employee's late/UT minutes.
+        </template>
+        <template v-else>
+          <strong>Pass Slip</strong> — select Personal or Official to see how minutes are computed.
+        </template>
+      </VAlert>
+    </VCol>
+
+    <!-- Notes -->
+    <VCol cols="12">
+      <VTextField
+        v-model="row.notes"
+        label="Notes (optional)"
+        variant="outlined"
+        density="compact"
+        prepend-inner-icon="mdi-note-outline"
+        placeholder="e.g. Filed SP-2026-001, approved by division head"
+        hide-details
+      />
+    </VCol>
+  </VRow>
+</div>
+
+<div class="d-flex justify-space-between align-center">
+  <VBtn variant="text" size="small" color="primary" @click="addRow">
+    <VIcon start size="16">mdi-plus</VIcon>
+    Add Row
+  </VBtn>
+  <VBtn color="primary" variant="tonal" size="small" :loading="saving" @click="saveBatch">
+    <VIcon start size="16">mdi-content-save-outline</VIcon>
+    Save All ({{ rows.length }})
+  </VBtn>
+</div>
 
       </VCardText>
 

@@ -203,7 +203,6 @@ const engasSaving        = ref(false)
 // ── Document Generation ──
 const docDialog   = ref(false)
 const docType     = ref<DocType>('payroll_sheet')
-const docLoading  = ref(false)
 const sigsLoading = ref(false)
 
 // Resolved signatory data from backend
@@ -331,6 +330,32 @@ async function generateORSFromBackend() {
     showAlert('error', 'Failed to generate ORS.')
   } finally {
     orsLoading.value = false
+  }
+}
+
+const payrollSheetLoading = ref(false)
+
+async function generatePayrollSheetFromBackend() {
+  if (!run.value) return
+  payrollSheetLoading.value = true
+  try {
+    const response = await axios.post(
+      `/api/payroll-run/${run.value.id}/generate-payroll-sheet`,
+      {},
+      { responseType: 'blob' }
+    )
+    const filename = `PAYROLL-${run.value.payroll_no}.pdf`
+    const file = new File([response.data], filename, { type: 'application/pdf' })
+    const url  = URL.createObjectURL(file)
+    const tab  = window.open(url, '_blank')
+    if (!tab) {
+      showAlert('warning', 'Popup blocked. Please allow popups and try again.')
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (err: any) {
+    showAlert('error', 'Failed to generate Payroll Sheet.')
+  } finally {
+    payrollSheetLoading.value = false
   }
 }
 
@@ -807,7 +832,11 @@ const editPreviewNet = computed(() => {
 ───────────────────────────────────────── */
 async function generateDocument() {
   if (!run.value) return
-  // ORS/DV — dialog is a read-only confirmation; backend resolves signatories itself
+  if (docType.value === 'payroll_sheet') {
+    await generatePayrollSheetFromBackend()
+    docDialog.value = false
+    return
+  }
   if (docType.value === 'ors') {
     await generateORSFromBackend()
     docDialog.value = false
@@ -817,50 +846,6 @@ async function generateDocument() {
     await generateDVFromBackend()
     docDialog.value = false
     return
-  }
-  docLoading.value = true
-  try {
-    if (!(window as any).jspdf) {
-      await new Promise<void>((resolve, reject) => {
-        const s = document.createElement('script')
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
-        s.onload = () => resolve(); s.onerror = () => reject(new Error('Failed to load jsPDF.'))
-        document.head.appendChild(s)
-      })
-    }
-    if (!(window as any).jspdfAutotable) {
-      await new Promise<void>((resolve, reject) => {
-        const s = document.createElement('script')
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'
-        s.onload = () => resolve(); s.onerror = () => reject(new Error('Failed to load AutoTable.'))
-        document.head.appendChild(s);(window as any).jspdfAutotable = true
-      })
-    }
-
-    // Approved By — always the static ref
-    const approvedSig = docType.value === 'payroll_sheet'
-  ? HARDCODED_APPROVED_BY_PAYROLL
-  : approvedBySig.value
-
-    // Certified By — resolve slot 1 from user pick if free, otherwise use locked slot
-    const resolvedCertified: (Signatory | null)[] = certifiedBySlots.value.map((slot, i) => {
-      if (i === 0 && !slot1Locked.value) {
-        const picked = selectedCertifiedBy.value[0]
-        return selectablePool.value.find(s => s.id === picked) ?? null
-      }
-      return slot
-    })
-
-    const certSigs = resolvedCertified.slice(0, certifiedSlotCount.value)
-
-   generatePayrollSheet(approvedSig, certSigs)
-
-    showAlert('success', `${docTypeLabel.value} opened in a new tab.`)
-    docDialog.value = false
-  } catch (err: any) {
-    showAlert('error', err.message ?? 'Document generation failed.')
-  } finally {
-    docLoading.value = false
   }
 }
 
@@ -1026,7 +1011,7 @@ function generatePayrollSheet(approvedSig: Signatory | null, certSigs: (Signator
   const sigLineWithDateB = (sig: Signatory | null): string => {
     const name     = sig?.name     ?? ''
     const position = sig?.position ?? ''
-    return `\n\n\n\n_________________________________________                                                                                            _______________\n${name}                                                                                                                          Date\n                   ${position}                                                                                                                                       `
+    return `\n\n\n\n_________________________________________                                                                                            _______________\n${name}                                                Date\n                   ${position}                                                                                                                                       `
   }
 
   const sigLineWithDateC = (sig: Signatory | null): string => {
@@ -1093,9 +1078,10 @@ function generatePayrollSheet(approvedSig: Signatory | null, certSigs: (Signator
 }
 
 const docGenerateLoading = computed(() => {
-  if (docType.value === 'ors') return orsLoading.value
-  if (docType.value === 'dv')  return dvLoading.value
-  return docLoading.value
+  if (docType.value === 'ors')            return orsLoading.value
+  if (docType.value === 'dv')             return dvLoading.value
+  if (docType.value === 'payroll_sheet')  return payrollSheetLoading.value
+  return false
 })
 
 /* ─────────────────────────────────────────
@@ -1382,7 +1368,7 @@ onMounted(async () => {
                           <tr
                             v-for="(emp, idx) in secGroup.employees"
                             :key="emp.emp_id"
-                            :style="idx % 2 === 0 ? '' : 'background:rgba(var(--v-theme-surface-variant),0.4)'"
+                            :style="idx % 2 === 0 ? '' : 'background:rgba(var(--v-theme-surface-variant),0.08)'"
                           >
                             <td>
                               <div class="d-flex align-center gap-2">

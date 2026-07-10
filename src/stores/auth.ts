@@ -27,7 +27,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(credentials: { username: string; password: string }): Promise<void> {
     // 1. Authenticate and get token
-    const { data } = await axios.post('/api/auth/login', credentials)
+    const { data } = await axios.post('/api/auth/payroll-login', credentials)
     setToken(data.accessToken)
 
     const userStore = useUserStore()
