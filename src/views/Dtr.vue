@@ -2,7 +2,11 @@
 import BaseAlert from '@/components/base/BaseAlert.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
+import SetFlexiModal from '@/components/dtr/SetFlexiModal.vue'
+import realtime from '@/plugins/realtime'
+import { useUserStore } from '@/stores/user'
 import axios from '@axios'
+import { onUnmounted } from 'vue'
 
 /* ─────────────────────────────────────────
    TYPES
@@ -24,6 +28,7 @@ interface Employee {
   emp_type:    string | null
   emp_status:  number | null
   profile_pic: string | null
+  is_flexi:    boolean
 }
 
 interface AttendanceDay {
@@ -42,6 +47,7 @@ interface AttendanceDay {
   is_late_pm:              boolean
   late_minutes_pm:         number
   total_late_minutes:      number
+  is_absent_penalty:       boolean
   is_absent:               boolean
   entry_count:             number
   is_half_day_absent:      boolean
@@ -109,6 +115,14 @@ interface AttendanceRow extends AttendanceDay {
   isFriday:     boolean
 }
 
+// Calendar-only preview shown in the Save DTR confirmation dialog
+interface PeriodSummary {
+  regdays:           number
+  total_holidays:    number
+  total_suspensions: number
+  already_saved:     boolean
+}
+
 type AlertType = 'success' | 'error' | 'warning' | 'info'
 
 /* ─────────────────────────────────────────
@@ -153,18 +167,57 @@ const dtrData       = ref<DtrData | null>(null)
 // ── Save DTR state ──────────────────────────────────────────────────
 const savingDtr        = ref(false)
 const confirmSaveOpen  = ref(false)
+const confirmOverrideOpen = ref(false)
 const savingElapsedSecs = ref(0)
 let   savingTimer: ReturnType<typeof setInterval> | null = null
 
+// ── Set Flexi state ─────────────────────────────────────────────────
+const flexiModalOpen   = ref(false)
+
+function handleFlexiSaved(updated: Employee[], message: string, isError = false) {
+  employees.value = updated
+  alertType.value = isError ? 'error' : 'success'
+  alertMessage.value = message
+  alertVisible.value = true
+}
+
+// ── Save DTR progress (live via Reverb broadcast) ────────────────────
+const saveProgressDone  = ref(0)
+const saveProgressTotal = ref(0)
+
 // Period selector inside Save DTR dialog — defaults to preceding month
-const saveDtrMonth = ref<number>(new Date().getMonth() === 0 ? 12 : new Date().getMonth())
-const saveDtrYear  = ref<number>(
-  new Date().getMonth() === 0 ? new Date().getFullYear() - 1 : new Date().getFullYear()
-)
+function getDefaultSaveDtrPeriod() {
+  const now = new Date()
+  return {
+    month: now.getMonth() === 0 ? 12 : now.getMonth(),
+    year:  now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear(),
+  }
+}
+
+const defaultSaveDtrPeriod = getDefaultSaveDtrPeriod()
+const saveDtrMonth = ref<number>(defaultSaveDtrPeriod.month)
+const saveDtrYear  = ref<number>(defaultSaveDtrPeriod.year)
+
+// ── Period calendar preview (working days / holidays / suspensions) ──
+const periodSummary        = ref<PeriodSummary | null>(null)
+const periodSummaryLoading = ref(false)
+
+// Fetch the working days / holidays / suspensions preview whenever the
+// Save DTR dialog is opened, and again whenever the month/year selectors
+// inside the dialog change while it's open.
+watch(confirmSaveOpen, (open) => {
+  if (open) fetchPeriodSummary()
+})
+
+watch([saveDtrMonth, saveDtrYear], () => {
+  if (confirmSaveOpen.value) fetchPeriodSummary()
+})
 
 const alertVisible = ref(false)
 const alertMessage = ref('')
 const alertType    = ref<AlertType>('success')
+const userStore    = useUserStore()
+const realtimeConnectionError = ref(false)
 
 /* ─────────────────────────────────────────
    COMPUTED
@@ -200,6 +253,16 @@ const savingElapsedLabel = computed(() => {
   const m = Math.floor(s / 60)
   const r = s % 60
   return `${m}m ${r}s elapsed`
+})
+
+const saveProgressLabel = computed(() => {
+  if (saveProgressTotal.value === 0) return 'Saving...'
+  return `Saving DTR ${saveProgressDone.value} out of ${saveProgressTotal.value}`
+})
+
+const saveProgressPercent = computed(() => {
+  if (saveProgressTotal.value === 0) return 0
+  return Math.round((saveProgressDone.value / saveProgressTotal.value) * 100)
 })
 
 const attendanceRows = computed<AttendanceRow[]>(() => {
@@ -274,6 +337,12 @@ async function fetchData() {
     const { data } = await axios.get('/api/dtr')
     employees.value    = data.data.employees     ?? []
     deviceStatus.value = data.data.device_status ?? []
+
+    // Re-sync the Save DTR period in case the dialog's selectors were
+    // changed to a future/incomplete month and left that way
+    const defaultPeriod = getDefaultSaveDtrPeriod()
+    saveDtrMonth.value = defaultPeriod.month
+    saveDtrYear.value  = defaultPeriod.year
   } catch {
     showAlert('error', 'Failed to load DTR data.')
   } finally {
@@ -298,18 +367,60 @@ async function fetchDtr() {
   }
 }
 
+async function fetchPeriodSummary() {
+  periodSummaryLoading.value = true
+  periodSummary.value        = null
+
+  try {
+    const { data } = await axios.get(
+      `/api/dtr/period-summary/${saveDtrMonth.value}/${saveDtrYear.value}`,
+    )
+    periodSummary.value = {
+      ...data.data,
+      already_saved: data.already_saved,
+    }
+  } catch {
+    // Non-critical preview — fail silently, dialog still works without it
+    periodSummary.value = null
+  } finally {
+    periodSummaryLoading.value = false
+  }
+}
+
 // ── Save DTR for all JO employees (preceding month) ────────────────
-async function saveDtr() {
+// Resets the saving UI — called when the job finishes via Reverb
+// (completed/failed), or when the initial dispatch request itself fails.
+function finishSavingDtr() {
+  if (savingTimer) clearInterval(savingTimer)
+  savingTimer              = null
+  savingDtr.value          = false
+  confirmSaveOpen.value    = false
+  savingElapsedSecs.value  = 0
+  saveProgressDone.value   = 0
+  saveProgressTotal.value  = 0
+  periodSummary.value      = null
+}
+
+// Shared by saveDtr() and overrideDtr() — both queue a job for the same
+// month/year payload and drive the same progress UI; only the target
+// endpoint and the 422 fallback message differ.
+async function runDtrJob(endpoint: string, incompleteMonthMessage: string) {
   if (savingDtr.value) return
   savingDtr.value         = true
   savingElapsedSecs.value = 0
   savingTimer = setInterval(() => { savingElapsedSecs.value++ }, 1000)
+
+  saveProgressDone.value  = 0
+  saveProgressTotal.value = 0
+
   try {
-    const { data } = await axios.post('/api/dtr/save', {
+    // This only confirms the job was queued — NOT that it finished.
+    // Completion/failure arrives via payload.status on the Reverb
+    // progress event (see onMounted below).
+    await axios.post(endpoint, {
       month: saveDtrMonth.value,
       year:  saveDtrYear.value,
     })
-    showAlert('success', data.message)
   } catch (err: any) {
     const status  = err?.response?.status
     const message = err?.response?.data?.message
@@ -317,17 +428,21 @@ async function saveDtr() {
     if (status === 409) {
       showAlert('warning', message ?? `DTR for ${saveDtrLabel.value} has already been saved.`)
     } else if (status === 422) {
-      showAlert('warning', message ?? `DTR for ${saveDtrLabel.value} is not yet complete.`)
+      showAlert('warning', message ?? incompleteMonthMessage)
     } else {
-      showAlert('error', message ?? 'Failed to save DTR. Please try again.')
+      showAlert('error', message ?? 'Failed to process DTR. Please try again.')
     }
-  } finally {
-    if (savingTimer) clearInterval(savingTimer)
-    savingTimer              = null
-    savingDtr.value          = false
-    confirmSaveOpen.value    = false
-    savingElapsedSecs.value  = 0
+    finishSavingDtr()
   }
+}
+
+async function saveDtr() {
+  await runDtrJob('/api/dtr/save', `DTR for ${saveDtrLabel.value} is not yet complete.`)
+}
+
+async function overrideDtr() {
+  confirmOverrideOpen.value = false
+  await runDtrJob('/api/dtr/override', `DTR for ${saveDtrLabel.value} is not yet complete.`)
 }
 
 /* ─────────────────────────────────────────
@@ -346,10 +461,56 @@ function closeModal() {
   dtrData.value   = null
 }
 
+function cancelSaveDtr() {
+  confirmSaveOpen.value = false
+  const defaultPeriod = getDefaultSaveDtrPeriod()
+  saveDtrMonth.value = defaultPeriod.month
+  saveDtrYear.value  = defaultPeriod.year
+  periodSummary.value = null
+}
+
 /* ─────────────────────────────────────────
    INIT
 ───────────────────────────────────────── */
-onMounted(fetchData)
+onMounted(() => {
+  fetchData()
+
+  const userId = userStore.user?.id
+  if (!userId) return
+
+  realtime.subscribeToDtrProgress(
+    userId,
+    payload => {
+      realtimeConnectionError.value = false
+
+      if (payload.status === 'completed') {
+        showAlert('success', payload.message)
+        finishSavingDtr()
+        return
+      }
+
+      if (payload.status === 'failed') {
+        showAlert('error', payload.message || 'DTR save failed. Please try again.')
+        finishSavingDtr()
+        return
+      }
+
+      // status === 'running'
+      saveProgressDone.value  = payload.current
+      saveProgressTotal.value = payload.total
+    },
+    () => {
+      realtimeConnectionError.value = true
+    },
+  )
+})
+
+onUnmounted(() => {
+  const userId = userStore.user?.id
+  if (!userId) return
+
+  realtime.leaveDtrProgress(userId)
+})
 </script>
 
 <template>
@@ -394,6 +555,16 @@ onMounted(fetchData)
               }}
             </span>
           </VTooltip>
+
+          <!-- Set Flexi button — mark/unmark employees on the flexi schedule -->
+          <VBtn
+            variant="tonal"
+            color="info"
+            prepend-icon="mdi-account-clock-outline"
+            @click="flexiModalOpen = true"
+          >
+            Set Flexi
+          </VBtn>
         </div>
       </div>
 
@@ -472,6 +643,9 @@ onMounted(fetchData)
               </span>
             </VAvatar>
             <span>{{ item.full_name }}</span>
+            <VChip v-if="item.is_flexi" size="x-small" color="info" variant="tonal" label>
+              Flexi
+            </VChip>
           </div>
         </template>
         <template #item.position="{ item }">
@@ -587,16 +761,16 @@ onMounted(fetchData)
           <VCol cols="6" sm="3">
             <VCard variant="tonal" color="warning" rounded="lg">
               <VCardText class="pa-3 text-center">
-                <div class="text-h6 font-weight-bold">{{ dtrData.total_late_minutes }} mins</div>
-                <div class="text-caption">Late Minutes</div>
+                <div class="text-h6 font-weight-bold">{{ dtrData.total_late_minutes }}m</div>
+                <div class="text-caption">Total Late Minutes</div>
               </VCardText>
             </VCard>
           </VCol>
           <VCol cols="6" sm="3">
             <VCard variant="tonal" color="info" rounded="lg">
               <VCardText class="pa-3 text-center">
-                <div class="text-h6 font-weight-bold">{{ fmtMinutes(dtrData.total_undertime_minutes) }}</div>
-                <div class="text-caption">Total Undertime</div>
+                <div class="text-h6 font-weight-bold">{{ dtrData.total_undertime_minutes }}m</div>
+                <div class="text-caption">Total Undertime Minutes</div>
               </VCardText>
             </VCard>
           </VCol>
@@ -783,7 +957,7 @@ onMounted(fetchData)
                             ½ Day
                           </VChip>
                           <VChip v-if="row.total_late_minutes > 0" color="warning" size="x-small" variant="tonal" label>
-                            {{ row.is_absent && row.schedule_type === 'compressed' ? '+ ' : '' }}Late {{ row.total_late_minutes }}m
+                            {{ row.is_absent_penalty ? '+ ' : '' }}Late {{ row.total_late_minutes }}m
                           </VChip>
                           <VChip v-if="row.total_undertime_minutes > 0" color="info" size="x-small" variant="tonal" label>
                             UT {{ row.total_undertime_minutes }}m
@@ -825,72 +999,192 @@ onMounted(fetchData)
     <VDialog v-model="confirmSaveOpen" max-width="440" persistent>
       <VCard rounded="lg">
         <VCardText class="pa-6">
-          <div class="d-flex align-center gap-3 mb-4">
-            <VIcon icon="mdi-content-save-outline" color="success" size="28" />
-            <span class="text-h6 font-weight-bold">Save DTR</span>
-          </div>
-          <p class="text-body-2 mb-3">
-            This will save DTR summary totals for <strong>all active JO employees</strong> for:
-          </p>
+          <!-- ── Idle state: form ── -->
+          <template v-if="!savingDtr">
+            <div class="d-flex align-center gap-3 mb-4">
+              <VIcon icon="mdi-content-save-outline" color="success" size="28" />
+              <span class="text-h6 font-weight-bold">Save DTR</span>
+            </div>
+            <p class="text-body-2 mb-3">
+              This will save DTR summary totals for <strong>all active JO employees</strong> for:
+            </p>
 
-          <!-- ── Period selectors ── -->
-          <VRow dense class="mb-3">
-            <VCol cols="7">
-              <VSelect
-                v-model="saveDtrMonth"
-                label="Month"
-                :items="MONTH_ITEMS"
-                item-title="title"
-                item-value="value"
-                variant="outlined"
-                density="compact"
-                prepend-inner-icon="mdi-calendar-month-outline"
-                hide-details
+            <!-- ── Period selectors ── -->
+            <VRow dense class="mb-3">
+              <VCol cols="7">
+                <VSelect
+                  v-model="saveDtrMonth"
+                  label="Month"
+                  :items="MONTH_ITEMS"
+                  item-title="title"
+                  item-value="value"
+                  variant="outlined"
+                  density="compact"
+                  prepend-inner-icon="mdi-calendar-month-outline"
+                  hide-details
+                />
+              </VCol>
+              <VCol cols="5">
+                <VSelect
+                  v-model="saveDtrYear"
+                  label="Year"
+                  :items="YEAR_ITEMS"
+                  variant="outlined"
+                  density="compact"
+                  prepend-inner-icon="mdi-calendar-outline"
+                  hide-details
+                />
+              </VCol>
+            </VRow>
+
+            <p class="text-body-1 font-weight-bold text-success mb-3">
+              {{ saveDtrLabel }}
+            </p>
+
+            <!-- ── Calendar preview: working days / holidays / suspensions ── -->
+            <div class="d-flex flex-wrap gap-2 mb-3">
+              <VProgressCircular
+                v-if="periodSummaryLoading"
+                indeterminate
+                size="18"
+                width="2"
+                color="success"
               />
-            </VCol>
-            <VCol cols="5">
-              <VSelect
-                v-model="saveDtrYear"
-                label="Year"
-                :items="YEAR_ITEMS"
-                variant="outlined"
+              <template v-else-if="periodSummary">
+                <VChip size="small" color="success" variant="tonal" prepend-icon="mdi-briefcase-check-outline">
+                  {{ periodSummary.regdays }} Working Days
+                </VChip>
+                <VChip size="small" color="warning" variant="tonal" prepend-icon="mdi-calendar-star">
+                  {{ periodSummary.total_holidays }} Holiday{{ periodSummary.total_holidays === 1 ? '' : 's' }}
+                </VChip>
+                <VChip size="small" color="error" variant="tonal" prepend-icon="mdi-calendar-remove-outline">
+                  {{ periodSummary.total_suspensions }} Suspension{{ periodSummary.total_suspensions === 1 ? '' : 's' }}
+                </VChip>
+              </template>
+            </div>
+
+            <!-- ── Already-saved warning: switches the flow to override ── -->
+            <VAlert
+              v-if="periodSummary?.already_saved"
+              type="warning"
+              variant="tonal"
+              density="compact"
+              class="mb-3"
+              icon="mdi-alert-circle-outline"
+            >
+              DTR for {{ saveDtrLabel }} has already been saved. Do you want to override the existing data?
+            </VAlert>
+
+            <VAlert
+              v-if="!isMonthComplete"
+              type="warning"
+              variant="tonal"
+              density="compact"
+              class="mb-3"
+              icon="mdi-calendar-alert"
+            >
+              {{ saveDtrLabel }} is not yet complete. DTR can only be saved after the month has fully ended.
+            </VAlert>
+
+            <p class="text-caption text-medium-emphasis">
+              This action cannot be undone.
+            </p>
+          </template>
+
+          <!-- ── Saving state: real progress screen (polled from backend) ── -->
+          <template v-else>
+            <div class="d-flex flex-column align-center text-center py-6">
+              <VAlert
+                v-if="realtimeConnectionError"
+                type="warning"
                 density="compact"
-                prepend-inner-icon="mdi-calendar-outline"
-                hide-details
+                variant="tonal"
+                class="mb-4"
+                style="max-width: 320px;"
+              >
+                Live progress connection lost. The save is still running in the background — refresh after it completes to confirm.
+              </VAlert>
+
+              <VProgressCircular
+                :model-value="saveProgressPercent"
+                size="72"
+                width="5"
+                color="success"
+                class="mb-4"
+              >
+                <span class="text-caption font-weight-bold">{{ saveProgressPercent }}%</span>
+              </VProgressCircular>
+
+              <p class="text-body-1 font-weight-medium mb-1">
+                {{ saveProgressLabel }}
+              </p>
+
+              <VProgressLinear
+                :model-value="saveProgressPercent"
+                color="success"
+                height="6"
+                rounded
+                class="mb-3"
+                style="max-width: 280px;"
               />
-            </VCol>
-          </VRow>
 
-          <p class="text-body-1 font-weight-bold text-success mb-3">
-            {{ saveDtrLabel }}
-          </p>
-
-          <VAlert
-            v-if="!isMonthComplete"
-            type="warning"
-            variant="tonal"
-            density="compact"
-            class="mb-3"
-            icon="mdi-calendar-alert"
-          >
-            {{ saveDtrLabel }} is not yet complete. DTR can only be saved after the month has fully ended.
-          </VAlert>
-
-          <p class="text-caption text-medium-emphasis">
-            This action cannot be undone. If DTR for the selected period has already been saved, the request will be blocked.
-          </p>
+              <p class="text-caption text-medium-emphasis mb-0">
+                {{ saveDtrLabel }} — {{ savingElapsedLabel }}
+              </p>
+              <p class="text-caption text-medium-emphasis mt-1">
+                Please don't close this window.
+              </p>
+            </div>
+          </template>
         </VCardText>
-        <VCardActions class="pa-4 pt-0 gap-2 justify-end">
-          <VBtn variant="text" @click="confirmSaveOpen = false">Cancel</VBtn>
-          <span v-if="savingDtr" class="text-caption text-medium-emphasis me-2">
-            {{ savingElapsedLabel }}
-          </span>
-          <VBtn color="success" variant="tonal" prepend-icon="mdi-content-save-outline" :loading="savingDtr" :disabled="savingDtr || !isMonthComplete" @click="saveDtr">
+        <VCardActions v-if="!savingDtr" class="pa-4 pt-0 gap-2 justify-end">
+          <VBtn variant="text" @click="cancelSaveDtr">Cancel</VBtn>
+          <VBtn
+            v-if="periodSummary?.already_saved"
+            color="warning"
+            variant="tonal"
+            prepend-icon="mdi-restore-alert"
+            @click="confirmOverrideOpen = true"
+            :disabled="!canSaveDtr"
+          >
+            Override
+          </VBtn>
+          <VBtn v-else color="success" variant="tonal" prepend-icon="mdi-content-save-outline" @click="saveDtr" :disabled="!canSaveDtr">
             Save
           </VBtn>
         </VCardActions>
       </VCard>
     </VDialog>
+
+    <!-- ── Override confirmation: second, explicit "are you sure" step ── -->
+    <VDialog v-model="confirmOverrideOpen" max-width="400">
+      <VCard rounded="lg">
+        <VCardText class="pa-6">
+          <div class="d-flex align-center gap-3 mb-4">
+            <VIcon icon="mdi-alert-circle-outline" color="warning" size="28" />
+            <span class="text-h6 font-weight-bold">Confirm Override</span>
+          </div>
+          <p class="text-body-2">
+            Are you sure you want to override the existing DTR for
+            <strong>{{ saveDtrLabel }}</strong>? This will overwrite the previously
+            saved data for all active JO employees and cannot be undone.
+          </p>
+        </VCardText>
+        <VCardActions class="pa-4 pt-0 gap-2 justify-end">
+          <VBtn variant="text" @click="confirmOverrideOpen = false">Cancel</VBtn>
+          <VBtn color="warning" variant="tonal" prepend-icon="mdi-restore-alert" @click="overrideDtr">
+            Yes, Override
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
+    <!-- ── Set Flexi Modal ── -->
+    <SetFlexiModal
+      v-model="flexiModalOpen"
+      :employees="employees"
+      @saved="handleFlexiSaved"
+    />
 
     <!-- ── Alert ── -->
     <BaseAlert
