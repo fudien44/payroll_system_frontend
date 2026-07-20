@@ -53,7 +53,7 @@ interface PunctualityEmployee {
   name:             string   // "RODRIGUEZ, JULIUS CEZAR"
   position:         string   // "Administrative Assistant III"
   regdays:          number   // 22
-  has_adjustments:  boolean  // true if absences were fully offset by leave/official travel (unused in UI; kept in payload)
+  has_adjustments:  boolean  // true if absences were fully offset by leave/official travel
 }
 
 interface PunctualityDivision {
@@ -607,6 +607,7 @@ const exportingPayslip      = ref(false)
 const selectAll             = ref(false)
 const payslipSearch         = ref('')
 const excludedCount         = ref(0)
+const payslipPeriodMenu     = ref(false)
 
 // Validate that end period is not before start period
 const endPeriodIsValid = computed(() => {
@@ -1157,7 +1158,24 @@ watch(activeTab, (tab) => {
                   <span class="text-medium-emphasis">{{ item.index }}</span>
                 </template>
                 <template #item.name="{ item }">
-                  <span class="font-weight-medium">{{ item.name }}</span>
+                  <div class="d-flex align-center gap-2">
+                    <span class="font-weight-medium">{{ item.name }}</span>
+                    <VTooltip v-if="item.has_adjustments" location="top">
+                      <template #activator="{ props }">
+                        <VChip
+                          v-bind="props"
+                          color="info"
+                          size="x-small"
+                          variant="tonal"
+                          label
+                          prepend-icon="mdi-clipboard-clock-outline"
+                        >
+                          adj
+                        </VChip>
+                      </template>
+                      <span>Absence(s) fully offset by Leave/Official Travel</span>
+                    </VTooltip>
+                  </div>
                 </template>
                 <template #item.regdays="{ item }">
                   <VChip color="success" size="x-small" variant="tonal" label>
@@ -1165,6 +1183,18 @@ watch(activeTab, (tab) => {
                   </VChip>
                 </template>
               </VDataTable>
+              <!-- Legend: shown only if any employee in this division has adjustments -->
+              <div
+                v-if="division.employees.some(e => e.has_adjustments)"
+                class="d-flex align-center gap-1 mt-2 px-1"
+              >
+                <VChip color="info" size="x-small" variant="tonal" label prepend-icon="mdi-clipboard-clock-outline">
+                  adj
+                </VChip>
+                <span class="text-caption text-medium-emphasis">
+                  — Absence(s) fully offset by approved Leave or Official Travel
+                </span>
+              </div>
             </VCardText>
           </VCard>
 
@@ -1365,93 +1395,132 @@ watch(activeTab, (tab) => {
         <VCol cols="12">
           <VCard variant="flat" rounded="lg">
             <VCardText>
-              <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-4">
+              <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
                 Select Period
               </p>
 
-              <!-- ── From / To cards ── -->
-              <VRow dense align="center" class="mb-3">
-                <!-- FROM card -->
-                <VCol cols="12" md="5">
-                  <VCard variant="elevated" rounded="lg" elevation="2" class="pa-4">
-                    <p class="text-caption text-medium-emphasis mb-2">
-                      <VIcon icon="mdi-calendar-plus-outline" size="14" class="me-1" />
-                      From
-                    </p>
-                    <VRow dense>
-                      <VCol cols="7">
-                        <VSelect
-                          v-model="payslipStartMonth"
-                          label="Month"
-                          :items="MONTH_ITEMS"
-                          item-title="title"
-                          item-value="value"
-                          variant="outlined"
-                          density="compact"
-                          hide-details
-                        />
+              <!-- ── Collapsed period trigger + popover ── -->
+              <VMenu
+                v-model="payslipPeriodMenu"
+                :close-on-content-click="false"
+                location="bottom start"
+                min-width="380"
+              >
+                <template #activator="{ props }">
+                  <VBtn
+                    v-bind="props"
+                    variant="outlined"
+                    :color="endPeriodIsValid ? 'primary' : 'error'"
+                    prepend-icon="mdi-calendar-range-outline"
+                    append-icon="mdi-chevron-down"
+                    class="mb-3 text-none"
+                  >
+                    {{ payslipMonthLabel }}
+                    <VChip
+                      v-if="isMultiMonth"
+                      size="x-small"
+                      color="primary"
+                      variant="flat"
+                      label
+                      class="ml-2"
+                    >
+                      {{ periodCount }} mo
+                    </VChip>
+                  </VBtn>
+                </template>
+
+                <VCard rounded="lg" elevation="4">
+                  <VCardText>
+                    <VRow dense align="center">
+                      <!-- FROM -->
+                      <VCol cols="12" sm="6">
+                        <p class="text-caption text-medium-emphasis mb-2">
+                          <VIcon icon="mdi-calendar-plus-outline" size="14" class="me-1" />
+                          From
+                        </p>
+                        <VRow dense>
+                          <VCol cols="7">
+                            <VSelect
+                              v-model="payslipStartMonth"
+                              label="Month"
+                              :items="MONTH_ITEMS"
+                              item-title="title"
+                              item-value="value"
+                              variant="outlined"
+                              density="compact"
+                              hide-details
+                            />
+                          </VCol>
+                          <VCol cols="5">
+                            <VSelect
+                              v-model="payslipStartYear"
+                              label="Year"
+                              :items="YEAR_ITEMS"
+                              variant="outlined"
+                              density="compact"
+                              hide-details
+                            />
+                          </VCol>
+                        </VRow>
                       </VCol>
-                      <VCol cols="5">
-                        <VSelect
-                          v-model="payslipStartYear"
-                          label="Year"
-                          :items="YEAR_ITEMS"
-                          variant="outlined"
-                          density="compact"
-                          hide-details
-                        />
+
+                      <!-- TO -->
+                      <VCol cols="12" sm="6">
+                        <p class="text-caption text-medium-emphasis mb-2">
+                          <VIcon icon="mdi-calendar-check-outline" size="14" class="me-1" />
+                          To
+                        </p>
+                        <VRow dense>
+                          <VCol cols="7">
+                            <VSelect
+                              v-model="payslipEndMonth"
+                              label="Month"
+                              :items="MONTH_ITEMS"
+                              item-title="title"
+                              item-value="value"
+                              variant="outlined"
+                              density="compact"
+                              hide-details
+                              :error="!endPeriodIsValid"
+                            />
+                          </VCol>
+                          <VCol cols="5">
+                            <VSelect
+                              v-model="payslipEndYear"
+                              label="Year"
+                              :items="YEAR_ITEMS"
+                              variant="outlined"
+                              density="compact"
+                              hide-details
+                              :error="!endPeriodIsValid"
+                            />
+                          </VCol>
+                        </VRow>
                       </VCol>
                     </VRow>
-                  </VCard>
-                </VCol>
 
-                <!-- Arrow connector -->
-                <VCol cols="12" md="1" class="text-center d-none d-md-flex align-center justify-center">
-                  <VIcon icon="mdi-arrow-right" size="22" color="medium-emphasis" />
-                </VCol>
-
-                <!-- TO card -->
-                <VCol cols="12" md="5">
-                  <VCard variant="elevated" rounded="lg" elevation="2" class="pa-4">
-                    <p class="text-caption text-medium-emphasis mb-2">
-                      <VIcon icon="mdi-calendar-check-outline" size="14" class="me-1" />
-                      To
+                    <!-- Error hint -->
+                    <p v-if="!endPeriodIsValid" class="text-caption text-error mt-2 mb-0">
+                      <VIcon icon="mdi-alert-circle-outline" size="14" class="me-1" />
+                      End period cannot be before start period.
                     </p>
-                    <VRow dense>
-                      <VCol cols="7">
-                        <VSelect
-                          v-model="payslipEndMonth"
-                          label="Month"
-                          :items="MONTH_ITEMS"
-                          item-title="title"
-                          item-value="value"
-                          variant="outlined"
-                          density="compact"
-                          hide-details
-                          :error="!endPeriodIsValid"
-                        />
-                      </VCol>
-                      <VCol cols="5">
-                        <VSelect
-                          v-model="payslipEndYear"
-                          label="Year"
-                          :items="YEAR_ITEMS"
-                          variant="outlined"
-                          density="compact"
-                          hide-details
-                          :error="!endPeriodIsValid"
-                        />
-                      </VCol>
-                    </VRow>
-                  </VCard>
-                </VCol>
-              </VRow>
+                  </VCardText>
 
-              <!-- Error hint -->
-              <p v-if="!endPeriodIsValid" class="text-caption text-error mb-3">
-                <VIcon icon="mdi-alert-circle-outline" size="14" class="me-1" />
-                End period cannot be before start period.
-              </p>
+                  <VDivider />
+
+                  <VCardActions>
+                    <VSpacer />
+                    <VBtn
+                      variant="flat"
+                      color="primary"
+                      :disabled="!endPeriodIsValid"
+                      @click="payslipPeriodMenu = false"
+                    >
+                      Done
+                    </VBtn>
+                  </VCardActions>
+                </VCard>
+              </VMenu>
 
               <!-- Search + Load row -->
               <VRow dense align="center">

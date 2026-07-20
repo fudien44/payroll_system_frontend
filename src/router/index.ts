@@ -113,6 +113,16 @@ const router = createRouter({
       },
     },
     {
+      path: '/pass-slip',
+      name: 'PassSlips',
+      component: () => import('@/views/PassSlips.vue'),
+      meta: {
+        title: 'Pass Slips',
+        layout: 'content',
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/signatories',
       name: 'Signatories',
       component: () => import('@/views/Signatories.vue'),

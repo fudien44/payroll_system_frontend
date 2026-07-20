@@ -46,6 +46,7 @@ const search = ref('')
                 prepend-inner-icon="mdi-magnify"
                 variant="outlined"
                 hide-details
+                clearable
                 style="max-width: 300px;"
             />
         </VCardText>

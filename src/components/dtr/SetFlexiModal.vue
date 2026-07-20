@@ -10,7 +10,6 @@ interface Employee {
   section:     string | null
   emp_type:    string | null
   emp_status:  number | null
-  profile_pic: string | null
   is_flexi:    boolean
 }
 
@@ -109,15 +108,17 @@ async function save() {
         <div
           v-for="emp in filteredEmployees"
           :key="emp.id"
-          class="d-flex align-center py-1 px-2 rounded"
+          class="d-flex align-center py-1 px-2 rounded flexi-row"
           :class="{ 'bg-info-lighten-5': selectedIds.has(emp.id) }"
-          :style="{ order: selectedIds.has(emp.id) ? 0 : 2 }"
+          :style="{ order: selectedIds.has(emp.id) ? 0 : 2, cursor: 'pointer' }"
+          @click="toggle(emp.id)"
         >
           <VCheckbox
             :model-value="selectedIds.has(emp.id)"
             density="compact"
             hide-details
-            @update:model-value="toggle(emp.id)"
+            readonly
+            @click.stop
           />
           <span class="text-body-2">{{ emp.full_name }}</span>
           <span class="text-caption text-medium-emphasis ms-2">{{ emp.position ?? '' }}</span>
@@ -130,3 +131,13 @@ async function save() {
     </div>
   </BaseModal>
 </template>
+
+<style scoped>
+.flexi-row {
+  transition: background-color 0.15s ease;
+}
+
+.flexi-row:hover {
+  background-color: rgba(var(--v-theme-on-surface), 0.06);
+}
+</style>

@@ -49,5 +49,10 @@ export default [
     icon: 'mdi-database-search-outline',
     to: { name: 'Engas' },
   },
+  {
+    name: 'Pass Slips (Viewing Only)',
+    icon: 'mdi mdi-file-document-outline',
+    to: { name: 'PassSlips' },
+  }
 
 ];
