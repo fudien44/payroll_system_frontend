@@ -118,6 +118,8 @@ const HARDCODED_APPROVED_BY_PAYROLL: Signatory = {
   position: 'DIRECTOR IV',
   role: 'approved_by',
 }
+const revertDialog = ref(false)
+const revertReason = ref('')
 const WAGE_SG_CUTOFF     = 16
 const WAGE_PAGIBIG_MIN   = 400
 const WAGE_SSS_MIN       = 750
@@ -131,6 +133,9 @@ const WAGE_PREMIUM_OPTIONS = [
 /* ─────────────────────────────────────────
    STATE
 ───────────────────────────────────────── */
+const recomputeConfirmData      = ref<{ old_wage: number; new_wage: number; old_gross: number; new_gross: number } | null>(null)
+const recomputeNeedsDoubleConfirm = ref(false)
+
 const route  = useRoute()
 const router = useRouter()
 
@@ -164,9 +169,10 @@ const wageDialog       = ref(false)
 const wageSaving       = ref(false)
 const wageSssOptIn     = ref(false)
 const wageTargetEmp    = ref<SelectableEmployee | null>(null)
-const wageForm         = ref({
+const wageForm = ref({
   wage: 0, premium_percent: 0.05, philhealth: 500,
   pag_ibig: WAGE_PAGIBIG_MIN, sss: 0, ewt_rate: 5,
+  effective_date: new Date().toISOString().slice(0, 10), // NEW
 })
 const wageFormErrors   = ref<Partial<Record<keyof typeof wageForm.value, string>>>({})
 
@@ -185,6 +191,11 @@ const isAutoRemarksUpdate = ref(false)
 const removeTarget  = ref<BatchItem | null>(null)
 const removeDialog  = ref(false)
 const removeLoading = ref(false)
+
+// ── Bulk Remove ──
+const selectedRemoveIds  = ref<number[]>([])
+const removeBatchDialog  = ref(false)
+const removeBatchLoading = ref(false)
 
 // ── Adjustments ──
 const adjustmentTarget  = ref<BatchItem | null>(null)
@@ -274,7 +285,20 @@ const filteredSelectableEmps = computed(() => {
 const availableEmps = computed(() =>
   filteredSelectableEmps.value.filter(e => !e.already_added)
 )
+// Only employees eligible for selection (has deductions set, not already finalized elsewhere)
+const selectableAvailableEmps = computed(() =>
+  availableEmps.value.filter(e => e.has_wage && !e.already_paid)
+)
 
+const allSelectableChecked = computed(() =>
+  selectableAvailableEmps.value.length > 0 &&
+  selectableAvailableEmps.value.every(e => selectedEmpIds.value.includes(e.emp_id))
+)
+
+const someSelectableChecked = computed(() =>
+  selectableAvailableEmps.value.some(e => selectedEmpIds.value.includes(e.emp_id)) &&
+  !allSelectableChecked.value
+)
 const docTypeLabel = computed(() => {
   if (docType.value === 'payroll_sheet') return 'Payroll Sheet'
   if (docType.value === 'ors')           return 'Obligation Request & Status (ORS)'
@@ -421,6 +445,29 @@ function allEmployees(): BatchItem[] {
   return run.value.groups.flatMap(d => d.sections.flatMap(s => s.employees))
 }
 
+const allEmpIds = computed(() => allEmployees().map(e => e.emp_id))
+
+const allRemoveChecked = computed(() =>
+  allEmpIds.value.length > 0 && allEmpIds.value.every(id => selectedRemoveIds.value.includes(id))
+)
+const someRemoveChecked = computed(() =>
+  allEmpIds.value.some(id => selectedRemoveIds.value.includes(id)) && !allRemoveChecked.value
+)
+
+function toggleRemoveSelect(empId: number) {
+  const idx = selectedRemoveIds.value.indexOf(empId)
+  if (idx === -1) selectedRemoveIds.value.push(empId)
+  else selectedRemoveIds.value.splice(idx, 1)
+}
+
+function toggleSelectAllRemove() {
+  selectedRemoveIds.value = allRemoveChecked.value ? [] : [...allEmpIds.value]
+}
+
+const selectedRemoveNames = computed(() =>
+  allEmployees().filter(e => selectedRemoveIds.value.includes(e.emp_id)).map(e => e.emp_name)
+)
+
 /* ─────────────────────────────────────────
    API
 ───────────────────────────────────────── */
@@ -430,6 +477,9 @@ async function fetchRun() {
     const { data } = await axios.get(`/api/payroll-run/${route.params.id}`)
     run.value = data.data
     syncMetaForm()
+    // NEW: drop any selected ids no longer present in the refreshed batch
+    const validIds = new Set(allEmpIds.value)
+    selectedRemoveIds.value = selectedRemoveIds.value.filter(id => validIds.has(id))
   } catch {
     showAlert('error', 'Failed to load payroll run.')
   } finally {
@@ -540,12 +590,21 @@ async function finalizeRun() {
   }
 }
 
-async function revertRun() {
+async function confirmRevert() {
+  if (!run.value) return
+  if (!revertReason.value.trim()) {
+    showAlert('warning', 'Please provide a reason for reverting.')
+    return
+  }
   revertLoading.value = true
   try {
-    const { data } = await axios.post(`/api/payroll-run/revert/${run.value!.id}`)
+    const { data } = await axios.post(`/api/payroll-run/revert/${run.value.id}`, {
+      reason: revertReason.value.trim(),
+    })
     if (!data.success) throw new Error(data.message)
-    run.value!.status = 'draft'
+    run.value.status = 'draft'
+    revertDialog.value = false
+    revertReason.value = ''
     showAlert('success', 'Reverted to Draft.')
   } catch (err: any) {
     showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to revert.')
@@ -600,18 +659,47 @@ async function confirmRemove() {
   }
 }
 
-async function confirmRecompute() {
+async function confirmRemoveBatch() {
+  if (!selectedRemoveIds.value.length || !run.value) return
+  removeBatchLoading.value = true
+  try {
+    const { data } = await axios.post(
+      `/api/payroll-run/${run.value.id}/employees/remove-batch`,
+      { emp_ids: selectedRemoveIds.value }
+    )
+    if (!data.success) throw new Error(data.message)
+    showAlert('success', data.message)
+    removeBatchDialog.value = false
+    selectedRemoveIds.value = []
+    await fetchRun()
+    await fetchSelectableEmployees()
+  } catch (err: any) {
+    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to remove employees.')
+  } finally {
+    removeBatchLoading.value = false
+  }
+}
+
+async function confirmRecompute(forceConfirm = false) {
   if (!recomputeTarget.value || !run.value) return
   recomputeLoading.value = true
   try {
     const { data } = await axios.post(
-      `/api/payroll-run/${run.value.id}/employees/${recomputeTarget.value.emp_id}/recompute`
+      `/api/payroll-run/${run.value.id}/employees/${recomputeTarget.value.emp_id}/recompute`,
+      { confirm: forceConfirm }
     )
     if (!data.success) throw new Error(data.message)
     showAlert('success', `${recomputeTarget.value.emp_name} recomputed from latest DTR data.`)
     recomputeDialog.value = false
+    recomputeNeedsDoubleConfirm.value = false
+    recomputeConfirmData.value = null
     await fetchRun()
   } catch (err: any) {
+    if (err.response?.status === 409 && err.response?.data?.requires_confirm) {
+      recomputeConfirmData.value = err.response.data.data
+      recomputeNeedsDoubleConfirm.value = true
+      return // keep dialog open, now showing the comparison
+    }
     showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to recompute.')
   } finally {
     recomputeLoading.value = false
@@ -668,6 +756,10 @@ watch(
   }
 )
 
+watch(() => metaForm.value.fund_cluster, (val) => {
+  metaForm.value.saa_no = val
+})
+
 watch(() => editForm.value.remarks, (val) => {
   if (isAutoRemarksUpdate.value) return
   if (!editDialog.value) return
@@ -715,6 +807,8 @@ function onAdjustmentUpdated(updatedItem: BatchItem) {
 
 function openRecomputeDialog(item: BatchItem) {
   recomputeTarget.value = item
+  recomputeNeedsDoubleConfirm.value = false
+  recomputeConfirmData.value = null
   recomputeDialog.value = true
 }
 
@@ -731,15 +825,30 @@ function openWageDialog(emp: SelectableEmployee) {
     pag_ibig: WAGE_PAGIBIG_MIN,
     sss: 0,
     ewt_rate: 5,
+    effective_date: new Date().toISOString().slice(0, 10), // NEW
   }
   wageFormErrors.value = {}
   wageDialog.value = true
 }
 
+function toggleSelectAll() {
+  if (allSelectableChecked.value) {
+    const ids = new Set(selectableAvailableEmps.value.map(e => e.emp_id))
+    selectedEmpIds.value = selectedEmpIds.value.filter(id => !ids.has(id))
+  } else {
+    const merged = new Set(selectedEmpIds.value)
+    selectableAvailableEmps.value.forEach(e => merged.add(e.emp_id))
+    selectedEmpIds.value = Array.from(merged)
+  }
+}
+
+
 function validateWageForm(): boolean {
   const errs: Partial<Record<keyof typeof wageForm.value, string>> = {}
   if (!wageForm.value.wage || Number(wageForm.value.wage) <= 0)
     errs.wage = 'Monthly wage is required and must be greater than ₱0.'
+  if (!wageForm.value.effective_date)
+  errs.effective_date = 'Effective date is required.'
   if (Number(wageForm.value.philhealth) < wagePhilhealthMin.value)
     errs.philhealth = `PhilHealth must be at least ${fmt(wagePhilhealthMin.value)}.`
   if (Number(wageForm.value.pag_ibig) < WAGE_PAGIBIG_MIN)
@@ -838,6 +947,7 @@ async function generateDocument() {
     return
   }
   if (docType.value === 'ors') {
+
     await generateORSFromBackend()
     docDialog.value = false
     return
@@ -1123,7 +1233,7 @@ onMounted(async () => {
         <!-- Status Actions -->
         <div v-if="run" class="d-flex gap-2 flex-wrap">
           <VBtn v-if="canRevert" variant="outlined" color="warning" size="small"
-            prepend-icon="mdi-undo" :loading="revertLoading" @click="revertRun">
+            prepend-icon="mdi-undo" @click="revertDialog = true">
             Revert to Draft
           </VBtn>
           <VBtn v-if="canFinalize" color="success" size="small"
@@ -1183,10 +1293,10 @@ onMounted(async () => {
                   Finalize this run to unlock document generation.
                 </VAlert>
                 <div class="d-flex flex-column gap-2">
-                  <VBtn block :disabled="!canGenerate" color="primary" variant="tonal"
-                    prepend-icon="mdi-file-table-outline" @click="openDocDialog('payroll_sheet')">
-                    Payroll Sheet
-                  </VBtn>
+                  <VBtn v-if="(run?.employee_count ?? 0) > 1" block :disabled="!canGenerate" color="primary" variant="tonal"
+                  prepend-icon="mdi-file-table-outline" @click="openDocDialog('payroll_sheet')">
+                  Payroll Sheet
+                </VBtn>
                   <VBtn block :disabled="!canGenerate" color="indigo" variant="tonal"
                     prepend-icon="mdi-file-document-outline"
                     @click="openDocDialog('ors')">
@@ -1254,6 +1364,23 @@ onMounted(async () => {
                       hide-details
                       class="mb-3"
                     />
+
+                     <div
+                      v-if="selectableAvailableEmps.length > 0"
+                      class="d-flex align-center gap-2 mb-2 px-1"
+                    >
+                      <VCheckboxBtn
+                        :model-value="allSelectableChecked"
+                        :indeterminate="someSelectableChecked"
+                        density="compact"
+                        color="primary"
+                        hide-details
+                        @update:model-value="toggleSelectAll"
+                      />
+                      <span class="text-body-2 text-medium-emphasis">
+                        Select all with deductions set ({{ selectableAvailableEmps.length }})
+                      </span>
+                    </div>
 
                     <VSkeletonLoader v-if="selectableLoading" type="list-item-three-line" />
 
@@ -1323,7 +1450,28 @@ onMounted(async () => {
                     </div>
                   </VCardText>
                 </VCard>
-
+                  <div v-if="isDraft && run.groups.length > 0" class="d-flex align-center gap-2 mb-3">
+                  <VCheckboxBtn
+                    :model-value="allRemoveChecked"
+                    :indeterminate="someRemoveChecked"
+                    density="compact"
+                    color="error"
+                    hide-details
+                    @update:model-value="toggleSelectAllRemove"
+                  />
+                  <span class="text-body-2 text-medium-emphasis">
+                    {{ selectedRemoveIds.length ? `${selectedRemoveIds.length} selected` : 'Select all' }}
+                  </span>
+                  <VSpacer />
+                  <VBtn
+                    color="error" size="small" variant="tonal"
+                    prepend-icon="mdi-delete-outline"
+                    :disabled="!selectedRemoveIds.length"
+                    @click="removeBatchDialog = true"
+                  >
+                    Remove Selected ({{ selectedRemoveIds.length }})
+                  </VBtn>
+                </div>
                 <!-- Batch Items Table -->
                 <div v-if="run.groups.length === 0" class="text-center py-8">
                   <VIcon icon="mdi-account-off-outline" size="48" class="text-medium-emphasis mb-3" />
@@ -1348,6 +1496,7 @@ onMounted(async () => {
                       <VTable density="compact" class="text-body-2">
                         <thead>
                           <tr style="background:rgb(var(--v-theme-surface-variant))">
+                            <th v-if="isDraft" style="width:36px"></th>
                             <th class="text-left" style="min-width:180px">#  Name</th>
                             <th class="text-left">ENGAS No.</th>
                             <th class="text-right">Wage</th>
@@ -1370,6 +1519,15 @@ onMounted(async () => {
                             :key="emp.emp_id"
                             :style="idx % 2 === 0 ? '' : 'background:rgba(var(--v-theme-surface-variant),0.08)'"
                           >
+                          <td v-if="isDraft">
+                            <VCheckboxBtn
+                              :model-value="selectedRemoveIds.includes(emp.emp_id)"
+                              density="compact"
+                              color="error"
+                              hide-details
+                              @update:model-value="() => toggleRemoveSelect(emp.emp_id)"
+                            />
+                          </td>
                             <td>
                               <div class="d-flex align-center gap-2">
                                 <span class="text-medium-emphasis text-caption">{{ idx+1 }}</span>
@@ -1461,6 +1619,7 @@ onMounted(async () => {
                         </tbody>
                         <tfoot>
                           <tr style="background:rgba(var(--v-theme-primary),0.06)">
+                            <td v-if="isDraft"></td>
                             <td class="text-right text-caption font-weight-bold pr-2">Section Total</td>
                             <td colspan="2"></td>
                             <td class="text-right text-caption font-weight-bold">{{ fmt(secGroup.subtotal.gross) }}</td>
@@ -1535,7 +1694,7 @@ onMounted(async () => {
                           <VTextField v-model="metaForm.fund_cluster" label="Fund Cluster" variant="outlined" density="compact" prepend-inner-icon="mdi-bank-outline" />
                         </VCol>
                         <VCol cols="12" sm="6">
-                          <VTextField v-model="metaForm.saa_no" label="SAA No." variant="outlined" density="compact" prepend-inner-icon="mdi-pound" />
+                        <VTextField v-model="metaForm.saa_no" label="SAA No." variant="outlined" density="compact" prepend-inner-icon="mdi-pound" hint="Mirrors Fund Cluster" persistent-hint readonly />
                         </VCol>
                         <VCol cols="12" sm="6">
                           <VTextField v-model="metaForm.ors_no" label="ORS/BURS No." variant="outlined" density="compact" prepend-inner-icon="mdi-pound" />
@@ -1669,6 +1828,43 @@ onMounted(async () => {
       </VCard>
     </VDialog>
 
+    <VDialog v-model="revertDialog" max-width="460" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar color="warning" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-undo" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">Revert to Draft?</div>
+          <div class="text-caption text-medium-emphasis">{{ run?.payroll_no }}</div>
+        </div>
+      </div>
+      <VAlert type="warning" variant="tonal" density="compact" icon="mdi-alert-outline" class="mb-4 text-body-2">
+        This run was finalized — documents may already have been generated or submitted.
+        Reverting unlocks editing and recomputation. A reason is required and will be recorded.
+      </VAlert>
+      <VTextarea
+        v-model="revertReason"
+        label="Reason for reverting"
+        variant="outlined"
+        density="compact"
+        rows="3"
+        auto-grow
+        hint="e.g. &quot;Correcting a late DTR entry for employee X&quot;"
+        persistent-hint
+      />
+    </VCardText>
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" :disabled="revertLoading" @click="revertDialog = false; revertReason = ''">Cancel</VBtn>
+      <VBtn color="warning" variant="tonal" :loading="revertLoading" :disabled="!revertReason.trim()" @click="confirmRevert">
+        <VIcon start size="16">mdi-undo</VIcon>Yes, Revert
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
     <!-- ── Remove Dialog ── -->
     <VDialog v-model="removeDialog" max-width="420" persistent>
       <VCard rounded="lg">
@@ -1696,32 +1892,95 @@ onMounted(async () => {
       </VCard>
     </VDialog>
 
+    <VDialog v-model="removeBatchDialog" max-width="460" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar color="error" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-delete-outline" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">Remove {{ selectedRemoveIds.length }} Employee(s)?</div>
+          <div class="text-caption text-medium-emphasis">This batch — {{ run?.payroll_no }}</div>
+        </div>
+      </div>
+      <p class="text-body-2 text-medium-emphasis mb-2">
+        The following employees will be removed from this payroll batch. You can re-add them later.
+      </p>
+      <ul class="text-body-2 mb-0" style="max-height:160px; overflow-y:auto; padding-left:20px;">
+        <li v-for="name in selectedRemoveNames" :key="name">{{ name }}</li>
+      </ul>
+    </VCardText>
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" :disabled="removeBatchLoading" @click="removeBatchDialog = false">Cancel</VBtn>
+      <VBtn color="error" variant="tonal" :loading="removeBatchLoading" @click="confirmRemoveBatch">
+        <VIcon start size="16">mdi-delete-outline</VIcon>Yes, Remove All
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
     <!-- ── Recompute Dialog ── -->
-    <VDialog v-model="recomputeDialog" max-width="420" persistent>
-      <VCard rounded="lg">
-        <VCardText class="pa-6">
-          <div class="d-flex align-center gap-3 mb-4">
-            <VAvatar color="warning" variant="tonal" size="44" rounded="lg">
-              <VIcon icon="mdi-refresh" size="22" />
-            </VAvatar>
-            <div>
-              <div class="text-body-1 font-weight-medium">Recompute from DTR?</div>
-              <div class="text-caption text-medium-emphasis">{{ recomputeTarget?.emp_name }}</div>
-            </div>
+    <VDialog v-model="recomputeDialog" max-width="440" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar :color="recomputeNeedsDoubleConfirm ? 'error' : 'warning'" variant="tonal" size="44" rounded="lg">
+          <VIcon :icon="recomputeNeedsDoubleConfirm ? 'mdi-alert-octagon-outline' : 'mdi-refresh'" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">
+            {{ recomputeNeedsDoubleConfirm ? 'Wage Has Changed Since Finalization' : 'Recompute from DTR?' }}
           </div>
-          <p class="text-body-2 text-medium-emphasis mb-0">
-            This will reset all manually overridden values for <strong class="text-high-emphasis">{{ recomputeTarget?.emp_name }}</strong> back to the latest DTR and wage data.
-          </p>
-        </VCardText>
-        <VDivider />
-        <VCardActions class="justify-end pa-4 gap-2">
-          <VBtn variant="text" :disabled="recomputeLoading" @click="recomputeDialog = false">Cancel</VBtn>
-          <VBtn color="warning" variant="tonal" :loading="recomputeLoading" @click="confirmRecompute">
-            <VIcon start size="16">mdi-refresh</VIcon>Yes, Recompute
-          </VBtn>
-        </VCardActions>
-      </VCard>
-    </VDialog>
+          <div class="text-caption text-medium-emphasis">{{ recomputeTarget?.emp_name }}</div>
+        </div>
+      </div>
+
+      <template v-if="!recomputeNeedsDoubleConfirm">
+        <p class="text-body-2 text-medium-emphasis mb-0">
+          This will reset all manually overridden values for <strong class="text-high-emphasis">{{ recomputeTarget?.emp_name }}</strong> back to the latest DTR and wage data.
+        </p>
+      </template>
+
+      <template v-else>
+        <VAlert type="error" variant="tonal" density="compact" icon="mdi-alert-outline" class="mb-4 text-body-2">
+          This run was previously finalized. Recomputing now will change the wage figures — this will be logged.
+        </VAlert>
+        <VTable density="compact" class="mb-2">
+          <thead>
+            <tr><th></th><th class="text-right">Previous</th><th class="text-right">New</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="text-caption">Wage</td>
+              <td class="text-right text-caption">{{ fmt(recomputeConfirmData?.old_wage ?? 0) }}</td>
+              <td class="text-right text-caption font-weight-bold">{{ fmt(recomputeConfirmData?.new_wage ?? 0) }}</td>
+            </tr>
+            <tr>
+              <td class="text-caption">Gross</td>
+              <td class="text-right text-caption">{{ fmt(recomputeConfirmData?.old_gross ?? 0) }}</td>
+              <td class="text-right text-caption font-weight-bold">{{ fmt(recomputeConfirmData?.new_gross ?? 0) }}</td>
+            </tr>
+          </tbody>
+        </VTable>
+      </template>
+    </VCardText>
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" :disabled="recomputeLoading" @click="recomputeDialog = false">Cancel</VBtn>
+      <VBtn
+        :color="recomputeNeedsDoubleConfirm ? 'error' : 'warning'"
+        variant="tonal"
+        :loading="recomputeLoading"
+        @click="confirmRecompute(recomputeNeedsDoubleConfirm)"
+      >
+        <VIcon start size="16">{{ recomputeNeedsDoubleConfirm ? 'mdi-alert-octagon-outline' : 'mdi-refresh' }}</VIcon>
+        {{ recomputeNeedsDoubleConfirm ? 'Yes, Proceed Anyway' : 'Yes, Recompute' }}
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
 
     <!-- ── Set Deduction Dialog (quick-set from Add Employees panel) ── -->
       <VDialog v-model="wageDialog" max-width="560" persistent>
@@ -1758,6 +2017,14 @@ onMounted(async () => {
                   v-model="wageForm.premium_percent" label="Premium Rate" :items="WAGE_PREMIUM_OPTIONS"
                   item-title="title" item-value="value" variant="outlined" density="compact"
                   prepend-inner-icon="mdi-percent-outline"
+                />
+              </VCol>
+              <VCol cols="12" sm="6">
+                <VTextField
+                  v-model="wageForm.effective_date" label="Effective Date" type="date"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-calendar-outline"
+                  :error-messages="wageFormErrors.effective_date"
+                  hint="When this rate takes effect (e.g. promotion date)" persistent-hint
                 />
               </VCol>
               <VCol cols="12" sm="6">

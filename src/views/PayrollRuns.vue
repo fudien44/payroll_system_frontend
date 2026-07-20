@@ -49,18 +49,6 @@ interface Signatory {
   role:     'approved_by' | 'certified_by'
 }
 
-interface FullBatchItem {
-  emp_name: string; position: string | null; engas_no: string | null; nip: boolean
-  wage: number; premium: number; gross: number
-  absent_deduction: number; late_ut_deduction: number
-  philhealth: number; pag_ibig: number; sss: number; ewt: number
-  total_deductions: number; net_pay: number; remarks: string | null
-}
-interface FullSectionGroup { section_name: string | null; employees: FullBatchItem[] }
-interface FullDivisionGroup { division_name: string; sections: FullSectionGroup[] }
-interface FullPayrollRunDetail extends PayrollRun {
-  groups: FullDivisionGroup[]
-}
 
 type DocType = 'payroll_sheet' | 'ors' | 'dv'
 
@@ -137,6 +125,7 @@ const docLoading   = ref(false)
 const orsLoading   = ref(false)
 const dvLoading    = ref(false)
 const sigsLoading  = ref(false)
+const payrollSheetLoading = ref(false)
 
 const approvedBySig       = ref<Signatory | null>(null)
 const certifiedBySlots    = ref<(Signatory | null)[]>([])
@@ -184,6 +173,10 @@ watch(() => form.value.division_id, async (divId) => {
   }
 })
 
+watch(() => form.value.fund_cluster, (val) => {
+  form.value.saa_no = val
+})
+
 const docTypeLabel = computed(() => {
   if (docType.value === 'payroll_sheet') return 'Payroll Sheet'
   if (docType.value === 'ors')           return 'Obligation Request & Status (ORS)'
@@ -208,11 +201,12 @@ const slot1Options = computed(() =>
 
 const certifiedSlotCount = computed(() => docType.value === 'payroll_sheet' ? 3 : 2)
 
-const docGenerateLoading = computed(() => {
-  if (docType.value === 'ors') return orsLoading.value
-  if (docType.value === 'dv')  return dvLoading.value
-  return docLoading.value
-})
+ const docGenerateLoading = computed(() => {
+   if (docType.value === 'ors') return orsLoading.value
+   if (docType.value === 'dv')  return dvLoading.value
+   if (docType.value === 'payroll_sheet') return payrollSheetLoading.value
+    return docLoading.value
+ })
 
 const docPeriodLabel = computed(() => {
   if (!docTarget.value) return ''
@@ -226,11 +220,6 @@ const fmt = (v: number) =>
   new Intl.NumberFormat('en-PH', {
     style: 'currency', currency: 'PHP', minimumFractionDigits: 2,
   }).format(v ?? 0)
-
-  const fmtNum = (v: number | string) =>
-  new Intl.NumberFormat('en-PH', {
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  }).format(Number(v) ?? 0)
 
 function showAlert(type: AlertType, message: string) {
   alertType.value    = type
@@ -319,7 +308,27 @@ async function generateORSFromBackend() {
     orsLoading.value = false
   }
 }
-
+async function generatePayrollSheetFromBackend() {
+  if (!docTarget.value) return
+  payrollSheetLoading.value = true
+  try {
+    const response = await axios.post(
+      `/api/payroll-run/${docTarget.value.id}/generate-payroll-sheet`,
+      {},
+      { responseType: 'blob' }
+    )
+    const filename = `PAYROLL-${docTarget.value.payroll_no}.pdf`
+    const file = new File([response.data], filename, { type: 'application/pdf' })
+    const url  = URL.createObjectURL(file)
+    const tab  = window.open(url, '_blank')
+    if (!tab) showAlert('warning', 'Popup blocked. Please allow popups and try again.')
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch {
+    showAlert('error', 'Failed to generate Payroll Sheet.')
+  } finally {
+    payrollSheetLoading.value = false
+  }
+}
 async function generateDVFromBackend() {
   if (!docTarget.value) return
   dvLoading.value = true
@@ -342,219 +351,14 @@ async function generateDVFromBackend() {
   }
 }
 
-function openPdf(doc: any) {
-  const blob = doc.output('blob')
-  const url  = URL.createObjectURL(blob)
-  const tab  = window.open(url, '_blank')
-  if (!tab) { showAlert('error', 'Popup blocked. Please allow popups.'); URL.revokeObjectURL(url); return }
-  setTimeout(() => URL.revokeObjectURL(url), 60_000)
-}
 
-async function generatePayrollSheetFromList(approvedSig: Signatory | null, certSigs: (Signatory | null)[]) {
-  if (!docTarget.value) return
-  // Full employee breakdown isn't in the list row — fetch it
-  const { data } = await axios.get(`/api/payroll-run/${docTarget.value.id}`)
-  const r: FullPayrollRunDetail = data.data
-
-  const { jsPDF } = (window as any).jspdf
-  const doc   = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'legal' })
-  const pageW = doc.internal.pageSize.getWidth()
-  const BLK   = [0,0,0]       as [number,number,number]
-  const GRAY  = [80,80,80]    as [number,number,number]
-  const LGRAY = [180,180,180] as [number,number,number]
-  const WHITE = [255,255,255] as [number,number,number]
-
-  const emps = r.groups.flatMap(d => d.sections.flatMap(s => s.employees))
-  const gt = emps.reduce((acc, e) => {
-    acc.gross            += Number(e.gross)
-    acc.philhealth        += Number(e.philhealth)
-    acc.pag_ibig          += Number(e.pag_ibig)
-    acc.sss                += Number(e.sss)
-    acc.ewt                 += Number(e.ewt)
-    acc.total_deductions   += Number(e.total_deductions)
-    acc.net_pay             += Number(e.net_pay)
-    return acc
-  }, { gross:0, philhealth:0, pag_ibig:0, sss:0, ewt:0, total_deductions:0, net_pay:0 })
-
-  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...BLK)
-  doc.text('PAYROLL', pageW/2, 10, { align:'center' })
-  doc.setFont('helvetica','normal'); doc.setFontSize(8)
-  doc.text(`For the period ${MONTH_NAMES[r.period_month-1].toUpperCase()} ${r.period_year}`, pageW/2, 16, { align:'center' })
-
-  doc.setFontSize(7.5); doc.setTextColor(...GRAY)
-  doc.text(`Entity Name : DEPARTMENT OF HEALTH - CENTER FOR HEALTH DEVELOPMENT, SOCCSKSARGEN REGION`, 14, 23)
-  doc.text(`Payroll No. : ${r.payroll_no}`, pageW - 14, 23, { align:'right' })
-  doc.text(`Fund Cluster : ${r.fund_cluster || '_____________'}`, 14, 28)
-  doc.text('Sheet _______ of _______ Sheets', pageW - 14, 28, { align:'right' })
-
-  doc.setFontSize(7); doc.setFont('helvetica','italic')
-  doc.text('We acknowledge receipt of cash shown opposite our name as full compensation for services rendered for the period covered.', 14, 34)
-
-  let serial = 1
-  const tableBody: any[] = []
-  emps.forEach(emp => {
-    const nipLabel       = emp.nip ? ' (NIP)' : ''
-    const grossAmtEarned = Number(emp.gross) - Number(emp.absent_deduction) - Number(emp.late_ut_deduction)
-    tableBody.push([
-      serial++, emp.engas_no || '', emp.emp_name + nipLabel, emp.position || '',
-      fmtNum(emp.wage), fmtNum(emp.premium), fmtNum(emp.gross),
-      fmtNum(emp.absent_deduction), fmtNum(emp.late_ut_deduction), fmtNum(grossAmtEarned),
-      emp.ewt > 0 ? fmtNum(emp.ewt) : '', fmtNum(emp.philhealth), fmtNum(emp.pag_ibig),
-      emp.sss > 0 ? fmtNum(emp.sss) : '', fmtNum(emp.net_pay), emp.remarks || '',
-      r.saa_no ? `SAA ${r.saa_no}${emp.nip ? ' (NIP)' : ''}` : '',
-    ])
-  })
-
-  const totalAbsent      = emps.reduce((s,e) => s + Number(e.absent_deduction), 0)
-  const totalLateUt      = emps.reduce((s,e) => s + Number(e.late_ut_deduction), 0)
-  const totalGrossEarned = emps.reduce((s,e) => s + (Number(e.gross) - Number(e.absent_deduction) - Number(e.late_ut_deduction)), 0)
-  tableBody.push([
-    { content: 'TOTAL', colSpan: 4, styles: { fontStyle:'bold', halign:'left' } },
-    { content: fmtNum(emps.reduce((s,e)=>s+Number(e.wage),0)),    styles:{ halign:'right', fontStyle:'bold' } },
-    { content: fmtNum(emps.reduce((s,e)=>s+Number(e.premium),0)), styles:{ halign:'right', fontStyle:'bold' } },
-    { content: fmtNum(gt.gross),         styles:{ halign:'right', fontStyle:'bold' } },
-    { content: fmtNum(totalAbsent),      styles:{ halign:'right', fontStyle:'bold' } },
-    { content: fmtNum(totalLateUt),      styles:{ halign:'right', fontStyle:'bold' } },
-    { content: fmtNum(totalGrossEarned), styles:{ halign:'right', fontStyle:'bold' } },
-    { content: fmtNum(gt.ewt),           styles:{ halign:'right', fontStyle:'bold' } },
-    { content: fmtNum(gt.philhealth),    styles:{ halign:'right', fontStyle:'bold' } },
-    { content: fmtNum(gt.pag_ibig),      styles:{ halign:'right', fontStyle:'bold' } },
-    { content: fmtNum(gt.sss),           styles:{ halign:'right', fontStyle:'bold' } },
-    { content: fmtNum(gt.net_pay),       styles:{ halign:'right', fontStyle:'bold' } },
-    { content: '', colSpan: 2 },
-  ])
-
-  ;(doc as any).autoTable({
-    startY: 37,
-    head: [[
-      { content: 'Serial\nNo.',  rowSpan: 2, styles: { valign:'middle', halign:'center' } },
-      { content: 'Engas\nNo.',   rowSpan: 2, styles: { valign:'middle', halign:'center' } },
-      { content: 'Name',         rowSpan: 2, styles: { valign:'middle' } },
-      { content: 'Position',     rowSpan: 2, styles: { valign:'middle' } },
-      { content: 'Wage',         rowSpan: 2, styles: { valign:'middle', halign:'center' } },
-      { content: '20%\nPremium', rowSpan: 2, styles: { valign:'middle', halign:'center' } },
-      { content: 'COMPENSATION', colSpan: 4, styles: { halign:'center' } },
-      { content: 'D E D U C T I O N S', colSpan: 4, styles: { halign:'center' } },
-      { content: 'Net Amount\nDue', rowSpan: 2, styles: { valign:'middle', halign:'center' } },
-      { content: 'REMARKS',      rowSpan: 2, styles: { valign:'middle' } },
-      { content: 'CHARGING',     rowSpan: 2, styles: { valign:'middle' } },
-    ],[
-      'Total', 'Amount of\nDay/s not\nrendered/\nNo contract', 'Amount of\nMinute/s\nLate/UT/\nPass Slip',
-      'GROSS\nAMOUNT\nEARNED', 'Expanded\nWithholding\nTax 5%', 'Philhealth', 'PAG-IBIG', 'SSS',
-    ]],
-    body: tableBody,
-    theme: 'grid',
-    tableWidth: pageW - 28,
-    styles: { fontSize:6.5, cellPadding:1.5, valign:'middle', overflow:'linebreak', textColor:BLK, lineColor:LGRAY, lineWidth:0.15 },
-    headStyles: { fillColor:WHITE, textColor:BLK, fontStyle:'bold', halign:'center', fontSize:6.5, lineColor:BLK, lineWidth:0.3 },
-    columnStyles: {
-      0:{halign:'center',cellWidth:12}, 1:{cellWidth:18}, 2:{cellWidth:'auto'}, 3:{cellWidth:24},
-      4:{halign:'right',cellWidth:16}, 5:{halign:'right',cellWidth:14}, 6:{halign:'right',cellWidth:16},
-      7:{halign:'right',cellWidth:17}, 8:{halign:'right',cellWidth:17}, 9:{halign:'right',cellWidth:18},
-      10:{halign:'right',cellWidth:16}, 11:{halign:'right',cellWidth:15}, 12:{halign:'right',cellWidth:13},
-      13:{halign:'right',cellWidth:13}, 14:{halign:'right',cellWidth:18}, 15:{cellWidth:28}, 16:{cellWidth:22},
-    },
-    margin: { left:14, right:14 },
-  })
-
-  const finalY = (doc as any).lastAutoTable.finalY + 2
-  const TW = pageW - 28
-  const cLbl = 9.2
-  const cL = (TW - cLbl) * 0.40
-  const cM = (TW - cLbl) * 0.40
-  const cR = TW - cLbl - cL - cM
-
-  const aSig = certSigs[0] ?? null
-  const bSig = certSigs[1] ?? null
-  const cSig = certSigs[2] ?? null
-
-  const sigLine = (sig: Signatory | null) =>
-    `\n\n\n\n                                     ________________________________________\n                                               ${sig?.name ?? ''}\n                                                   ${sig?.position ?? ''}`
-  const sigLineWithDateA = (sig: Signatory | null) =>
-    `\n\n\n\n___________________________________                               ______________\n${sig?.name ?? ''}                                                       Date\n${sig?.position ?? ''}`
-  const sigLineWithDateB = (sig: Signatory | null) =>
-    `\n\n\n\n_________________________________________                                                                                            _______________\n${sig?.name ?? ''}                                                                                                                          Date\n                   ${sig?.position ?? ''}                                                                                                                                       `
-  const sigLineWithDateC = (sig: Signatory | null) =>
-    `\n\n\n\n___________________________________                               ______________\n${sig?.name ?? ''}                                                      Date\n${sig?.position ?? ''}`
-
-  ;(doc as any).autoTable({
-    startY: finalY, tableWidth: TW,
-    body: [[
-      { content: 'A', styles: { fontStyle:'bold', fontSize:7, cellPadding:{top:3,left:2,right:2,bottom:3}, valign:'top', halign:'left' } },
-      { content: `CERTIFIED:  Services duly rendered as stated.${sigLineWithDateA(aSig)}`,
-        styles: { fontSize:7, cellPadding:{top:3,left:7,right:0,bottom:3}, valign:'top', halign:'left' } },
-      { content: `APPROVED FOR PAYMENT: _______________________________________${sigLineWithDateB(approvedSig)}`,
-        styles: { fontSize:7, cellPadding:{top:3,left:30,right:0,bottom:3}, valign:'top', halign:'left' }, colSpan: 2 },
-    ]],
-    theme: 'grid',
-    styles: { textColor:BLK, lineColor:BLK, lineWidth:0.2, overflow:'linebreak' },
-    columnStyles: { 0:{cellWidth:cLbl}, 1:{cellWidth:cL}, 2:{cellWidth:cM+cR} },
-    margin: { left:14, right:14 },
-  })
-
-  ;(doc as any).autoTable({
-    startY: (doc as any).lastAutoTable.finalY, tableWidth: TW,
-    body: [[
-      { content: 'B', styles: { fontStyle:'bold', fontSize:7, cellPadding:{top:3,left:2,right:2,bottom:3}, valign:'top', halign:'left' } },
-      { content: `CERTIFIED:  Supporting documents complete and proper; and cash available in the amount of \nP______________________.${sigLineWithDateC(bSig)}`,
-        styles: { fontSize:7, cellPadding:{top:3,left:7,right:0,bottom:3}, valign:'top', halign:'left' } },
-      { content: `CERTIFIED:  Supporting documents complete and proper; and cash available in the amount of \n\nP______________________.${sigLine(cSig)}`,
-        styles: { fontSize:7, cellPadding:{top:3,left:7,right:0,bottom:3}, valign:'top', halign:'left' } },
-      { content: `E   ORS/BURS No.${r.ors_no ? ' ' + r.ors_no : ' ___________________________'}\n\nDate : ___________________________\nJEV No. : ___________________________\nDate : ___________________________`,
-        styles: { fontSize:7, cellPadding:{top:3,left:3,right:3,bottom:3}, valign:'top', halign:'left' } },
-    ]],
-    theme: 'grid',
-    styles: { textColor:BLK, lineColor:BLK, lineWidth:0.2, overflow:'linebreak' },
-    columnStyles: { 0:{cellWidth:cLbl}, 1:{cellWidth:cL}, 2:{cellWidth:cM}, 3:{cellWidth:cR} },
-    margin: { left:14, right:14 },
-  })
-
-  openPdf(doc)
-}
 
 async function generateDocument() {
   if (!docTarget.value) return
   if (docType.value === 'ors') { await generateORSFromBackend(); docDialog.value = false; return }
   if (docType.value === 'dv')  { await generateDVFromBackend();  docDialog.value = false; return }
 
-  docLoading.value = true
-  try {
-    if (!(window as any).jspdf) {
-      await new Promise<void>((resolve, reject) => {
-        const s = document.createElement('script')
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
-        s.onload = () => resolve(); s.onerror = () => reject(new Error('Failed to load jsPDF.'))
-        document.head.appendChild(s)
-      })
-    }
-    if (!(window as any).jspdfAutotable) {
-      await new Promise<void>((resolve, reject) => {
-        const s = document.createElement('script')
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'
-        s.onload = () => resolve(); s.onerror = () => reject(new Error('Failed to load AutoTable.'))
-        document.head.appendChild(s); (window as any).jspdfAutotable = true
-      })
-    }
-
-    const approvedSig = docType.value === 'payroll_sheet' ? HARDCODED_APPROVED_BY_PAYROLL : approvedBySig.value
-
-    const resolvedCertified: (Signatory | null)[] = certifiedBySlots.value.map((slot, i) => {
-      if (i === 0 && !slot1Locked.value) {
-        const picked = selectedCertifiedBy.value[0]
-        return selectablePool.value.find(s => s.id === picked) ?? null
-      }
-      return slot
-    })
-    const certSigs = resolvedCertified.slice(0, certifiedSlotCount.value)
-
-    await generatePayrollSheetFromList(approvedSig, certSigs)
-    showAlert('success', `${docTypeLabel.value} opened in a new tab.`)
-    docDialog.value = false
-  } catch (err: any) {
-    showAlert('error', err.message ?? 'Document generation failed.')
-  } finally {
-    docLoading.value = false
-  }
+ if (docType.value === 'payroll_sheet') { await generatePayrollSheetFromBackend(); docDialog.value = false; return }
 }
 const dtrNotSavedDialog  = ref(false)
 const dtrNotSavedMessage = ref('')
@@ -803,7 +607,7 @@ onMounted(() => {
                 </VBtn>
               </template>
               <VList density="compact">
-                <VListItem @click="openDocDialog('payroll_sheet', item)">
+                <VListItem v-if="item.employee_count > 1" @click="openDocDialog('payroll_sheet', item)">
                   <template #prepend><VIcon size="16" class="mr-2">mdi-file-table-outline</VIcon></template>
                   <VListItemTitle class="text-body-2">Payroll Sheet</VListItemTitle>
                 </VListItem>
@@ -960,8 +764,9 @@ onMounted(() => {
             variant="outlined"
             density="compact"
             prepend-inner-icon="mdi-pound"
-            hint="Sub-Allotment Advice number"
+            hint="Mirrors Fund Cluster"
             persistent-hint
+            readonly
           />
         </VCol>
 

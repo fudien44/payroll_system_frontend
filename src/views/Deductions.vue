@@ -76,13 +76,14 @@ const TABLE_HEADERS = [
   { title: 'Actions',    key: 'actions',       sortable: false, align: 'center' as const },
 ]
 
-const BLANK_FORM = (): Omit<Deductions, 'premium' | 'updated_at'> => ({
+const BLANK_FORM = (): Omit<Deductions, 'premium' | 'updated_at'> & { effective_date: string } => ({
   wage:            0,
   premium_percent: 0.05,
   philhealth:      500,
   pag_ibig:        PAGIBIG_MIN,
   sss:             SSS_MIN,
   ewt_rate:        5,
+  effective_date:  new Date().toISOString().slice(0, 10), // NEW
 })
 
 /* ─────────────────────────────────────────
@@ -94,7 +95,7 @@ const modalOpen    = ref(false)
 const modalLoading = ref(false)
 const selectedEmp  = ref<Employee | null>(null)
 const form         = ref(BLANK_FORM())
-const formErrors   = ref<Partial<Record<keyof Deductions, string>>>({})
+const formErrors = ref<Partial<Record<keyof Deductions | 'effective_date', string>>>({})
 const filterStatus = ref<'All' | 'Set' | 'Not Set'>('All')
 const isEditing    = ref(false)
 const sssOptIn     = ref(false)
@@ -249,10 +250,13 @@ function avatarColor(id: number): string {
 }
 
 function validate(): boolean {
-  const errs: Partial<Record<keyof Deductions, string>> = {}
+  const errs: Partial<Record<keyof Deductions | 'effective_date', string>> = {}
 
   if (!form.value.wage || Number(form.value.wage) <= 0)
     errs.wage = 'Monthly wage is required and must be greater than ₱0.'
+
+  if (!form.value.effective_date)
+    errs.effective_date = 'Effective date is required.'
 
   if (!form.value.premium_percent)
     errs.premium_percent = 'Premium percent is required.'
@@ -503,7 +507,8 @@ async function executeSave() {
     if (!data.success) throw new Error(data.message ?? 'Save failed.')
     const idx = employees.value.findIndex(e => e.emp_id === selectedEmp.value!.emp_id)
     if (idx !== -1) {
-      employees.value[idx].deductions    = { ...payload, premium: Math.round(payload.wage * payload.premium_percent * 100) / 100 }
+      const { effective_date, ...deductionFields } = payload // NEW — drop before caching
+      employees.value[idx].deductions    = { ...deductionFields, premium: Math.round(payload.wage * payload.premium_percent * 100) / 100 }
       employees.value[idx].has_deductions = true
       employees.value[idx].hrmis_wage     = payload.wage
       employees.value[idx].has_hrmis_wage = true
@@ -548,7 +553,15 @@ function openEdit(item: Record<string, any>) {
   isEditing.value   = emp.has_deductions
   sssOptIn.value    = emp.has_deductions && (emp.deductions?.sss ?? 0) > 0
   form.value = emp.deductions
-    ? { wage: Number(emp.deductions.wage), premium_percent: Number(emp.deductions.premium_percent), philhealth: Number(emp.deductions.philhealth), pag_ibig: Number(emp.deductions.pag_ibig), sss: Number(emp.deductions.sss), ewt_rate: Number(emp.deductions.ewt_rate) }
+    ? {
+        wage:            Number(emp.deductions.wage),
+        premium_percent: Number(emp.deductions.premium_percent),
+        philhealth:      Number(emp.deductions.philhealth),
+        pag_ibig:        Number(emp.deductions.pag_ibig),
+        sss:             Number(emp.deductions.sss),
+        ewt_rate:        Number(emp.deductions.ewt_rate),
+        effective_date:  new Date().toISOString().slice(0, 10), // NEW — always today, not carried over
+      }
     : { ...BLANK_FORM(), ...(emp.has_hrmis_wage && emp.hrmis_wage ? { wage: emp.hrmis_wage } : {}) }
   formErrors.value = {}
   modalOpen.value  = true
@@ -868,7 +881,7 @@ onMounted(fetchEmployees)
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
-        <VCol cols="12" sm="5">
+        <VCol cols="12" sm="4">
           <VTextField
             v-model.number="form.wage"
             label="Monthly Wage"
@@ -884,7 +897,7 @@ onMounted(fetchEmployees)
           />
         </VCol>
 
-        <VCol cols="12" sm="4">
+        <VCol cols="12" sm="3">
           <VSelect
             v-model="form.premium_percent"
             label="Premium Rate"
@@ -900,7 +913,7 @@ onMounted(fetchEmployees)
           />
         </VCol>
 
-        <VCol cols="12" sm="3">
+        <VCol cols="12" sm="2">
           <VTextField
             :model-value="fmt(computedPremium)"
             label="Premium Amount"
@@ -910,6 +923,20 @@ onMounted(fetchEmployees)
             hint="Auto-computed."
             persistent-hint
             readonly
+          />
+        </VCol>
+
+        <VCol cols="12" sm="3">
+          <VTextField
+            v-model="form.effective_date"
+            label="Effective Date"
+            type="date"
+            variant="outlined"
+            density="compact"
+            prepend-inner-icon="mdi-calendar-outline"
+            :error-messages="formErrors.effective_date"
+            :hint="isEditing ? 'When the new rate takes effect' : 'When this rate takes effect'"
+            persistent-hint
           />
         </VCol>
 
@@ -1088,9 +1115,10 @@ onMounted(fetchEmployees)
           </div>
           <p class="text-body-2 text-medium-emphasis mb-0">
             <span v-if="isEditing">
-              You are about to <strong class="text-high-emphasis">overwrite</strong> existing deductions
-              for <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong>.
-              This will replace all current values.
+              You are about to set a <strong class="text-high-emphasis">new wage rate</strong>
+              for <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong>, effective
+              <strong class="text-high-emphasis">{{ form.effective_date }}</strong>.
+              Past payroll runs are not affected — only payroll periods on or after this date will use the new rate.
             </span>
             <span v-else>
               Save deductions for <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong>?
