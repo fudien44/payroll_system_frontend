@@ -1,4 +1,5 @@
 import { globals } from '@/globals'
+import axios from '@axios'
 import Echo from 'laravel-echo'
 import Pusher from 'pusher-js'
 
@@ -9,8 +10,6 @@ declare global {
 }
 
 window.Pusher = Pusher
-
-const token = localStorage.getItem('auth_token')
 
 const echo = new Echo({
   broadcaster: 'reverb',
@@ -29,11 +28,18 @@ const echo = new Echo({
 
   authEndpoint: `${globals.api}/broadcasting/auth`,
 
-  auth: {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-    },
+  authorizer: (channel: any) => {
+    return {
+      authorize: (socketId: string, callback: (error: boolean, data: any) => void) => {
+        axios
+          .post('/broadcasting/auth', {
+            socket_id: socketId,
+            channel_name: channel.name,
+          })
+          .then(response => callback(false, response.data))
+          .catch(error => callback(true, error))
+      },
+    }
   },
 })
 

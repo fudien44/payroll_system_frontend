@@ -70,6 +70,7 @@ const filteredItems = computed(() => {
                 prepend-inner-icon="mdi-magnify"
                 variant="outlined"
                 hide-details
+                clearable
                 style="max-width: 300px;"
             />
         </VCardText>

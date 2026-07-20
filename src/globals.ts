@@ -10,6 +10,7 @@ interface Globals {
 }
 
 export const globals: Globals = {
+<<<<<<< HEAD
   // api: 'http://127.0.0.1:8000',
   // api: 'http://10.10.123.41:8000',
   api: 'http://10.10.122.29:8000',
@@ -18,6 +19,15 @@ export const globals: Globals = {
 
   reverb: {
     host: '10.10.122.29',
+=======
+  api: 'http://127.0.0.1:8000',
+  // api: 'http://10.10.123.41:8000',
+  // api: 'http://10.10.122.29:8000',
+  // api: 'http://10.10.120.96:8000',
+
+  reverb: {
+    host: '127.0.0.1',
+>>>>>>> 4a097cc0875ac42e0392268c522c041e9af8883d
     port: 8080,
     key: 'hu882a2okihcyczisf6y',
     scheme: 'http',

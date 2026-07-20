@@ -7,6 +7,7 @@ import realtime from '@/plugins/realtime'
 import { useUserStore } from '@/stores/user'
 import axios from '@axios'
 import { onUnmounted } from 'vue'
+import { useTheme } from 'vuetify'
 
 /* ─────────────────────────────────────────
    TYPES
@@ -27,12 +28,12 @@ interface Employee {
   section:     string | null
   emp_type:    string | null
   emp_status:  number | null
-  profile_pic: string | null
   is_flexi:    boolean
 }
 
 interface AttendanceDay {
   date:                    number
+  full_date:               string
   id_in_am:                string | number
   in_am:                   string
   id_out_am:               string | number
@@ -65,6 +66,19 @@ interface AttendanceDay {
   schedule_type:           'compressed' | 'standard' | null
   am_official_time:        string | null
   pm_official_time:        string | null
+  has_pass_slip:           boolean
+  pass_slips:              PassSlipEntry[]
+}
+
+interface PassSlipEntry {
+  id:                 number
+  request_time_out:   string
+  actual_time:         string | null
+  estimated_arrival:   string | null
+  reason:              string | null
+  label:               string
+  nature_business:     string | null
+  minutes:             number
 }
 
 interface WeeklyAttendanceDay {
@@ -102,12 +116,24 @@ interface DtrData {
   monthno:                 number
   month:                   string
   year:                    number
+  period_start:            string
+  period_end:              string
+  period_type:              'full_month' | 'dec_first_half' | 'dec_second_half_merged'
+  period_label:            string
+  carried_over_absent_days:         number
+  carried_over_late_minutes:        number
+  carried_over_undertime_minutes:   number
+  current_period_absent_days:       number
+  current_period_late_minutes:      number
+  current_period_undertime_minutes: number
   weekly_attendance:       WeeklyAttendance[]
 }
 
 // Enriched row with display-only computed fields
 interface AttendanceRow extends AttendanceDay {
   day:          number
+  fullDate:     string
+  monthShort:   string
   dayName:      string
   isWeekend:    boolean
   isSaturday:   boolean
@@ -129,6 +155,7 @@ type AlertType = 'success' | 'error' | 'warning' | 'info'
    CONSTANTS
 ───────────────────────────────────────── */
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const MONTH_SHORT_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 const TABLE_HEADERS = [
   { title: 'Employee', key: 'full_name', sortable: true                            },
@@ -185,6 +212,33 @@ function handleFlexiSaved(updated: Employee[], message: string, isError = false)
 const saveProgressDone  = ref(0)
 const saveProgressTotal = ref(0)
 
+// ── Timeout fallback - Reverb can silently die ────────────────────
+const STALE_TIMEOUT_MS    = 30_000       // 30s of silence = assume stalled
+const HARD_CAP_TIMEOUT_MS = 5 * 60_000  // 5 min absolute ceiling
+let staleTimer: ReturnType<typeof setTimeout> | null = null
+let hardCapTimer: ReturnType<typeof setTimeout> | null = null
+const savingTimedOut = ref(false)
+
+function clearSavingTimers() {
+  if (staleTimer)   clearTimeout(staleTimer)
+  if (hardCapTimer) clearTimeout(hardCapTimer)
+  staleTimer = null
+  hardCapTimer = null
+}
+
+function armStaleTimer() {
+  if (staleTimer) clearTimeout(staleTimer)
+  staleTimer = setTimeout(() => {
+    savingTimedOut.value = true
+    showAlert(
+      'warning',
+      'Lost contact with the DTR job — it may still be running in the background. ' +
+      'Refresh in a bit to confirm, or try again.',
+    )
+    finishSavingDtr()
+  }, STALE_TIMEOUT_MS)
+}
+
 // Period selector inside Save DTR dialog — defaults to preceding month
 function getDefaultSaveDtrPeriod() {
   const now = new Date()
@@ -230,7 +284,7 @@ const modalWidth = computed(() => dtrData.value ? '1150' : '520')
 const modalTitle = computed(() => {
   if (!selectedEmp.value) return 'DTR'
   if (!dtrData.value)     return `DTR — ${selectedEmp.value.full_name}`
-  return `DTR — ${selectedEmp.value.full_name} — ${dtrData.value.month} ${dtrData.value.year}`
+  return `DTR — ${selectedEmp.value.full_name} — ${dtrData.value.period_label}`
 })
 
 const isMonthComplete = computed(() => {
@@ -269,14 +323,20 @@ const attendanceRows = computed<AttendanceRow[]>(() => {
   if (!dtrData.value) return []
 
   return Object.entries(dtrData.value.attendance)
-    .map(([dayStr, data]) => {
-      const day       = Number(dayStr)
-      const date      = new Date(dtrData.value!.year, dtrData.value!.monthno - 1, day)
+    .map(([dateKey, data]) => {
+      // dateKey is an ISO date string (e.g. "2026-12-20"), not a bare day
+      // number — the backend keys attendance this way so a period spanning
+      // two months/years (the December merged period) can't collide two
+      // different days that happen to share the same day-of-month.
+      const [y, m, d] = dateKey.split('-').map(Number)
+      const date      = new Date(y, m - 1, d)
       const dayOfWeek = date.getDay()
 
       return {
         ...data,
-        day,
+        day:        data.date,   // day-of-month, for display
+        fullDate:   dateKey,     // real date — sort key / row key / grouping
+        monthShort: MONTH_SHORT_NAMES[m - 1],
         dayName:    DAY_NAMES[dayOfWeek],
         isWeekend:  dayOfWeek === 0 || dayOfWeek === 6,
         isSaturday: dayOfWeek === 6,
@@ -284,7 +344,7 @@ const attendanceRows = computed<AttendanceRow[]>(() => {
         isFriday:   dayOfWeek === 5,
       }
     })
-    .sort((a, b) => a.day - b.day)
+    .sort((a, b) => a.fullDate.localeCompare(b.fullDate)) // ISO format sorts chronologically as a plain string
 })
 
 const deviceChipColor = (status: DeviceStatus['status']) => ({
@@ -299,6 +359,12 @@ const deviceChipIcon = (status: DeviceStatus['status']) => ({
   error:        'mdi-close-circle-outline',
 }[status] ?? 'mdi-help-circle-outline')
 
+const theme = useTheme()
+
+const chipColor = computed(() =>
+  theme.global.current.value.dark ? 'cyan-accent-2' : 'cyan-darken-3'
+)
+
 /* ─────────────────────────────────────────
    HELPERS
 ───────────────────────────────────────── */
@@ -308,11 +374,16 @@ function showAlert(type: AlertType, message: string) {
   alertVisible.value = true
 }
 
-function fmtMinutes(mins: number): string {
-  if (!mins) return '—'
-  const h = Math.floor(mins / 60)
-  const m = mins % 60
-  return h > 0 ? `${h}h ${m}m` : `${m}m`
+const AVATAR_COLORS = ['primary', 'teal', 'orange', 'purple', 'pink', 'indigo'] as const
+
+function avatarColor(id: number): string {
+  return AVATAR_COLORS[id % AVATAR_COLORS.length]
+}
+
+function initials(fullName: string): string {
+  const [surname, rest] = fullName.split(', ')
+  const first = rest?.trim().charAt(0) ?? ''
+  return `${surname?.charAt(0) ?? ''}${first}`.toUpperCase()
 }
 
 function getRowClass(row: AttendanceRow): string {
@@ -388,9 +459,8 @@ async function fetchPeriodSummary() {
 }
 
 // ── Save DTR for all JO employees (preceding month) ────────────────
-// Resets the saving UI — called when the job finishes via Reverb
-// (completed/failed), or when the initial dispatch request itself fails.
 function finishSavingDtr() {
+  clearSavingTimers()
   if (savingTimer) clearInterval(savingTimer)
   savingTimer              = null
   savingDtr.value          = false
@@ -407,16 +477,25 @@ function finishSavingDtr() {
 async function runDtrJob(endpoint: string, incompleteMonthMessage: string) {
   if (savingDtr.value) return
   savingDtr.value         = true
+  savingTimedOut.value    = false
   savingElapsedSecs.value = 0
   savingTimer = setInterval(() => { savingElapsedSecs.value++ }, 1000)
 
   saveProgressDone.value  = 0
   saveProgressTotal.value = 0
+  
+  armStaleTimer()
+  hardCapTimer = setTimeout(() => {
+    savingTimedOut.value = true
+    showAlert(
+      'warning',
+      'DTR job is taking much longer than expected. It may still finish in the ' +
+      'background — check back shortly.',
+    )
+    finishSavingDtr()
+  }, HARD_CAP_TIMEOUT_MS)
 
   try {
-    // This only confirms the job was queued — NOT that it finished.
-    // Completion/failure arrives via payload.status on the Reverb
-    // progress event (see onMounted below).
     await axios.post(endpoint, {
       month: saveDtrMonth.value,
       year:  saveDtrYear.value,
@@ -482,6 +561,7 @@ onMounted(() => {
     userId,
     payload => {
       realtimeConnectionError.value = false
+      armStaleTimer() // any event, including 'running', proves the channel is alive
 
       if (payload.status === 'completed') {
         showAlert('success', payload.message)
@@ -609,22 +689,44 @@ onUnmounted(() => {
       <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
         Biometric Devices
       </p>
-      <VRow class="mb-6" dense>
-        <VCol v-for="device in deviceStatus" :key="device.ip" cols="12" sm="6" lg="3">
-          <VCard variant="outlined" rounded="lg">
-            <VCardText class="d-flex align-center justify-space-between pa-4">
-              <div>
-                <div class="text-body-1 font-weight-medium">{{ device.floor }}</div>
-                <div class="text-caption mt-1">{{ device.message }}</div>
-              </div>
-              <VChip :color="deviceChipColor(device.status)" size="small" variant="tonal" label>
-                <VIcon start :icon="deviceChipIcon(device.status)" size="14" />
-                {{ device.status }}
-              </VChip>
-            </VCardText>
-          </VCard>
-        </VCol>
-      </VRow>
+      <div class="d-flex flex-wrap gap-2 mb-6">
+        <VTooltip
+          v-for="device in deviceStatus"
+          :key="device.ip"
+          location="top"
+          content-class="device-pill-tooltip"
+        >
+          <template #activator="{ props }">
+          <!-- Connected: quiet/neutral pill with a small status dot -->
+          <VChip
+            v-if="device.status === 'connected'"
+            v-bind="props"
+            color="default"
+            variant="outlined"
+            label
+            class="device-pill"
+          >
+            <span class="device-dot device-dot--success" />
+            {{ device.floor }}
+          </VChip>
+
+          <!-- Disconnected/error: bold, colored, icon — meant to stand out -->
+          <VChip
+            v-else
+            v-bind="props"
+            :color="deviceChipColor(device.status)"
+            variant="tonal"
+            label
+            class="device-pill device-pill--problem"
+          >
+            <VIcon start :icon="deviceChipIcon(device.status)" size="16" />
+            {{ device.floor }}
+          </VChip>
+        </template>
+          <div class="font-weight-medium">{{ device.floor }}</div>
+          <div>{{ device.message }}</div>
+        </VTooltip>
+      </div>
 
       <!-- ── Employee Table ── -->
       <BaseTable
@@ -637,9 +739,9 @@ onUnmounted(() => {
       >
         <template #item.full_name="{ item }">
           <div class="d-flex align-center gap-3 py-1">
-            <VAvatar size="32" :image="item.profile_pic ?? undefined" :color="item.profile_pic ? undefined : 'primary'">
-              <span v-if="!item.profile_pic" class="text-caption font-weight-bold">
-                {{ item.full_name.charAt(0) }}{{ item.full_name.split(', ')[1]?.charAt(0) ?? '' }}
+            <VAvatar size="32" :color="avatarColor(item.id)" variant="tonal">
+              <span class="text-caption font-weight-bold">
+                {{ initials(item.full_name) }}
               </span>
             </VAvatar>
             <span>{{ item.full_name }}</span>
@@ -658,9 +760,19 @@ onUnmounted(() => {
           <span :class="{ 'text-medium-emphasis': !item.section }">{{ item.section ?? '—' }}</span>
         </template>
         <template #item.actions="{ item }">
-          <VBtn size="small" variant="tonal" color="primary" prepend-icon="mdi-calendar-clock" @click="openDtrModal(item)">
-            View DTR
-          </VBtn>
+          <VTooltip location="top">
+            <template #activator="{ props }">
+              <VBtn
+                v-bind="props"
+                icon="mdi-calendar-clock"
+                size="small"
+                variant="text"
+                color="primary"
+                @click="openDtrModal(item)"
+              />
+            </template>
+            <span>View DTR</span>
+          </VTooltip>
         </template>
       </BaseTable>
 
@@ -737,7 +849,7 @@ onUnmounted(() => {
           <!-- ── Monthly Summary ── -->
           <VCol cols="12" class="mt-4">
             <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
-              Monthly Summary — {{ dtrData.month }} {{ dtrData.year }}
+              Period Summary — {{ dtrData.period_label }}
             </p>
             <VDivider class="mt-1 mb-3" />
           </VCol>
@@ -799,6 +911,38 @@ onUnmounted(() => {
             </div>
           </VCol>
 
+          <!-- ── December/January carried-over breakdown ── -->
+          <!-- Only meaningful for a merged January period — the combined
+               totals above are unaffected either way; this just shows
+               how much of them came from each calendar month. -->
+          <VCol v-if="dtrData.period_type === 'dec_second_half_merged'" cols="12">
+            <VCard variant="tonal" color="default" rounded="lg" class="mt-2">
+              <VCardText class="pa-3">
+                <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-2">
+                  December / January Breakdown
+                </p>
+                <VRow dense>
+                  <VCol cols="6">
+                    <div class="text-caption text-medium-emphasis mb-1">December (carried over)</div>
+                    <div class="text-body-2">
+                      Absent: <strong>{{ dtrData.carried_over_absent_days }}</strong> ·
+                      Late: <strong>{{ dtrData.carried_over_late_minutes }}m</strong> ·
+                      Undertime: <strong>{{ dtrData.carried_over_undertime_minutes }}m</strong>
+                    </div>
+                  </VCol>
+                  <VCol cols="6">
+                    <div class="text-caption text-medium-emphasis mb-1">January</div>
+                    <div class="text-body-2">
+                      Absent: <strong>{{ dtrData.current_period_absent_days }}</strong> ·
+                      Late: <strong>{{ dtrData.current_period_late_minutes }}m</strong> ·
+                      Undertime: <strong>{{ dtrData.current_period_undertime_minutes }}m</strong>
+                    </div>
+                  </VCol>
+                </VRow>
+              </VCardText>
+            </VCard>
+          </VCol>
+
           <!-- ── Attendance Table ── -->
           <VCol cols="12" class="mt-2">
             <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
@@ -831,6 +975,10 @@ onUnmounted(() => {
               <div class="d-flex align-center gap-1">
                 <div class="dtr-legend dtr-legend--suspension" />
                 <span class="text-caption">Suspension</span>
+              </div>
+              <div class="d-flex align-center gap-1">
+                <div class="dtr-legend dtr-legend--pass-slip" />
+                <span class="text-caption">Pass Slip</span>
               </div>
               <div class="d-flex align-center gap-1">
                 <div class="dtr-legend dtr-legend--fri-cmp" />
@@ -866,12 +1014,15 @@ onUnmounted(() => {
                 <tbody>
                   <tr
                     v-for="row in attendanceRows"
-                    :key="row.day"
+                    :key="row.fullDate"
                     :class="getRowClass(row)"
                   >
                     <!-- Day + weekday name -->
                     <td class="col-day">
                       <span class="font-weight-medium">{{ row.day }}</span>
+                      <span v-if="dtrData?.period_type === 'dec_second_half_merged'" class="text-caption text-medium-emphasis">
+                        {{ row.monthShort }}
+                      </span>
                       <span class="text-caption text-medium-emphasis ms-1">{{ row.dayName }}</span>
                     </td>
 
@@ -971,6 +1122,22 @@ onUnmounted(() => {
                           >
                             Present
                           </VChip>
+
+                          <VTooltip v-if="row.has_pass_slip" location="top" max-width="280" content-class="pass-slip-tooltip">
+                            <template #activator="{ props }">
+                              <VChip v-bind="props" :color="chipColor" size="x-small" variant="tonal" label>
+                                <VIcon start size="12">mdi-badge-account-horizontal-outline</VIcon>
+                                Pass Slip
+                              </VChip>
+                            </template>
+                            <div v-for="ps in row.pass_slips" :key="ps.id" class="mb-1">
+                              <div class="font-weight-medium">{{ ps.label }}</div>
+                              <div>Request Out: {{ ps.request_time_out }} → Actual In: {{ ps.actual_time ?? '—' }}</div>
+                              <div v-if="ps.minutes > 0">Minutes: {{ ps.minutes }}m</div>
+                              <div v-if="ps.nature_business">{{ ps.nature_business }}</div>
+                            </div>
+                          </VTooltip>
+
                           <VChip
                             v-if="row.schedule_type"
                             :color="row.schedule_type === 'compressed' ? 'purple' : 'primary'"
@@ -1273,4 +1440,44 @@ onUnmounted(() => {
 .dtr-legend--suspension { background: rgba(0,   128, 128,             0.4); }
 .dtr-legend--weekend    { background: rgba(var(--v-theme-on-surface), 0.15); }
 .dtr-legend--fri-cmp    { background: rgba(128, 0, 128,               0.25); }
+.dtr-legend--pass-slip  { background: rgba(var(--v-theme-info),       0.4); }
+
+/* ── Pass slip ────────────────────────────────── */
+.pass-slip-tooltip {
+  font-size: 0.8rem;
+  line-height: 1.4;
+  padding: 10px 12px;
+  text-align: left;
+  white-space: normal;
+}
+
+/* ── Biometric device pills ─────────────────────── */
+.device-pill {
+  font-weight: 500;
+  padding-inline: 10px;
+  cursor: default;
+}
+
+.device-pill--problem {
+  font-weight: 600;
+}
+
+.device-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 7px;
+  background: rgb(var(--v-theme-success));
+  flex-shrink: 0;
+}
+
+.device-pill-tooltip {
+  font-size: 0.8rem;
+  line-height: 1.4;
+  padding: 8px 12px;
+  text-align: left;
+  white-space: normal;
+}
+
 </style>
