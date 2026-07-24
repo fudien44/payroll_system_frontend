@@ -16,7 +16,7 @@ export const globals: Globals = {
   // api: 'http://10.10.120.96:8000',
 
   reverb: {
-    host: '127.0.0.1',
+    host: '10.10.123.41',
     port: 8080,
     key: 'hu882a2okihcyczisf6y',
     scheme: 'http',

@@ -198,6 +198,46 @@ const confirmOverrideOpen = ref(false)
 const savingElapsedSecs = ref(0)
 let   savingTimer: ReturnType<typeof setInterval> | null = null
 
+// ── Cooldown after a successful save/override ───────────────────────
+const DTR_COOLDOWN_MS = 3 * 60_000 //3 minutes
+const DTR_COOLDOWN_STORAGE_KEY = 'dtr_save_cooldown_until'
+
+const cooldownActive = ref(false)
+const cooldownRemainingSecs = ref(0)
+let cooldownTimer: ReturnType<typeof setInterval> | null = null
+
+function tickCooldown() {
+  const until = Number(localStorage.getItem(DTR_COOLDOWN_STORAGE_KEY) || 0)
+  const remaining = until - Date.now()
+
+  if (remaining <= 0) {
+    cooldownActive.value = false
+    cooldownRemainingSecs.value = 0
+    if (cooldownTimer) clearInterval(cooldownTimer)
+    cooldownTimer = null
+    localStorage.removeItem(DTR_COOLDOWN_STORAGE_KEY)
+    return
+  }
+
+  cooldownActive.value = true
+  cooldownRemainingSecs.value = Math.ceil(remaining / 1000)
+}
+
+function startCooldown() {
+  localStorage.setItem(DTR_COOLDOWN_STORAGE_KEY, String(Date.now() + DTR_COOLDOWN_MS))
+  if (cooldownTimer) clearInterval(cooldownTimer)
+  tickCooldown()
+  cooldownTimer = setInterval(tickCooldown, 1000)
+}
+
+function resumeCooldownIfAny() {
+  const until = Number(localStorage.getItem(DTR_COOLDOWN_STORAGE_KEY) || 0)
+  if (until > Date.now()) {
+    tickCooldown()
+    cooldownTimer = setInterval(tickCooldown, 1000)
+  }
+}
+
 // ── Set Flexi state ─────────────────────────────────────────────────
 const flexiModalOpen   = ref(false)
 
@@ -294,7 +334,13 @@ const isMonthComplete = computed(() => {
   return lastDay < today
 })
 
-const canSaveDtr = computed(() => !savingDtr.value && isMonthComplete.value)
+const canSaveDtr = computed(() => !savingDtr.value && !cooldownActive.value && isMonthComplete.value)
+
+const cooldownLabel = computed(() => {
+  const m = Math.floor(cooldownRemainingSecs.value / 60)
+  const s = cooldownRemainingSecs.value % 60
+ return `Available again in ${m}:${String(s).padStart(2, '0')}`
+})
 
 const saveDtrLabel = computed(() => {
   const m = MONTH_ITEMS.find(x => x.value === saveDtrMonth.value)
@@ -553,6 +599,7 @@ function cancelSaveDtr() {
 ───────────────────────────────────────── */
 onMounted(() => {
   fetchData()
+  resumeCooldownIfAny()
 
   const userId = userStore.user?.id
   if (!userId) return
@@ -566,6 +613,7 @@ onMounted(() => {
       if (payload.status === 'completed') {
         showAlert('success', payload.message)
         finishSavingDtr()
+        startCooldown()
         return
       }
 
@@ -586,6 +634,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (cooldownTimer) clearInterval(cooldownTimer)
+
   const userId = userStore.user?.id
   if (!userId) return
 
@@ -615,22 +665,25 @@ onUnmounted(() => {
           <!-- Save DTR button — saves ALL JO employees' DTR for the preceding month -->
           <VTooltip location="bottom">
             <template #activator="{ props }">
-              <VBtn
-                v-bind="props"
-                color="success"
-                variant="tonal"
-                prepend-icon="mdi-content-save-outline"
-                :loading="savingDtr"
-                :disabled="!canSaveDtr"
-                @click="{ savingElapsedSecs = 0; confirmSaveOpen = true }"
-              >
-                Save DTR
-              </VBtn>
+              <span v-bind="props" style="display: inline-block;">
+                <VBtn
+                  color="success"
+                  variant="tonal"
+                  prepend-icon="mdi-content-save-outline"
+                  :loading="savingDtr"
+                  :disabled="!canSaveDtr"
+                  @click="{ savingElapsedSecs = 0; confirmSaveOpen = true }"
+                >
+                  Save DTR
+                </VBtn>
+              </span>
             </template>
             <span>
               {{
                 !isMonthComplete
                   ? `${saveDtrLabel} is not yet complete — DTR can only be saved after the month ends`
+                  : cooldownActive
+                  ? cooldownLabel
                   : 'Save DTR summaries — select period in dialog'
               }}
             </span>
@@ -639,7 +692,7 @@ onUnmounted(() => {
           <!-- Set Flexi button — mark/unmark employees on the flexi schedule -->
           <VBtn
             variant="tonal"
-            color="info"
+            color="primary"
             prepend-icon="mdi-account-clock-outline"
             @click="flexiModalOpen = true"
           >
@@ -648,8 +701,16 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- ── Standing reminder: calendar setup must precede DTR save ── -->
+      <VAlert type="info" variant="tonal" icon="mdi-calendar-alert-outline" density="comfortable" class="mb-3 mt-4" closable>
+        <strong>Before saving DTR summaries:</strong> Ensure all <strong>holidays and suspensions</strong> for the
+        period are set in the <strong>Calendar</strong> module. DTR summaries cannot be
+        re-saved without going through Override, so missing calendar entries will require
+        an override to correct. A <strong>3-minute cooldown</strong> applies before another save can be performed.
+      </VAlert>
+
       <!-- ── Summary Cards ── -->
-      <VRow class="mb-6 mt-2">
+      <VRow class="mb-5 mt-2">
         <VCol cols="12" sm="4">
           <VCard variant="tonal" color="primary" rounded="lg">
             <VCardText class="d-flex align-center gap-4">
@@ -1339,7 +1400,7 @@ onUnmounted(() => {
         </VCardText>
         <VCardActions class="pa-4 pt-0 gap-2 justify-end">
           <VBtn variant="text" @click="confirmOverrideOpen = false">Cancel</VBtn>
-          <VBtn color="warning" variant="tonal" prepend-icon="mdi-restore-alert" @click="overrideDtr">
+          <VBtn color="warning" variant="tonal" prepend-icon="mdi-restore-alert" @click="overrideDtr" :disabled="!canSaveDtr">
             Yes, Override
           </VBtn>
         </VCardActions>

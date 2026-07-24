@@ -8,6 +8,7 @@ class RealtimeService {
   ) {
     return echo
       .private(`dtr-progress.${userId}`)
+      .subscribed(() => console.log(`[Reverb] subscribed to dtr-progress.${userId}`))
       .listen('.progress.updated', callback)
       .error((error: any) => onError?.(error))
   }
