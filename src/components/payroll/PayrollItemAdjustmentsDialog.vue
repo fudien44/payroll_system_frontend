@@ -39,6 +39,9 @@ interface BatchItem {
   dtr_absent_days:         number
   dtr_late_minutes:        number
   dtr_undertime_minutes:   number
+  dtr_carried_over_absent_days:       number
+  dtr_carried_over_late_minutes:      number
+  dtr_carried_over_undertime_minutes: number
 }
 
 interface Adjustment {
@@ -48,9 +51,11 @@ interface Adjustment {
   date_to:              string | null
   minutes:              number
   is_whole_day:         boolean
+  is_half_day:          boolean   // NEW
   notes:                string | null
   is_compressed_week:   boolean
   days_in_month:        number
+  carried_over_days:    number    // NEW
   compressed_mins_offset: number
   is_hrmis_imported:    boolean
 }
@@ -67,6 +72,17 @@ const props = defineProps<{
   periodMonth:  number
   periodYear:   number
 }>()
+
+const carryOverRange = computed(() => {
+  if (props.periodMonth !== 1) return null
+  const hasCarryOver =
+    Number(props.item?.dtr_carried_over_absent_days ?? 0) > 0 ||
+    Number(props.item?.dtr_carried_over_late_minutes ?? 0) > 0 ||
+    Number(props.item?.dtr_carried_over_undertime_minutes ?? 0) > 0
+  if (!hasCarryOver) return null
+  const priorYear = props.periodYear - 1
+  return { from: `${priorYear}-12-16`, to: `${priorYear}-12-31` }
+})
 
 const emit = defineEmits<{
   (e: 'update:modelValue', val: boolean): void
@@ -95,12 +111,13 @@ interface BatchRow {
   date_to:        string | null
   minutes:        number | null
   notes:          string
+  isHalfDay:      boolean   // NEW
 }
 
 let rowUidSeq = 0
 const BLANK_ROW = (): BatchRow => ({
   _uid: ++rowUidSeq, type: '', pass_slip_type: '',
-  date: '', date_to: '', minutes: null, notes: '',
+  date: '', date_to: '', minutes: null, notes: '', isHalfDay: false,
 })
 
 const rows      = ref<BatchRow[]>([BLANK_ROW()])
@@ -115,13 +132,21 @@ function removeRow(uid: number) {
   if (rows.value.length === 0) rows.value.push(BLANK_ROW())
 }
 function onRowTypeChange(row: BatchRow, val: BatchRow['type']) {
-  row.type    = val
-  row.date    = ''
-  row.date_to = ''
+  row.type      = val
+  row.date      = ''
+  row.date_to   = ''
+  row.isHalfDay = false
   if (val !== 'pass_slip') {
     row.minutes        = null
     row.pass_slip_type = ''
   }
+}
+
+function onHalfDayToggle(row: BatchRow) {
+  // Half/whole day selects a different calendar mode — clear the pick
+  // to avoid keeping a stale range when switching.
+  row.date    = ''
+  row.date_to = ''
 }
 
 /* ─────────────────────────────────────────
@@ -132,34 +157,92 @@ const isOpen = computed({
   set: (v) => emit('update:modelValue', v),
 })
 
-const compressedMinuteOffset = computed(() =>
+/* ─────────────────────────────────────────
+   CARRY-OVER-AWARE PREVIEW HELPERS
+───────────────────────────────────────── */
+function isCurrentPeriodDate(dateStr: string): boolean {
+  const d = new Date(dateStr + 'T00:00:00')
+  return d.getMonth() + 1 === props.periodMonth && d.getFullYear() === props.periodYear
+}
+
+function isCarriedOverDate(dateStr: string): boolean {
+  if (!carryOverRange.value) return false
+  return dateStr >= carryOverRange.value.from && dateStr <= carryOverRange.value.to
+}
+
+// Whole-day adjustments — split by which segment each day actually falls in.
+// days_in_month = total days counted (current + carried), carried_over_days
+// = the portion of those that fall in the Dec 16-31 window. Both come
+// straight from the backend's enrichAdjustment().
+const currentWholeDayCount = computed(() =>
+  adjustments.value
+    .filter(a => a.is_whole_day)
+    .reduce((sum, a) => sum + (a.days_in_month - (a.carried_over_days ?? 0)), 0)
+)
+
+const carriedWholeDayCount = computed(() =>
+  adjustments.value
+    .filter(a => a.is_whole_day)
+    .reduce((sum, a) => sum + (a.carried_over_days ?? 0), 0)
+)
+
+// compressed_mins_offset from the backend is already current-period-only
+// (enrichAdjustment only accumulates it when inCurrentPeriod is true).
+const currentCompressedMinuteOffset = computed(() =>
   adjustments.value
     .filter(a => a.is_whole_day)
     .reduce((sum, a) => sum + (a.compressed_mins_offset ?? 0), 0)
 )
 
-const wholeDayCount = computed(() =>
+// Pass slips are always single-day — split by which segment that date is in.
+const currentPassSlipMinutes = computed(() =>
   adjustments.value
-    .filter(a => a.is_whole_day)
-    .reduce((sum, a) => sum + (a.days_in_month ?? 1), 0)
+    .filter(a => a.type === 'pass_slip' && isCurrentPeriodDate(a.date))
+    .reduce((s, a) => s + a.minutes, 0)
 )
 
+const carriedPassSlipMinutes = computed(() =>
+  adjustments.value
+    .filter(a => a.type === 'pass_slip' && isCarriedOverDate(a.date))
+    .reduce((s, a) => s + a.minutes, 0)
+)
+
+// Kept for the existing "(+N)" badge — total across both segments
 const passSlipMinutesTotal = computed(() =>
   adjustments.value.filter(a => a.type === 'pass_slip').reduce((s, a) => s + a.minutes, 0)
 )
 
-// Preview: what the absent days / late minutes will be after all adjustments
-const previewAbsentDays = computed(() => {
-  if (!props.item) return 0
-  return Math.max(0, Number(props.item.dtr_absent_days) - wholeDayCount.value)
-})
+/* ── Split baselines ────────────────────────────────────────────── */
+const carriedAbsentBaseline = computed(() => Number(props.item?.dtr_carried_over_absent_days ?? 0))
+const currentAbsentBaseline = computed(() =>
+  Math.max(0, Number(props.item?.dtr_absent_days ?? 0) - carriedAbsentBaseline.value)
+)
+const carriedLateBaseline = computed(() => Number(props.item?.dtr_carried_over_late_minutes ?? 0))
+const currentLateBaseline = computed(() =>
+  Math.max(0, Number(props.item?.dtr_late_minutes ?? 0) - carriedLateBaseline.value)
+)
 
-const previewLateMinutes = computed(() => {
-  if (!props.item) return 0
-  return Math.max(0,
-    Number(props.item.dtr_late_minutes) - compressedMinuteOffset.value + passSlipMinutesTotal.value
-  )
-})
+/* ── Split previews ─────────────────────────────────────────────── */
+const previewCurrentAbsentDays = computed(() =>
+  Math.max(0, currentAbsentBaseline.value - currentWholeDayCount.value)
+)
+const previewCarriedAbsentDays = computed(() =>
+  Math.max(0, carriedAbsentBaseline.value - carriedWholeDayCount.value)
+)
+const previewCurrentLateMinutes = computed(() =>
+  Math.max(0, currentLateBaseline.value - currentCompressedMinuteOffset.value + currentPassSlipMinutes.value)
+)
+const previewCarriedLateMinutes = computed(() =>
+  Math.max(0, carriedLateBaseline.value + carriedPassSlipMinutes.value)
+)
+
+/* ── Combined totals (what previously rendered) ─────────────────── */
+const previewAbsentDays = computed(() => previewCurrentAbsentDays.value + previewCarriedAbsentDays.value)
+const previewLateMinutes = computed(() => previewCurrentLateMinutes.value + previewCarriedLateMinutes.value)
+
+// Kept for existing badge displays
+const wholeDayCount = computed(() => currentWholeDayCount.value + carriedWholeDayCount.value)
+const compressedMinuteOffset = computed(() => currentCompressedMinuteOffset.value)
 
 const typeLabel = (type: string) => {
   if (type === 'pass_slip')       return 'Pass Slip'
@@ -230,12 +313,11 @@ function validateRow(row: BatchRow): Record<string, string> {
   if (row.type === 'pass_slip') {
     if (!row.pass_slip_type) errs.pass_slip_type = 'Please select Personal or Official.'
     if (!row.minutes || row.minutes < 1) errs.minutes = 'Minutes must be at least 1 for a pass slip.'
-  } else if (row.date && !row.date_to) {
+  } else if (!row.isHalfDay && row.date && !row.date_to) {
     errs.date = 'Please pick a date range.'
   }
   return errs
 }
-
 function validateAllRows(): boolean {
   const allErrors: Record<number, Record<string, string>> = {}
   let valid = true
@@ -254,20 +336,21 @@ async function saveBatch() {
   if (!validateAllRows() || !props.item) return
   saving.value = true
   try {
-    const payload = rows.value.map(row => {
-      let notesValue = row.notes?.trim() || null
-      if (row.type === 'pass_slip' && row.pass_slip_type) {
-        const label = row.pass_slip_type === 'official' ? '[Official Pass Slip]' : '[Personal Pass Slip]'
-        notesValue = notesValue ? `${label} ${notesValue}` : label
-      }
-      return {
-        type:    row.type,
-        date:    row.date,
-        date_to: row.type !== 'pass_slip' ? (row.date_to || row.date) : null,
-        minutes: row.type === 'pass_slip' ? row.minutes : 0,
-        notes:   notesValue,
-      }
-    })
+   const payload = rows.value.map(row => {
+  let notesValue = row.notes?.trim() || null
+  if (row.type === 'pass_slip' && row.pass_slip_type) {
+    const label = row.pass_slip_type === 'official' ? '[Official Pass Slip]' : '[Personal Pass Slip]'
+    notesValue = notesValue ? `${label} ${notesValue}` : label
+  }
+  return {
+    type:        row.type,
+    date:        row.date,
+    date_to:     row.type !== 'pass_slip' ? (row.isHalfDay ? row.date : (row.date_to || row.date)) : null,
+    minutes:     row.type === 'pass_slip' ? row.minutes : 0,
+    is_half_day: row.type !== 'pass_slip' ? row.isHalfDay : false,
+    notes:       notesValue,
+  }
+})
 
     const { data } = await axios.post(
       `/api/payroll-run/${props.runId}/items/${props.item.id}/adjustments/batch`,
@@ -390,18 +473,26 @@ function showAlert(type: AlertType, message: string) {
                     </span>
                   </strong>
                 </div>
-               <div class="d-flex justify-space-between text-body-2 mt-1">
-                <span class="text-medium-emphasis">Late Minutes</span>
-                <strong :class="compressedMinuteOffset > 0 ? 'text-success' : passSlipMinutesTotal > 0 ? 'text-warning' : ''">
-                  {{ previewLateMinutes }}
-                  <span v-if="compressedMinuteOffset > 0" class="text-caption text-success">
-                    (−{{ compressedMinuteOffset }})
-                  </span>
-                  <span v-if="passSlipMinutesTotal > 0" class="text-caption text-warning">
-                    (+{{ passSlipMinutesTotal }})
-                  </span>
-                </strong>
-              </div>
+                <div v-if="carryOverRange" class="text-caption text-medium-emphasis text-right mb-1">
+                  Dec: {{ previewCarriedAbsentDays }} · Jan: {{ previewCurrentAbsentDays }}
+                </div>
+
+                <div class="d-flex justify-space-between text-body-2 mt-1">
+                  <span class="text-medium-emphasis">Late Minutes</span>
+                  <strong :class="compressedMinuteOffset > 0 ? 'text-success' : passSlipMinutesTotal > 0 ? 'text-warning' : ''">
+                    {{ previewLateMinutes }}
+                    <span v-if="compressedMinuteOffset > 0" class="text-caption text-success">
+                      (−{{ compressedMinuteOffset }})
+                    </span>
+                    <span v-if="passSlipMinutesTotal > 0" class="text-caption text-warning">
+                      (+{{ passSlipMinutesTotal }})
+                    </span>
+                  </strong>
+                </div>
+                <div v-if="carryOverRange" class="text-caption text-medium-emphasis text-right mb-1">
+                  Dec: {{ previewCarriedLateMinutes }} · Jan: {{ previewCurrentLateMinutes }}
+                </div>
+
                 <div class="d-flex justify-space-between text-body-2 mt-1">
                   <span class="text-medium-emphasis">Net Pay</span>
                   <strong class="text-success">{{ fmt(item?.net_pay ?? 0) }}</strong>
@@ -440,23 +531,30 @@ function showAlert(type: AlertType, message: string) {
             <tbody>
               <tr v-for="adj in adjustments" :key="adj.id">
                 <td>
-                  <VChip :color="typeColor(adj.type)" size="x-small" variant="tonal" label>
-                    <VIcon start :icon="typeIcon(adj.type)" size="11" />
-                    {{ typeLabel(adj.type) }}
-                  </VChip>
-                   <VChip
-                    v-if="adj.is_hrmis_imported"
-                    size="x-small"
-                    color="indigo"
-                    variant="outlined"
-                    label
-                    class="ml-1"
-                  >
-                    <VIcon start icon="mdi-cloud-sync-outline" size="10" />
-                    HRMIS
-                    <VTooltip activator="parent" location="top">Auto-imported from an approved pass slip</VTooltip>
-                  </VChip>
-                </td>
+                <VChip :color="typeColor(adj.type)" size="x-small" variant="tonal" label>
+                  <VIcon start :icon="typeIcon(adj.type)" size="11" />
+                  {{ typeLabel(adj.type) }}
+                </VChip>
+                <VChip v-if="adj.is_half_day" size="x-small" color="teal" variant="outlined" label class="ml-1">
+                  ½ DAY
+                </VChip>
+                <VChip v-if="adj.carried_over_days > 0" size="x-small" color="warning" variant="outlined" label class="ml-1">
+                  <VIcon start icon="mdi-calendar-arrow-left" size="10" />
+                  {{ adj.carried_over_days }}d carried
+                </VChip>
+                <VChip
+                  v-if="adj.is_hrmis_imported"
+                  size="x-small"
+                  color="indigo"
+                  variant="outlined"
+                  label
+                  class="ml-1"
+                >
+                  <VIcon start icon="mdi-cloud-sync-outline" size="10" />
+                  HRMIS
+                  <VTooltip activator="parent" location="top">Auto-imported from an approved pass slip</VTooltip>
+                </VChip>
+              </td>
                 <td class="text-caption font-monospace">
                   {{ adj.date }}
                   <template v-if="adj.date_to && adj.date_to !== adj.date">
@@ -579,21 +677,31 @@ function showAlert(type: AlertType, message: string) {
       />
     </VCol>
 
-    <!-- Date / Date range picker -->
-    <VCol cols="12" :sm="row.type === 'pass_slip' ? 4 : 8">
-      <AdjustmentDatePicker
-        :type="row.type"
-        :period-month="periodMonth"
-        :period-year="periodYear"
-        :date="row.date"
-        :date-to="row.date_to"
-        :disabled="!row.type"
-        :error-messages="rowErrors[row._uid]?.date || rowErrors[row._uid]?.date_to"
-        @update:date="row.date = $event"
-        @update:date-to="row.date_to = $event"
-      />
-    </VCol>
+    <VCol v-if="row.type === 'leave' || row.type === 'official_travel'" cols="12" sm="4" class="d-flex align-center">
+  <VSwitch
+    v-model="row.isHalfDay"
+    color="teal" density="compact" hide-details inset
+    label="Half Day"
+    @update:model-value="onHalfDayToggle(row)"
+  />
+</VCol>
 
+    <!-- Date / Date range picker -->
+    <VCol cols="12" :sm="row.type ? 4 : 8">
+  <AdjustmentDatePicker
+    :type="row.type"
+    :period-month="periodMonth"
+    :period-year="periodYear"
+    :date="row.date"
+    :date-to="row.date_to"
+    :disabled="!row.type"
+    :is-half-day="row.isHalfDay"
+    :carry-over-range="carryOverRange"
+    :error-messages="rowErrors[row._uid]?.date || rowErrors[row._uid]?.date_to"
+    @update:date="row.date = $event"
+    @update:date-to="row.date_to = $event"
+  />
+</VCol>
     <!-- Minutes (pass slip only) -->
     <VCol cols="12" sm="4">
       <VTextField

@@ -60,12 +60,6 @@ const MONTH_NAMES = [
   'July','August','September','October','November','December',
 ]
 
-const HARDCODED_APPROVED_BY_PAYROLL: Signatory = {
-  id: 0,
-  name: 'EXUPERIA B. SABALBERINO, MD, MPH, CESE',
-  position: 'DIRECTOR IV',
-  role: 'approved_by',
-}
 
 const TABLE_HEADERS = [
   { title: 'Payroll No.',   key: 'payroll_no',    sortable: true                         },
@@ -132,6 +126,8 @@ const certifiedBySlots    = ref<(Signatory | null)[]>([])
 const selectablePool      = ref<Signatory[]>([])
 const slot1Locked         = ref(false)
 const selectedCertifiedBy = ref<(number | null)[]>([])
+const approvedByPool      = ref<Signatory[]>([])
+const selectedApprovedBy  = ref<number | null>(null)
 
 /* ─────────────────────────────────────────
    COMPUTED
@@ -183,23 +179,39 @@ const docTypeLabel = computed(() => {
   return 'Disbursement Voucher (DV)'
 })
 
-const approvedByName = computed(() => {
-  const useHardcoded = docType.value === 'payroll_sheet' || docType.value === 'dv'
-  const sig = useHardcoded ? HARDCODED_APPROVED_BY_PAYROLL : approvedBySig.value
-  return sig?.name ?? '—'
-})
+function initials(name: string) {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(w => w[0].toUpperCase())
+    .join('')
+}
 
-const approvedByPosition = computed(() => {
-  const useHardcoded = docType.value === 'payroll_sheet' || docType.value === 'dv'
-  const sig = useHardcoded ? HARDCODED_APPROVED_BY_PAYROLL : approvedBySig.value
-  return sig?.position ?? ''
-})
+const AVATAR_COLORS = ['primary', 'teal', 'orange', 'purple', 'pink', 'indigo'] as const
 
-const slot1Options = computed(() =>
-  selectablePool.value.map(s => ({ title: `${s.name} — ${s.position}`, value: s.id }))
+function avatarColor(id: number | null): string {
+  return AVATAR_COLORS[(id ?? 0) % AVATAR_COLORS.length]
+}
+
+const certifiedOptions = computed(() =>
+  selectablePool.value.map(s => ({ title: s.name, subtitle: s.position, value: s.id as number | null, vacant: false }))
 )
 
-const certifiedSlotCount = computed(() => docType.value === 'payroll_sheet' ? 3 : 2)
+const approvedByOptions = computed(() => [
+  { title: 'Vacant / No Approving Authority', subtitle: 'Leave blank on the document', value: null as number | null, vacant: true },
+  ...approvedByPool.value.map(s => ({ title: s.name, subtitle: s.position, value: s.id as number | null, vacant: false })),
+])
+
+const certifiedSlotLabels = computed(() => {
+  if (docType.value === 'ors') return ['Certified by - Division Head', 'Certified by - Budget Officer']
+  if (docType.value === 'dv')  return ['Certified by - Division Head', 'Certified by - Accountant Head']
+  return ['Certified by - Division Head', 'Certified by - Accountant Head', 'Certified by - Cashier Head']
+})
+
+const approvedByLabel = computed(() =>
+  docType.value === 'dv' ? 'Approved by' : 'Approved By'
+)
 
  const docGenerateLoading = computed(() => {
    if (docType.value === 'ors') return orsLoading.value
@@ -269,6 +281,8 @@ async function fetchSignatories(type: DocType, divisionId: number) {
     })
     const payload = data.data
     approvedBySig.value   = payload.approved_by ?? null
+    selectedApprovedBy.value = approvedBySig.value?.id ?? null
+    approvedByPool.value  = payload.approved_by_pool ?? []
     certifiedBySlots.value = payload.certified_by
     selectablePool.value   = payload.selectable_pool
     slot1Locked.value      = payload.slot1_locked
@@ -293,7 +307,7 @@ async function generateORSFromBackend() {
   try {
     const response = await axios.post(
       `/api/payroll-run/${docTarget.value.id}/generate-ors`,
-      {},
+      {certified_by: selectedCertifiedBy.value},
       { responseType: 'blob' }
     )
     const filename = `ORS-${docTarget.value.payroll_no}.pdf`
@@ -314,7 +328,7 @@ async function generatePayrollSheetFromBackend() {
   try {
     const response = await axios.post(
       `/api/payroll-run/${docTarget.value.id}/generate-payroll-sheet`,
-      {},
+      {certified_by: selectedCertifiedBy.value, approved_by: selectedApprovedBy.value},
       { responseType: 'blob' }
     )
     const filename = `PAYROLL-${docTarget.value.payroll_no}.pdf`
@@ -335,7 +349,7 @@ async function generateDVFromBackend() {
   try {
     const response = await axios.post(
       `/api/payroll-run/${docTarget.value.id}/generate-dv`,
-      {},
+      {certified_by: selectedCertifiedBy.value, approved_by: selectedApprovedBy.value},
       { responseType: 'blob' }
     )
     const filename = `DV-${docTarget.value.payroll_no}.pdf`
@@ -863,85 +877,103 @@ onMounted(() => {
           <VSkeletonLoader v-if="sigsLoading" type="list-item-two-line, list-item-two-line" />
 
           <template v-else>
-            <template v-if="docType !== 'ors'">
-              <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-1">Approved By</p>
-              <VCard variant="tonal" color="primary" rounded="lg" flat class="mb-4">
-                <VCardText class="py-2 px-4">
-                  <div class="d-flex align-center gap-2">
-                    <VIcon icon="mdi-account-check-outline" size="16" />
+             <template v-if="docType !== 'ors'">
+              <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-1">
+                {{ approvedByLabel }}
+              </p>
+              <VAutocomplete
+                v-model="selectedApprovedBy"
+                :items="approvedByOptions"
+                item-title="title"
+                item-value="value"
+                variant="outlined"
+                density="compact"
+                prepend-inner-icon="mdi-account-check-outline"
+                hide-details
+                clearable
+                class="mb-2"
+              >
+                <template #selection="{ item }">
+                  <div class="d-flex align-center gap-2 py-1">
+                    <VAvatar v-if="!item.raw.vacant" :color="avatarColor(item.raw.value)" variant="tonal" size="24">
+                      <span style="font-size: 10px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                    </VAvatar>
+                    <VAvatar v-else color="default" variant="tonal" size="24">
+                      <VIcon size="14">mdi-account-off-outline</VIcon>
+                    </VAvatar>
                     <div>
-                      <div class="text-body-2 font-weight-medium">{{ approvedByName }}</div>
-                      <div class="text-caption">{{ approvedByPosition }}</div>
+                      <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
+                      <span v-if="item.raw.subtitle" class="text-caption text-medium-emphasis ml-2">{{ item.raw.subtitle }}</span>
                     </div>
                   </div>
-                </VCardText>
-              </VCard>
+                </template>
+                <template #item="{ item, props }">
+                  <VListItem v-bind="props" :title="undefined" class="py-2">
+                    <template #prepend>
+                      <VAvatar v-if="!item.raw.vacant" :color="avatarColor(item.raw.value)" variant="tonal" size="36" class="mr-3">
+                        <span style="font-size: 12px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                      </VAvatar>
+                      <VAvatar v-else color="default" variant="tonal" size="36" class="mr-3">
+                        <VIcon size="18">mdi-account-off-outline</VIcon>
+                      </VAvatar>
+                    </template>
+                    <VListItemTitle class="text-body-2 font-weight-medium">{{ item.raw.title }}</VListItemTitle>
+                    <VListItemSubtitle v-if="item.raw.subtitle" class="text-caption">{{ item.raw.subtitle }}</VListItemSubtitle>
+                  </VListItem>
+                </template>
+              </VAutocomplete>
+              <VAlert
+                v-if="selectedApprovedBy === null"
+                type="warning" variant="tonal" density="compact"
+                icon="mdi-account-off-outline" class="mb-4 text-body-2"
+              >
+                No Approving Authority selected — the document will generate with a blank signature line.
+              </VAlert>
+              <div v-else class="mb-4" />
             </template>
 
             <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-2">
               Certified By
-              <span class="text-lowercase font-weight-regular">
-                ({{ certifiedSlotCount }} {{ certifiedSlotCount > 1 ? 'signatories' : 'signatory' }} required)
-              </span>
             </p>
 
-            <div class="d-flex flex-column gap-2">
-              <div class="d-flex align-center gap-2">
-                <VChip size="x-small" label color="primary" variant="tonal" class="flex-shrink-0">1</VChip>
-                <template v-if="slot1Locked">
-                  <VCard variant="outlined" rounded="lg" class="flex-grow-1">
-                    <VCardText class="py-2 px-3">
-                      <div class="d-flex align-center gap-2">
-                        <VIcon icon="mdi-check-decagram-outline" size="15" color="success" />
-                        <div>
-                          <div class="text-body-2 font-weight-medium">{{ certifiedBySlots[0]?.name }}</div>
-                          <div class="text-caption text-medium-emphasis">{{ certifiedBySlots[0]?.position }}</div>
-                        </div>
-                        <VSpacer />
-                        <VChip size="x-small" color="success" variant="tonal" label>Division Head</VChip>
-                      </div>
-                    </VCardText>
-                  </VCard>
-                </template>
-                <template v-else>
-                  <VSelect
-                    v-model="selectedCertifiedBy[0]"
-                    :items="slot1Options"
-                    item-title="title"
-                    item-value="value"
-                    variant="outlined"
-                    density="compact"
-                    prepend-inner-icon="mdi-account-multiple-check-outline"
-                    placeholder="Select signatory..."
-                    hide-details
-                    clearable
-                    class="flex-grow-1"
-                  />
-                </template>
-              </div>
-
-              <div
-                v-for="(slot, i) in certifiedBySlots.slice(1)"
-                :key="i + 2"
-                class="d-flex align-center gap-2"
-              >
-                <VChip size="x-small" label color="primary" variant="tonal" class="flex-shrink-0">{{ i + 2 }}</VChip>
-                <VCard variant="outlined" rounded="lg" class="flex-grow-1">
-                  <VCardText class="py-2 px-3">
-                    <div v-if="slot" class="d-flex align-center gap-2">
-                      <VIcon icon="mdi-check-decagram-outline" size="15" color="teal" />
+            <div class="d-flex flex-column gap-3">
+              <div v-for="(label, i) in certifiedSlotLabels" :key="i" class="d-flex flex-column gap-1">
+                <span class="text-caption text-medium-emphasis">{{ label }}</span>
+                <VAutocomplete
+                  v-model="selectedCertifiedBy[i]"
+                  :items="certifiedOptions"
+                  item-title="title"
+                  item-value="value"
+                  variant="outlined"
+                  density="compact"
+                  prepend-inner-icon="mdi-account-multiple-check-outline"
+                  placeholder="Select signatory..."
+                  hide-details
+                  clearable
+                >
+                  <template #selection="{ item }">
+                    <div class="d-flex align-center gap-2 py-1">
+                      <VAvatar :color="avatarColor(item.raw.value)" variant="tonal" size="24">
+                        <span style="font-size: 10px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                      </VAvatar>
                       <div>
-                        <div class="text-body-2 font-weight-medium">{{ slot.name }}</div>
-                        <div class="text-caption text-medium-emphasis">{{ slot.position }}</div>
+                        <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
+                        <span class="text-caption text-medium-emphasis ml-2">{{ item.raw.subtitle }}</span>
                       </div>
-                      <VSpacer />
-                      <VChip size="x-small" color="teal" variant="tonal" label>Fixed</VChip>
                     </div>
-                    <div v-else class="text-caption text-medium-emphasis">
-                      Signatory not found — check active signatories
-                    </div>
-                  </VCardText>
-                </VCard>
+                  </template>
+                  <template #item="{ item, props }">
+                    <VListItem v-bind="props" :title="undefined" class="py-2">
+                      <template #prepend>
+                        <VAvatar :color="avatarColor(item.raw.value)" variant="tonal" size="36" class="mr-3">
+                          <span style="font-size: 12px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                        </VAvatar>
+                      </template>
+                      <VListItemTitle class="text-body-2 font-weight-medium">{{ item.raw.title }}</VListItemTitle>
+                      <VListItemSubtitle class="text-caption">{{ item.raw.subtitle }}</VListItemSubtitle>
+                    </VListItem>
+                  </template>
+                </VAutocomplete>
               </div>
             </div>
           </template>

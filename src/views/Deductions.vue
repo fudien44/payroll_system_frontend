@@ -2,6 +2,7 @@
 import BaseAlert from '@/components/base/BaseAlert.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
+import { ensurePhotosLoaded, getPhoto } from '@/composable/useEmployeePhotos'
 import axios from '@axios'
 import * as XLSX from 'xlsx'
 
@@ -30,6 +31,7 @@ interface Employee {
   hrmis_wage:      number | null
   has_hrmis_wage:  boolean
   deductions:      Deductions | null
+  wage_history_count?: number
 }
 
 interface PayrollRun {
@@ -99,6 +101,14 @@ const formErrors = ref<Partial<Record<keyof Deductions | 'effective_date', strin
 const filterStatus = ref<'All' | 'Set' | 'Not Set'>('All')
 const isEditing    = ref(false)
 const sssOptIn     = ref(false)
+
+const historyRows          = ref<any[]>([])
+const historyLoading       = ref(false)
+const editingHistoryId     = ref<number | null>(null)   // null = "add new entry" mode
+const confirmHistoryEditDialog   = ref(false)
+const confirmHistoryDeleteDialog = ref(false)
+const selectedHistoryRow   = ref<any | null>(null)
+const historyDeleteLoading = ref(false)
 
 const alertVisible = ref(false)
 const alertMessage = ref('')
@@ -213,6 +223,9 @@ watch(() => form.value.wage, newWage => {
     form.value.philhealth = Math.round(newWage * 0.05 * 100) / 100
   }
 })
+function onVisibleItemsChange(items: Record<string, any>[]) {
+  ensurePhotosLoaded(items.map(i => photoUrl(i.emp_id)))
+}
 
 /* ─────────────────────────────────────────
    HELPERS
@@ -227,6 +240,14 @@ const fmtNum = (v: number) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(v)
+
+  const fmtDate = (v?: string | null) => {
+  if (!v) return '—'
+  const [year, month, day] = v.slice(0, 10).split('-').map(Number)
+  return new Date(year, month - 1, day).toLocaleDateString('en-US', {
+    month: 'short', day: '2-digit', year: 'numeric',
+  })
+}
 
 function showAlert(type: AlertType, message: string) {
   alertType.value    = type
@@ -247,6 +268,9 @@ const AVATAR_COLORS = ['primary', 'teal', 'orange', 'purple', 'pink', 'indigo'] 
 
 function avatarColor(id: number): string {
   return AVATAR_COLORS[id % AVATAR_COLORS.length]
+}
+function photoUrl(empId: number): string {
+  return `/api/employee/${empId}/photo`
 }
 
 function validate(): boolean {
@@ -468,6 +492,99 @@ async function handleExport() {
 /* ─────────────────────────────────────────
    API
 ───────────────────────────────────────── */
+
+async function fetchHistory(empId: number) {
+  historyLoading.value = true
+  try {
+    const { data } = await axios.get(`/api/wage/history/${empId}`)
+    historyRows.value = data.data ?? []
+  } catch {
+    historyRows.value = []
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+function startEditHistoryRow(row: any) {
+  editingHistoryId.value = row.id
+  sssOptIn.value = Number(row.sss) > 0
+  form.value = {
+    wage:            Number(row.wage),
+    premium_percent: Number(row.premium_percent),
+    philhealth:      Number(row.philhealth),
+    pag_ibig:        Number(row.pag_ibig),
+    sss:             Number(row.sss),
+    ewt_rate:        Number(row.ewt_rate),
+    effective_date:  row.effective_date.slice(0, 10),
+  }
+  formErrors.value = {}
+}
+
+function resetToAddMode() {
+  editingHistoryId.value = null
+  sssOptIn.value = selectedEmp.value?.has_deductions
+    ? Number(selectedEmp.value.deductions?.sss ?? 0) > 0
+    : false
+  form.value = selectedEmp.value?.deductions
+    ? {
+        wage:            Number(selectedEmp.value.deductions.wage),
+        premium_percent: Number(selectedEmp.value.deductions.premium_percent),
+        philhealth:      Number(selectedEmp.value.deductions.philhealth),
+        pag_ibig:        Number(selectedEmp.value.deductions.pag_ibig),
+        sss:             Number(selectedEmp.value.deductions.sss),
+        ewt_rate:        Number(selectedEmp.value.deductions.ewt_rate),
+        effective_date:  new Date().toISOString().slice(0, 10),
+      }
+    : { ...BLANK_FORM(), ...(selectedEmp.value?.has_hrmis_wage && selectedEmp.value.hrmis_wage ? { wage: selectedEmp.value.hrmis_wage } : {}) }
+  formErrors.value = {}
+}
+
+function openHistoryDeleteConfirm(row: any) {
+  selectedHistoryRow.value = row
+  confirmHistoryDeleteDialog.value = true
+}
+
+async function executeUpdateHistoryRow() {
+  if (!selectedEmp.value || !editingHistoryId.value) return
+  confirmHistoryEditDialog.value = false
+  modalLoading.value = true
+  const payload = { ...form.value, sss: sssOptIn.value ? form.value.sss : 0 }
+  try {
+    const { data } = await axios.post(`/api/wage/history/update/${editingHistoryId.value}`, payload)
+    if (!data.success) throw new Error(data.message ?? 'Update failed.')
+    showAlert('success', `Wage history entry updated for ${selectedEmp.value.name}.`)
+    await fetchHistory(selectedEmp.value.emp_id)
+    await fetchEmployees()
+    modalOpen.value = false
+  } catch (err: any) {
+    if (err.response?.data?.errors) {
+      formErrors.value = Object.fromEntries(Object.entries(err.response.data.errors).map(([k, v]) => [k, (v as string[])[0]]))
+    }
+    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to update entry.')
+  } finally {
+    modalLoading.value = false
+  }
+}
+
+async function executeDeleteHistoryRow() {
+  if (!selectedHistoryRow.value || !selectedEmp.value) return
+  confirmHistoryDeleteDialog.value = false
+  historyDeleteLoading.value = true
+  try {
+    const { data } = await axios.post(`/api/wage/history/delete/${selectedHistoryRow.value.id}`)
+    if (!data.success) throw new Error(data.message ?? 'Delete failed.')
+    showAlert('success', 'Wage history entry deleted.')
+    if (editingHistoryId.value === selectedHistoryRow.value.id) resetToAddMode()
+    await fetchHistory(selectedEmp.value.emp_id)
+    await fetchEmployees()
+  } catch (err: any) {
+    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to delete entry.')
+  } finally {
+    historyDeleteLoading.value = false
+    selectedHistoryRow.value = null
+  }
+}
+
 async function fetchEmployees() {
   loading.value = true
   try {
@@ -494,7 +611,8 @@ async function fetchRuns() {
 
 async function handleSave() {
   if (!validate() || !selectedEmp.value) return
-  confirmSaveDialog.value = true
+  if (editingHistoryId.value) confirmHistoryEditDialog.value = true   // NEW branch
+  else confirmSaveDialog.value = true
 }
 
 async function executeSave() {
@@ -552,6 +670,7 @@ function openEdit(item: Record<string, any>) {
   selectedEmp.value = emp
   isEditing.value   = emp.has_deductions
   sssOptIn.value    = emp.has_deductions && (emp.deductions?.sss ?? 0) > 0
+  editingHistoryId.value = null                    // NEW — always opens in "add new" mode
   form.value = emp.deductions
     ? {
         wage:            Number(emp.deductions.wage),
@@ -560,11 +679,13 @@ function openEdit(item: Record<string, any>) {
         pag_ibig:        Number(emp.deductions.pag_ibig),
         sss:             Number(emp.deductions.sss),
         ewt_rate:        Number(emp.deductions.ewt_rate),
-        effective_date:  new Date().toISOString().slice(0, 10), // NEW — always today, not carried over
+        effective_date:  new Date().toISOString().slice(0, 10),
       }
     : { ...BLANK_FORM(), ...(emp.has_hrmis_wage && emp.hrmis_wage ? { wage: emp.hrmis_wage } : {}) }
-  formErrors.value = {}
-  modalOpen.value  = true
+  formErrors.value  = {}
+  historyRows.value = []                            // NEW
+  fetchHistory(emp.emp_id)                           // NEW
+  modalOpen.value   = true
 }
 
 function openDeleteConfirm(item: Record<string, any>) {
@@ -720,6 +841,7 @@ onMounted(fetchEmployees)
         searchable
         @edit="openEdit"
         @delete="openDeleteConfirm"
+        @update:visible-items="onVisibleItemsChange"
       >
         <!-- Employee cell with avatar -->
         <template #item.name="{ item }">
@@ -729,7 +851,12 @@ onMounted(fetchEmployees)
               variant="tonal"
               size="36"
             >
-              <span class="text-caption font-weight-medium">{{ initials(item.name) }}</span>
+                <VImg
+                v-if="getPhoto(photoUrl(item.emp_id))"
+                :src="getPhoto(photoUrl(item.emp_id))!"
+                cover
+              />
+              <span v-else class="text-caption font-weight-medium">{{ initials(item.name) }}</span>
             </VAvatar>
             <div>
               <div class="text-body-2 font-weight-medium">{{ item.name }}</div>
@@ -777,19 +904,39 @@ onMounted(fetchEmployees)
 
         <!-- Actions -->
         <template #item.actions="{ item }">
-          <div class="d-flex align-center justify-center gap-1">
-            <VBtn icon size="small" variant="text" color="primary" @click.stop="openEdit(item)">
-              <VIcon size="18">mdi-pencil-outline</VIcon>
-            </VBtn>
-            <VBtn
-              v-if="item.status === 'Set'"
-              icon size="small" variant="text" color="error"
-              @click.stop="openDeleteConfirm(item)"
-            >
-              <VIcon size="18">mdi-delete-outline</VIcon>
-            </VBtn>
-          </div>
-        </template>
+        <div class="d-flex align-center justify-center gap-1">
+          <VTooltip v-if="(item.wage_history_count ?? 0) > 1" location="top">
+            <template #activator="{ props }">
+              <VBtn
+                v-bind="props"
+                icon size="small" variant="text" color="primary"
+                style="position: relative;"
+                @click.stop="openEdit(item)"
+              >
+                <VIcon size="18">mdi-pencil-outline</VIcon>
+                <VBadge
+                  :content="item.wage_history_count"
+                  color="secondary"
+                  offset-x="-2"
+                  offset-y="-2"
+                  style="position: absolute;"
+                />
+              </VBtn>
+            </template>
+            <span>{{ item.wage_history_count }} wage history entries</span>
+          </VTooltip>
+          <VBtn v-else icon size="small" variant="text" color="primary" @click.stop="openEdit(item)">
+            <VIcon size="18">mdi-pencil-outline</VIcon>
+          </VBtn>
+          <VBtn
+            v-if="item.status === 'Set'"
+            icon size="small" variant="text" color="error"
+            @click.stop="openDeleteConfirm(item)"
+          >
+            <VIcon size="18">mdi-delete-outline</VIcon>
+          </VBtn>
+        </div>
+      </template>
       </BaseTable>
 
     </VContainer>
@@ -797,14 +944,14 @@ onMounted(fetchEmployees)
     <!-- ── Edit Modal ── -->
     <BaseModal
       v-model="modalOpen"
-      :title="`${isEditing ? 'Edit' : 'Set'} Deductions — ${selectedEmp?.name ?? ''}`"
-      width="640"
-      :persistent="true"
-      :loading="modalLoading || resetLoading"
-      confirm-text="Save Deductions"
-      cancel-text="Cancel"
-      @confirm="handleSave"
-      @cancel="modalOpen = false"
+  :title="`${editingHistoryId ? 'Edit Wage History Entry' : (isEditing ? 'Add' : 'Set') + ' Deductions'} — ${selectedEmp?.name ?? ''}`"
+  width="640"
+  :persistent="true"
+  :loading="modalLoading || resetLoading"
+  :confirm-text="editingHistoryId ? 'Update Entry' : 'Save Deductions'"
+  cancel-text="Cancel"
+  @confirm="handleSave"
+  @cancel="modalOpen = false"
     >
       <VRow dense>
 
@@ -819,7 +966,12 @@ onMounted(fetchEmployees)
                   size="40"
                   rounded="lg"
                 >
-                  <span class="text-body-2 font-weight-medium">
+                 <VImg
+                    v-if="selectedEmp && getPhoto(photoUrl(selectedEmp.emp_id))"
+                    :src="getPhoto(photoUrl(selectedEmp.emp_id))!"
+                    cover
+                  />
+                  <span v-else class="text-body-2 font-weight-medium">
                     {{ selectedEmp ? initials(selectedEmp.name) : '?' }}
                   </span>
                 </VAvatar>
@@ -846,6 +998,82 @@ onMounted(fetchEmployees)
             </VCardText>
           </VCard>
         </VCol>
+
+        <!-- ── Wage History (collapsible) ── -->
+          <VCol v-if="isEditing" cols="12">
+            <VExpansionPanels variant="accordion" class="mb-1">
+              <VExpansionPanel>
+                <VExpansionPanelTitle>
+                  <div class="d-flex align-center gap-2">
+                    <VIcon icon="mdi-history" size="18" />
+                    <span class="text-body-2 font-weight-medium">Wage History</span>
+                    <VChip size="x-small" variant="tonal" color="primary">{{ historyRows.length }}</VChip>
+                  </div>
+                </VExpansionPanelTitle>
+                <VExpansionPanelText>
+                  <VProgressLinear v-if="historyLoading" indeterminate color="primary" class="mb-2" />
+                  <VTable v-else density="compact">
+                    <thead>
+                      <tr>
+                        <th>Effective</th>
+                        <th class="text-right">Wage</th>
+                        <th class="text-right">Premium</th>
+                        <th class="text-right">PhilHealth</th>
+                        <th class="text-right">Pag-IBIG</th>
+                        <th class="text-right">SSS</th>
+                        <th class="text-center">EWT</th>
+                        <th class="text-center">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        v-for="row in historyRows"
+                        :key="row.id"
+                        :class="{ 'bg-primary-lighten-5': editingHistoryId === row.id }"
+                      >
+                        <td>{{ fmtDate(row.effective_date) }}</td>
+                        <td class="text-right">{{ fmt(Number(row.wage)) }}</td>
+                        <td class="text-right">{{ fmt(Number(row.premium)) }} ({{ Math.round(Number(row.premium_percent) * 100) }}%)</td>
+                        <td class="text-right">{{ fmt(Number(row.philhealth)) }}</td>
+                        <td class="text-right">{{ fmt(Number(row.pag_ibig)) }}</td>
+                        <td class="text-right">{{ Number(row.sss) > 0 ? fmt(Number(row.sss)) : 'Opted out' }}</td>
+                        <td class="text-center">{{ row.ewt_rate }}%</td>
+                        <td class="text-center">
+                          <div class="d-flex align-center justify-center gap-1">
+                            <VBtn icon size="x-small" variant="text" color="primary" @click="startEditHistoryRow(row)">
+                              <VIcon size="15">mdi-pencil-outline</VIcon>
+                            </VBtn>
+                            <VBtn icon size="x-small" variant="text" color="error" @click="openHistoryDeleteConfirm(row)">
+                              <VIcon size="15">mdi-delete-outline</VIcon>
+                            </VBtn>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr v-if="!historyRows.length">
+                        <td colspan="8" class="text-center text-medium-emphasis py-3">No wage history entries yet.</td>
+                      </tr>
+                    </tbody>
+                  </VTable>
+                  <div class="d-flex justify-end mt-2">
+                    <VBtn
+                      size="small" variant="text" color="primary" prepend-icon="mdi-plus"
+                      :disabled="!editingHistoryId"
+                      @click="resetToAddMode"
+                    >
+                      New Entry
+                    </VBtn>
+                  </div>
+                </VExpansionPanelText>
+              </VExpansionPanel>
+            </VExpansionPanels>
+          </VCol>
+
+          <VCol v-if="editingHistoryId" cols="12">
+            <VAlert type="warning" variant="tonal" density="compact" icon="mdi-pencil-outline" class="mb-1">
+              Editing existing entry effective <strong>{{ fmtDate(form.effective_date) }}</strong>.
+              This may change past payroll figures that used this rate.
+            </VAlert>
+          </VCol>
 
         <!-- HRMIS pre-fill notice -->
         <VCol v-if="selectedEmp?.has_hrmis_wage && !isEditing" cols="12">
@@ -1132,6 +1360,71 @@ onMounted(fetchEmployees)
           <VBtn color="primary" variant="tonal" :loading="modalLoading" @click="executeSave">
             <VIcon start size="16">mdi-content-save-outline</VIcon>
             {{ isEditing ? 'Yes, Overwrite' : 'Yes, Save' }}
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
+    <!-- ── History Edit Confirmation Dialog ── -->
+    <VDialog v-model="confirmHistoryEditDialog" max-width="440" persistent>
+      <VCard rounded="lg">
+        <VCardText class="pa-6">
+          <div class="d-flex align-center gap-3 mb-4">
+            <VAvatar color="warning" variant="tonal" size="44" rounded="lg">
+              <VIcon icon="mdi-alert-outline" size="22" />
+            </VAvatar>
+            <div>
+              <div class="text-body-1 font-weight-medium">Edit Wage History Entry?</div>
+              <div class="text-caption text-medium-emphasis">{{ selectedEmp?.name }}</div>
+            </div>
+          </div>
+          <p class="text-body-2 text-medium-emphasis mb-0">
+            You are editing an <strong class="text-high-emphasis">existing</strong> wage history entry
+            effective <strong class="text-high-emphasis">{{ form.effective_date }}</strong>. If any payroll
+            runs already used this rate, their computed figures may no longer match this record. This does
+            not automatically recompute finalized runs.
+          </p>
+        </VCardText>
+        <VDivider />
+        <VCardActions class="justify-end pa-4 gap-2">
+          <VBtn variant="text" @click="confirmHistoryEditDialog = false">Cancel</VBtn>
+          <VBtn color="warning" variant="tonal" :loading="modalLoading" @click="executeUpdateHistoryRow">
+            <VIcon start size="16">mdi-content-save-outline</VIcon>
+            Yes, Update Entry
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
+    <!-- ── History Delete Confirmation Dialog ── -->
+    <VDialog v-model="confirmHistoryDeleteDialog" max-width="420" persistent>
+      <VCard rounded="lg">
+        <VCardText class="pa-6">
+          <div class="d-flex align-center gap-3 mb-4">
+            <VAvatar color="error" variant="tonal" size="44" rounded="lg">
+              <VIcon icon="mdi-delete-outline" size="22" />
+            </VAvatar>
+            <div>
+              <div class="text-body-1 font-weight-medium">Delete Wage History Entry?</div>
+              <div class="text-caption text-medium-emphasis">This action cannot be undone.</div>
+            </div>
+          </div>
+          <p class="text-body-2 text-medium-emphasis mb-0">
+            Delete the entry effective
+            <strong class="text-high-emphasis">{{ fmtDate(selectedHistoryRow?.effective_date) }}</strong>
+            for <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong>?
+            <span v-if="historyRows.length === 1">
+              This is the <strong class="text-error">only remaining entry</strong> — deleting it will also
+              clear this employee's current wage record and HRMIS basic salary.
+            </span>
+          </p>
+        </VCardText>
+        <VDivider />
+        <VCardActions class="justify-end pa-4 gap-2">
+          <VBtn variant="text" @click="confirmHistoryDeleteDialog = false">Cancel</VBtn>
+          <VBtn color="error" variant="tonal" :loading="historyDeleteLoading" @click="executeDeleteHistoryRow">
+            <VIcon start size="16">mdi-delete-outline</VIcon>
+            Yes, Delete
           </VBtn>
         </VCardActions>
       </VCard>
