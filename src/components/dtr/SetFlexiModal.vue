@@ -118,7 +118,6 @@ async function save() {
             density="compact"
             hide-details
             readonly
-            @click.stop
           />
           <span class="text-body-2">{{ emp.full_name }}</span>
           <span class="text-caption text-medium-emphasis ms-2">{{ emp.position ?? '' }}</span>

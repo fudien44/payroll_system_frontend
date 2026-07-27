@@ -32,7 +32,7 @@ const echo = new Echo({
     return {
       authorize: (socketId: string, callback: (error: boolean, data: any) => void) => {
         axios
-          .post('/broadcasting/auth', {
+          .post(`${globals.api}/broadcasting/auth`, {
             socket_id: socketId,
             channel_name: channel.name,
           })
@@ -44,3 +44,13 @@ const echo = new Echo({
 })
 
 export default echo
+
+// ── Connection diagnostics — logs raw Reverb/Pusher socket state so
+// silent failures are traceable instead of just "nothing happened."
+echo.connector.pusher.connection.bind('state_change', (states: { previous: string; current: string }) => {
+  console.log(`[Reverb] ${states.previous} → ${states.current}`)
+})
+
+echo.connector.pusher.connection.bind('error', (err: any) => {
+  console.error('[Reverb] connection error:', err)
+})
