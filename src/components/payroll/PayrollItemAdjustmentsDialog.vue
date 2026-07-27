@@ -46,7 +46,7 @@ interface BatchItem {
 
 interface Adjustment {
   id:                   number
-  type:                 'pass_slip' | 'official_travel' | 'leave'
+  type:                 'pass_slip' | 'official_travel' | 'leave' | 'contract_break'
   date:                 string
   date_to:              string | null
   minutes:              number
@@ -105,13 +105,13 @@ const alertType    = ref<AlertType>('success')
 // ── Add form ──
 interface BatchRow {
   _uid:           number
-  type:           'pass_slip' | 'official_travel' | 'leave' | ''
+  type:           'pass_slip' | 'official_travel' | 'leave' | 'contract_break' | ''
   pass_slip_type: 'personal' | 'official' | ''
   date:           string
   date_to:        string | null
   minutes:        number | null
   notes:          string
-  isHalfDay:      boolean   // NEW
+  isHalfDay:      boolean
 }
 
 let rowUidSeq = 0
@@ -176,13 +176,13 @@ function isCarriedOverDate(dateStr: string): boolean {
 // straight from the backend's enrichAdjustment().
 const currentWholeDayCount = computed(() =>
   adjustments.value
-    .filter(a => a.is_whole_day)
+    .filter(a => a.is_whole_day && a.type !== 'contract_break')
     .reduce((sum, a) => sum + (a.days_in_month - (a.carried_over_days ?? 0)), 0)
 )
 
 const carriedWholeDayCount = computed(() =>
   adjustments.value
-    .filter(a => a.is_whole_day)
+    .filter(a => a.is_whole_day && a.type !== 'contract_break')
     .reduce((sum, a) => sum + (a.carried_over_days ?? 0), 0)
 )
 
@@ -190,7 +190,7 @@ const carriedWholeDayCount = computed(() =>
 // (enrichAdjustment only accumulates it when inCurrentPeriod is true).
 const currentCompressedMinuteOffset = computed(() =>
   adjustments.value
-    .filter(a => a.is_whole_day)
+    .filter(a => a.is_whole_day && a.type !== 'contract_break')
     .reduce((sum, a) => sum + (a.compressed_mins_offset ?? 0), 0)
 )
 
@@ -245,9 +245,10 @@ const wholeDayCount = computed(() => currentWholeDayCount.value + carriedWholeDa
 const compressedMinuteOffset = computed(() => currentCompressedMinuteOffset.value)
 
 const typeLabel = (type: string) => {
-  if (type === 'pass_slip')       return 'Pass Slip'
+ if (type === 'pass_slip')       return 'Pass Slip'
   if (type === 'official_travel') return 'Official Travel'
   if (type === 'leave')           return 'Leave'
+  if (type === 'contract_break')  return 'Contract Break'
   return type
 }
 
@@ -255,6 +256,7 @@ const typeColor = (type: string) => {
   if (type === 'pass_slip')       return 'orange'
   if (type === 'official_travel') return 'blue'
   if (type === 'leave')           return 'teal'
+  if (type === 'contract_break')  return 'grey-darken-1'
   return 'grey'
 }
 
@@ -262,6 +264,7 @@ const typeIcon = (type: string) => {
   if (type === 'pass_slip')       return 'mdi-door-open'
   if (type === 'official_travel') return 'mdi-briefcase-outline'
   if (type === 'leave')           return 'mdi-calendar-check-outline'
+  if (type === 'contract_break')  return 'mdi-calendar-remove-outline'
   return 'mdi-help-circle-outline'
 }
 
@@ -542,18 +545,18 @@ function showAlert(type: AlertType, message: string) {
                   <VIcon start icon="mdi-calendar-arrow-left" size="10" />
                   {{ adj.carried_over_days }}d carried
                 </VChip>
-                <VChip
-                  v-if="adj.is_hrmis_imported"
-                  size="x-small"
-                  color="indigo"
-                  variant="outlined"
-                  label
-                  class="ml-1"
-                >
-                  <VIcon start icon="mdi-cloud-sync-outline" size="10" />
-                  HRMIS
-                  <VTooltip activator="parent" location="top">Auto-imported from an approved pass slip</VTooltip>
-                </VChip>
+               <VChip
+                v-if="adj.is_hrmis_imported"
+                size="x-small"
+                color="indigo"
+                variant="outlined"
+                label
+                class="ml-1"
+              >
+                <VIcon start icon="mdi-cloud-sync-outline" size="10" />
+                Auto
+                <VTooltip activator="parent" location="top">Automatically imported — not manually added</VTooltip>
+              </VChip>
               </td>
                 <td class="text-caption font-monospace">
                   {{ adj.date }}
@@ -638,6 +641,7 @@ function showAlert(type: AlertType, message: string) {
           { title: 'Pass Slip',        value: 'pass_slip'       },
           { title: 'Official Travel',  value: 'official_travel' },
           { title: 'Leave',            value: 'leave'           },
+          { title: 'Contract Break',   value: 'contract_break'  },
         ]"
         item-title="title"
         item-value="value"
@@ -721,18 +725,23 @@ function showAlert(type: AlertType, message: string) {
 
     <!-- Helper text -->
     <VCol v-if="row.type && row.type !== 'pass_slip'" cols="12">
-      <VAlert density="compact" variant="tonal"
-        :color="row.type === 'official_travel' ? 'blue' : 'teal'"
-        :icon="typeIcon(row.type)"
-        class="text-body-2">
-        <template v-if="row.type === 'official_travel'">
-          <strong>Official Travel</strong> — the selected date(s) will be subtracted from absent days.
-        </template>
-        <template v-else>
-          <strong>Leave</strong> — the selected date(s) will be subtracted from absent days.
-        </template>
-      </VAlert>
-    </VCol>
+    <VAlert density="compact" variant="tonal"
+      :color="row.type === 'official_travel' ? 'blue' : row.type === 'contract_break' ? 'grey-darken-1' : 'teal'"
+      :icon="typeIcon(row.type)"
+      class="text-body-2">
+      <template v-if="row.type === 'official_travel'">
+        <strong>Official Travel</strong> — the selected date(s) will be subtracted from absent days.
+      </template>
+      <template v-else-if="row.type === 'contract_break'">
+        <strong>Contract Break</strong> — this only labels dates as a contract break for reporting.
+        It does not change pay by itself — deductions rely on the employee's actual DTR attendance
+        for those dates.
+      </template>
+      <template v-else>
+        <strong>Leave</strong> — the selected date(s) will be subtracted from absent days.
+      </template>
+    </VAlert>
+  </VCol>
 
     <VCol v-if="row.type === 'pass_slip'" cols="12">
       <VAlert density="compact" variant="tonal" color="orange" icon="mdi-door-open" class="text-body-2">

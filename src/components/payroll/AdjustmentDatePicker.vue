@@ -6,17 +6,17 @@ import axios from '@axios';
    PROPS / EMITS
 ───────────────────────────────────────── */
 const props = defineProps<{
-  type:           'pass_slip' | 'official_travel' | 'leave' | ''
+  type:           'pass_slip' | 'official_travel' | 'leave' | 'contract_break' | ''
   periodMonth:    number
   periodYear:     number
   date:           string
   dateTo:         string | null
   disabled?:      boolean
   errorMessages?: string | string[]
-  isHalfDay?:     boolean                                  // NEW
-  carryOverRange?: { from: string; to: string } | null      // NEW
+  isHalfDay?:     boolean                                  
+  carryOverRange?: { from: string; to: string } | null      
 }>()
-
+const isReadOnlyType = computed(() => props.type === 'contract_break')
 const emit = defineEmits<{
   (e: 'update:date', v: string): void
   (e: 'update:dateTo', v: string | null): void
@@ -42,7 +42,7 @@ const MONTH_NAMES = ['January','February','March','April','May','June','July','A
 /* ─────────────────────────────────────────
    COMPUTED
 ───────────────────────────────────────── */
-const isRangeType = computed(() => props.type !== 'pass_slip' && !!props.type && !props.isHalfDay)
+const isRangeType = computed(() => props.type !== 'pass_slip' && props.type !== 'contract_break' && !!props.type && !props.isHalfDay)
 
 const monthLabel = computed(() => `${MONTH_NAMES[props.periodMonth - 1]} ${props.periodYear}`)
 
@@ -50,6 +50,7 @@ const typeLabel = computed(() => {
   if (props.type === 'pass_slip')       return 'Pass Slip'
   if (props.type === 'official_travel') return 'Official Travel'
   if (props.type === 'leave')           return 'Leave'
+   if (props.type === 'contract_break')  return 'Contract Break'
   return 'Select a type first'
 })
 
@@ -57,11 +58,17 @@ const typeColor = computed(() => {
   if (props.type === 'pass_slip')       return 'orange'
   if (props.type === 'official_travel') return 'blue'
   if (props.type === 'leave')           return 'teal'
+  if (props.type === 'contract_break')  return 'grey-darken-1'
   return 'grey'
 })
 
 const displayText = computed(() => {
   if (!props.date) return ''
+  if (props.type === 'contract_break') {
+    return !props.dateTo || props.dateTo === props.date
+      ? formatDisplayDate(props.date)
+      : `${formatDisplayDate(props.date)} → ${formatDisplayDate(props.dateTo)}`
+  }
   if (!isRangeType.value) return formatDisplayDate(props.date)
   if (!props.dateTo || props.dateTo === props.date) return formatDisplayDate(props.date)
   return `${formatDisplayDate(props.date)} → ${formatDisplayDate(props.dateTo)}`
@@ -251,14 +258,14 @@ function cancelSelection() {
       <VTextField
         v-bind="menuProps"
         :model-value="displayText"
-        :label="isRangeType ? 'Date Range' : 'Date'"
+        :label="isRangeType ? 'Date Range' : (props.type === 'contract_break' ? 'Contract Break Period' : 'Date')"
         placeholder="Pick a date"
         readonly
         variant="outlined"
         density="compact"
-        prepend-inner-icon="mdi-calendar-outline"
-        append-inner-icon="mdi-menu-down"
-        :disabled="disabled"
+        prepend-inner-icon="mdi-calendar-remove-outline"
+        :append-inner-icon="isReadOnlyType ? undefined : 'mdi-menu-down'"
+        :disabled="disabled || isReadOnlyType"
         :error-messages="errorMessages"
         hide-details="auto"
       />
