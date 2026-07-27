@@ -337,6 +337,53 @@
           <p v-else class="cm-empty-text">No suspension days this month.</p>
         </div>
 
+        <!-- Contract Breaks -->
+<div class="cm-card">
+  <div class="cm-card-header">
+    <h3 class="cm-card-title">Contract Breaks</h3>
+    <div class="d-flex gap-2">
+      <VBtn size="small" variant="text" color="primary" @click="openCustomBreakDialog()">
+        + Individual
+      </VBtn>
+      <VBtn size="small" variant="tonal" color="primary" prepend-icon="mdi-plus" @click="openBatchDialog()">
+        Add Batch
+      </VBtn>
+    </div>
+  </div>
+
+  <div v-if="contractBreakBatches.length">
+    <div
+      v-for="batch in contractBreakBatches"
+      :key="batch.id"
+      class="cm-list-item"
+      style="cursor: pointer;"
+      @click="openBatchDetail(batch)"
+    >
+      <div class="cm-list-item-info">
+        <VChip size="x-small" color="grey-darken-1" variant="tonal" label>
+          {{ formatDisplayDate(batch.start_date) }} – {{ formatDisplayDate(batch.end_date) }}
+        </VChip>
+        <span class="cm-list-item-label">
+          {{ batch.label }}
+          <VChip size="x-small" color="primary" variant="tonal" class="ml-1">
+            {{ batch.employee_breaks_count ?? 0 }}
+          </VChip>
+        </span>
+      </div>
+      <div class="cm-list-item-actions">
+        <VBtn icon size="x-small" variant="text" color="primary" @click.stop="openBatchDialog(batch)">
+          <VIcon size="15">mdi-pencil-outline</VIcon>
+        </VBtn>
+        <VBtn icon size="x-small" variant="text" color="error" @click.stop="handleRemoveBatch(batch.id)">
+          <VIcon size="15">mdi-delete-outline</VIcon>
+        </VBtn>
+      </div>
+    </div>
+  </div>
+
+  <p v-else class="cm-empty-text">No contract break batches yet.</p>
+</div>
+
       </div>
     </div>
 
@@ -604,6 +651,396 @@
       </VCard>
     </VDialog>
 
+    <!-- ── Contract Break Batch Dialog ───────────────────────────────────── -->
+<VDialog v-model="batchDialog.visible" max-width="440" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar color="grey-darken-1" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-calendar-remove-outline" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">
+            {{ batchDialog.editId ? 'Edit Batch' : 'Add Contract Break Batch' }}
+          </div>
+          <div class="text-caption text-medium-emphasis">
+            {{ batchDialog.editId ? 'Update batch details' : 'Define a shared break period for multiple employees' }}
+          </div>
+        </div>
+      </div>
+
+      <div class="cm-field mb-3">
+        <label class="cm-label">Label <span class="cm-required">*</span></label>
+        <VTextField
+          v-model="batchDialog.label"
+          placeholder="e.g. July 2026 Batch A"
+          density="compact"
+          variant="outlined"
+          prepend-inner-icon="mdi-tag-outline"
+          hide-details="auto"
+        />
+      </div>
+
+      <div class="d-flex gap-3 mb-3">
+        <div class="cm-field flex-1">
+          <label class="cm-label">Start Date <span class="cm-required">*</span></label>
+          <VTextField
+            v-model="batchDialog.startDate"
+            type="date"
+            density="compact"
+            variant="outlined"
+            hide-details="auto"
+          />
+        </div>
+        <div class="cm-field flex-1">
+          <label class="cm-label">End Date <span class="cm-required">*</span></label>
+          <VTextField
+            v-model="batchDialog.endDate"
+            type="date"
+            density="compact"
+            variant="outlined"
+            hide-details="auto"
+          />
+        </div>
+      </div>
+
+      <div class="cm-field mb-3">
+        <label class="cm-label">Resumption Date <span class="cm-required">*</span></label>
+        <VTextField
+          v-model="batchDialog.resumptionDate"
+          type="date"
+          density="compact"
+          variant="outlined"
+          prepend-inner-icon="mdi-calendar-arrow-right"
+          hide-details="auto"
+        />
+        <p class="text-caption text-medium-emphasis mt-1 mb-0">
+          The official return-to-work date. Days between End Date and Resumption Date
+          (exclusive) are also treated as part of the break.
+        </p>
+      </div>
+
+      <div class="cm-field">
+        <label class="cm-label">Notes</label>
+        <VTextField
+          v-model="batchDialog.notes"
+          placeholder="Optional — e.g. memo reference"
+          density="compact"
+          variant="outlined"
+          prepend-inner-icon="mdi-note-outline"
+          hide-details="auto"
+        />
+      </div>
+
+      <VAlert v-if="batchDialog.error" type="error" variant="tonal" density="compact" class="mt-3">
+        {{ batchDialog.error }}
+      </VAlert>
+    </VCardText>
+
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" :disabled="batchDialog.loading" @click="closeBatchDialog">
+        Cancel
+      </VBtn>
+      <VBtn
+        color="primary"
+        variant="tonal"
+        :loading="batchDialog.loading"
+        :prepend-icon="batchDialog.editId ? 'mdi-content-save-outline' : 'mdi-calendar-plus'"
+        @click="submitBatch"
+      >
+        {{ batchDialog.editId ? 'Save Changes' : 'Create Batch' }}
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
+<!-- ── Batch Detail Dialog ────────────────────────────────────────────── -->
+<VDialog v-model="batchDetailDialog.visible" max-width="560" scrollable>
+  <VCard rounded="lg">
+    <VCardText class="pa-6 pb-0">
+      <div class="d-flex align-center gap-3 mb-1">
+        <VAvatar color="grey-darken-1" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-calendar-remove-outline" size="22" />
+        </VAvatar>
+        <div class="flex-grow-1">
+          <div class="text-body-1 font-weight-medium">{{ batchDetailDialog.batch?.label }}</div>
+          <div class="text-caption text-medium-emphasis">
+            {{ batchDetailDialog.batch ? formatDisplayDate(batchDetailDialog.batch.start_date) : '' }}
+            –
+            {{ batchDetailDialog.batch ? formatDisplayDate(batchDetailDialog.batch.end_date) : '' }}
+            · Resumes {{ batchDetailDialog.batch ? formatDisplayDate(batchDetailDialog.batch.resumption_date) : '' }}
+          </div>
+        </div>
+        <VBtn icon variant="text" size="small" @click="closeBatchDetail">
+          <VIcon>mdi-close</VIcon>
+        </VBtn>
+      </div>
+    </VCardText>
+
+    <VDivider class="mt-4" />
+
+    <VCardText class="pa-6">
+      <div class="d-flex justify-space-between align-center mb-3">
+        <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
+          Assigned Employees
+          <VChip size="x-small" color="primary" variant="tonal" class="ml-1">
+            {{ batchDetailDialog.assignedEmployees.length }}
+          </VChip>
+        </p>
+        <VBtn
+          size="small"
+          variant="tonal"
+          color="primary"
+          prepend-icon="mdi-account-plus-outline"
+          @click="batchDetailDialog.batch && openEmployeePicker(batchDetailDialog.batch.id)"
+        >
+          Assign Employees
+        </VBtn>
+      </div>
+
+      <VSkeletonLoader v-if="batchDetailDialog.loadingAssigned" type="list-item-two-line, list-item-two-line" />
+
+      <div v-else-if="batchDetailDialog.assignedEmployees.length === 0" class="text-center py-6"
+        style="border: 1px dashed rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 8px;">
+        <VIcon icon="mdi-account-off-outline" size="32" class="text-medium-emphasis mb-2" />
+        <p class="text-body-2 text-medium-emphasis mb-0">No employees assigned yet.</p>
+      </div>
+
+      <div v-else style="max-height: 360px; overflow-y: auto;">
+        <div
+          v-for="assignment in batchDetailDialog.assignedEmployees"
+          :key="assignment.id"
+          class="cm-list-item"
+        >
+          <div class="cm-list-item-info">
+            <VAvatar size="28" color="grey-lighten-2" class="mr-1">
+              <VIcon size="14">mdi-account</VIcon>
+            </VAvatar>
+            <span class="cm-list-item-label">
+              {{ assignment.emp_name }}
+              <span v-if="assignment.division_name" class="text-caption text-medium-emphasis ml-1">
+                · {{ assignment.division_name }}
+              </span>
+            </span>
+          </div>
+          <div class="cm-list-item-actions">
+            <VBtn icon size="x-small" variant="text" color="error" @click="handleUnassign(assignment)">
+              <VIcon size="15">mdi-close</VIcon>
+            </VBtn>
+          </div>
+        </div>
+      </div>
+    </VCardText>
+
+    <VDivider />
+    <VCardActions class="justify-end pa-4">
+      <VBtn variant="tonal" @click="closeBatchDetail">Close</VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
+<!-- ── Employee Picker Dialog (batch assignment) ─────────────────────── -->
+<VDialog v-model="employeePickerDialog.visible" max-width="480" scrollable>
+  <VCard rounded="lg">
+    <VCardText class="pa-6 pb-2">
+      <div class="text-body-1 font-weight-medium mb-1">Assign Employees</div>
+      <div class="text-caption text-medium-emphasis mb-3">Select employees to add to this batch</div>
+
+      <VTextField
+        v-model="employeePickerDialog.search"
+        placeholder="Search by name or position"
+        density="compact"
+        variant="outlined"
+        prepend-inner-icon="mdi-magnify"
+        hide-details
+        clearable
+      />
+    </VCardText>
+
+    <VDivider />
+
+    <VCardText class="pa-0" style="max-height: 400px; overflow-y: auto;">
+      <VSkeletonLoader v-if="employeePickerDialog.loading" type="list-item-two-line, list-item-two-line, list-item-two-line" />
+
+      <VList v-else select-strategy="classic">
+        <VListItem
+          v-for="emp in filteredPickerEmployees"
+          :key="emp.emp_id"
+          @click="
+            employeePickerDialog.selected.includes(emp.emp_id)
+              ? employeePickerDialog.selected = employeePickerDialog.selected.filter(id => id !== emp.emp_id)
+              : employeePickerDialog.selected.push(emp.emp_id)
+          "
+        >
+          <template #prepend>
+            <VCheckboxBtn :model-value="employeePickerDialog.selected.includes(emp.emp_id)" />
+          </template>
+          <VListItemTitle>{{ emp.name }}</VListItemTitle>
+          <VListItemSubtitle>{{ emp.position }} · {{ emp.division_name ?? '—' }}</VListItemSubtitle>
+        </VListItem>
+
+        <p v-if="filteredPickerEmployees.length === 0" class="text-center text-body-2 text-medium-emphasis pa-4 mb-0">
+          No matching employees found.
+        </p>
+      </VList>
+    </VCardText>
+
+    <VDivider />
+    <VCardActions class="justify-space-between pa-4">
+      <span class="text-caption text-medium-emphasis">
+        {{ employeePickerDialog.selected.length }} selected
+      </span>
+      <div class="d-flex gap-2">
+        <VBtn variant="text" @click="employeePickerDialog.visible = false">Cancel</VBtn>
+        <VBtn
+          color="primary"
+          variant="tonal"
+          :loading="employeePickerDialog.assigning"
+          :disabled="employeePickerDialog.selected.length === 0"
+          @click="confirmAssignment"
+        >
+          Assign ({{ employeePickerDialog.selected.length }})
+        </VBtn>
+      </div>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
+<!-- ── Individual Contract Break Dialog ──────────────────────────────── -->
+<VDialog v-model="customBreakDialog.visible" max-width="440" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar color="grey-darken-1" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-account-clock-outline" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">
+            {{ customBreakDialog.editId ? 'Edit Individual Break' : 'Add Individual Contract Break' }}
+          </div>
+          <div class="text-caption text-medium-emphasis">
+            {{ customBreakDialog.editId ? 'Update this employee\'s break dates' : 'For an employee whose break doesn\'t match any batch' }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Employee selection — only shown when adding new, not editing -->
+      <div v-if="!customBreakDialog.editId" class="cm-field mb-3">
+        <label class="cm-label">Employee <span class="cm-required">*</span></label>
+
+        <VTextField
+          v-if="!customBreakDialog.empId"
+          v-model="customBreakDialog.employeeSearch"
+          placeholder="Search by name"
+          density="compact"
+          variant="outlined"
+          prepend-inner-icon="mdi-magnify"
+          hide-details
+          clearable
+        />
+
+        <VCard v-else variant="tonal" color="primary" rounded="lg" flat>
+          <VCardText class="d-flex align-center gap-2 pa-3">
+            <VIcon icon="mdi-account" size="18" />
+            <span class="text-body-2 font-weight-medium">{{ customBreakDialog.empName }}</span>
+            <VSpacer />
+            <VBtn size="x-small" variant="text" @click="customBreakDialog.empId = null; customBreakDialog.empName = ''">
+              Change
+            </VBtn>
+          </VCardText>
+        </VCard>
+
+        <div v-if="!customBreakDialog.empId" style="max-height: 220px; overflow-y: auto;" class="mt-2">
+          <VSkeletonLoader v-if="customBreakDialog.loadingEmployees" type="list-item-two-line, list-item-two-line" />
+          <VList v-else density="compact">
+            <VListItem
+              v-for="emp in filteredCustomEmployees"
+              :key="emp.emp_id"
+              @click="selectCustomEmployee(emp)"
+            >
+              <VListItemTitle>{{ emp.name }}</VListItemTitle>
+              <VListItemSubtitle>{{ emp.position }} · {{ emp.division_name ?? '—' }}</VListItemSubtitle>
+            </VListItem>
+            <p v-if="filteredCustomEmployees.length === 0" class="text-caption text-medium-emphasis pa-2 mb-0">
+              No matching employees.
+            </p>
+          </VList>
+        </div>
+      </div>
+
+      <!-- Read-only employee name when editing -->
+      <div v-else class="cm-field mb-3">
+        <label class="cm-label">Employee</label>
+        <VCard variant="tonal" color="grey" rounded="lg" flat>
+          <VCardText class="d-flex align-center gap-2 pa-3">
+            <VIcon icon="mdi-account" size="18" />
+            <span class="text-body-2 font-weight-medium">{{ customBreakDialog.empName }}</span>
+          </VCardText>
+        </VCard>
+      </div>
+
+      <div class="d-flex gap-3 mb-3">
+        <div class="cm-field flex-1">
+          <label class="cm-label">Start Date <span class="cm-required">*</span></label>
+          <VTextField
+            v-model="customBreakDialog.startDate"
+            type="date"
+            density="compact"
+            variant="outlined"
+            hide-details="auto"
+          />
+        </div>
+        <div class="cm-field flex-1">
+          <label class="cm-label">End Date <span class="cm-required">*</span></label>
+          <VTextField
+            v-model="customBreakDialog.endDate"
+            type="date"
+            density="compact"
+            variant="outlined"
+            hide-details="auto"
+          />
+        </div>
+      </div>
+
+      <div class="cm-field">
+        <label class="cm-label">Resumption Date <span class="cm-required">*</span></label>
+        <VTextField
+          v-model="customBreakDialog.resumptionDate"
+          type="date"
+          density="compact"
+          variant="outlined"
+          prepend-inner-icon="mdi-calendar-arrow-right"
+          hide-details="auto"
+        />
+        <p class="text-caption text-medium-emphasis mt-1 mb-0">
+          The official return-to-work date.
+        </p>
+      </div>
+
+      <VAlert v-if="customBreakDialog.error" type="error" variant="tonal" density="compact" class="mt-3">
+        {{ customBreakDialog.error }}
+      </VAlert>
+    </VCardText>
+
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" :disabled="customBreakDialog.loading" @click="closeCustomBreakDialog">
+        Cancel
+      </VBtn>
+      <VBtn
+        color="primary"
+        variant="tonal"
+        :loading="customBreakDialog.loading"
+        :prepend-icon="customBreakDialog.editId ? 'mdi-content-save-outline' : 'mdi-calendar-plus'"
+        @click="submitCustomBreak"
+      >
+        {{ customBreakDialog.editId ? 'Save Changes' : 'Add Break' }}
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
     <!-- ── Event Type Picker Dialog ──────────────────────────────────────── -->
     <VDialog v-model="pickerDialog.visible" max-width="340">
       <VCard rounded="lg">
@@ -727,12 +1164,15 @@ import {
   formatDisplayDate,
   toISODate,
   usePayrollCalendar,
+  type ContractBreakBatch,
+  type ContractBreakEmployeePickerRow,
+  type EmployeeContractBreak,
   type Holiday,
   type HolidayType,
   type SuspensionDay,
 } from '@/composable/usePayrollCalendar'
 import axios from '@axios'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 const {
   loading,
@@ -747,6 +1187,17 @@ const {
   addSuspensionDay,
   updateSuspensionDay,
   removeSuspensionDay,
+  contractBreakBatches,
+  fetchContractBreakBatches,
+  addContractBreakBatch,
+  updateContractBreakBatch,
+  removeContractBreakBatch,
+  fetchBatchEmployees,
+  assignEmployeesToBatch,
+  unassignEmployeeBreak,
+  addCustomContractBreak,
+  updateCustomContractBreak,
+  fetchContractBreakEmployeePicker,
 } = usePayrollCalendar()
 
 // ---------------------------------------------------------------------------
@@ -858,6 +1309,10 @@ function nextMonth() {
 watch([viewYear, viewMonth], async ([y, m]) => {
   await Promise.all([fetchMonth(y, m), fetchWeekSchedules(y, m)])
 }, { immediate: true })
+
+onMounted(() => {
+  fetchContractBreakBatches()
+})
 
 // ---------------------------------------------------------------------------
 // Snackbar
@@ -1118,6 +1573,225 @@ async function submitSuspension() {
     suspensionDialog.error = result
   }
 }
+// ---------------------------------------------------------------------------
+// Contract Break Batch dialog
+// ---------------------------------------------------------------------------
+const batchDialog = reactive({
+  visible: false,
+  editId: null as number | null,
+  label: '',
+  startDate: '',
+  endDate: '',
+  resumptionDate: '',
+  notes: '',
+  error: '',
+  loading: false,
+})
+
+function openBatchDialog(batch?: ContractBreakBatch) {
+  batchDialog.editId         = batch?.id ?? null
+  batchDialog.label          = batch?.label ?? ''
+  batchDialog.startDate      = batch?.start_date ?? ''
+  batchDialog.endDate        = batch?.end_date ?? ''
+  batchDialog.resumptionDate = batch?.resumption_date ?? ''
+  batchDialog.notes          = batch?.notes ?? ''
+  batchDialog.error          = ''
+  batchDialog.loading        = false
+  batchDialog.visible        = true
+}
+
+function closeBatchDialog() { batchDialog.visible = false }
+
+async function submitBatch() {
+  batchDialog.error = ''
+  if (!batchDialog.label.trim())   { batchDialog.error = 'Please enter a label.'; return }
+  if (!batchDialog.startDate)      { batchDialog.error = 'Please select a start date.'; return }
+  if (!batchDialog.endDate)        { batchDialog.error = 'Please select an end date.'; return }
+  if (!batchDialog.resumptionDate) { batchDialog.error = 'Please select a resumption date.'; return }
+  if (batchDialog.resumptionDate <= batchDialog.endDate) {
+    batchDialog.error = 'Resumption date must be after the end date.'
+    return
+  }
+
+  batchDialog.loading = true
+  const result = batchDialog.editId
+    ? await updateContractBreakBatch(batchDialog.editId, batchDialog.label, batchDialog.startDate, batchDialog.endDate, batchDialog.resumptionDate, batchDialog.notes)
+    : await addContractBreakBatch(batchDialog.label, batchDialog.startDate, batchDialog.endDate, batchDialog.resumptionDate, batchDialog.notes)
+
+  batchDialog.loading = false
+  if (result === true) {
+    closeBatchDialog()
+    showToast(batchDialog.editId ? 'Batch updated.' : 'Batch created.')
+  } else {
+    batchDialog.error = result
+  }
+}
+
+async function handleRemoveBatch(id: number) {
+  const result = await removeContractBreakBatch(id)
+  if (result === true) {
+    showToast('Batch deleted.')
+  } else {
+    showToast(result, 'error')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Batch Detail dialog (employee assignment list)
+// ---------------------------------------------------------------------------
+const batchDetailDialog = reactive({
+  visible: false,
+  batch: null as ContractBreakBatch | null,
+  assignedEmployees: [] as EmployeeContractBreak[],
+  loadingAssigned: false,
+})
+
+async function openBatchDetail(batch: ContractBreakBatch) {
+  batchDetailDialog.batch   = batch
+  batchDetailDialog.visible = true
+  batchDetailDialog.loadingAssigned = true
+  batchDetailDialog.assignedEmployees = await fetchBatchEmployees(batch.id)
+  batchDetailDialog.loadingAssigned = false
+}
+
+function closeBatchDetail() { batchDetailDialog.visible = false }
+
+async function handleUnassign(assignment: EmployeeContractBreak) {
+  const result = await unassignEmployeeBreak(assignment.id)
+  if (result === true) {
+    batchDetailDialog.assignedEmployees = batchDetailDialog.assignedEmployees.filter(a => a.id !== assignment.id)
+    if (batchDetailDialog.batch) {
+      const idx = contractBreakBatches.value.findIndex(b => b.id === batchDetailDialog.batch!.id)
+      if (idx !== -1) contractBreakBatches.value[idx].employee_breaks_count = batchDetailDialog.assignedEmployees.length
+    }
+    showToast('Employee removed from batch.')
+  } else {
+    showToast(result, 'error')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Employee Picker dialog (assign to batch)
+// ---------------------------------------------------------------------------
+const employeePickerDialog = reactive({
+  visible: false,
+  batchId: null as number | null,
+  search: '',
+  employees: [] as ContractBreakEmployeePickerRow[],
+  selected: [] as number[],
+  loading: false,
+  assigning: false,
+})
+
+async function openEmployeePicker(batchId: number) {
+  employeePickerDialog.batchId   = batchId
+  employeePickerDialog.search    = ''
+  employeePickerDialog.selected  = []
+  employeePickerDialog.visible   = true
+  employeePickerDialog.loading   = true
+  employeePickerDialog.employees = await fetchContractBreakEmployeePicker(batchId)
+  employeePickerDialog.loading   = false
+}
+
+const filteredPickerEmployees = computed(() => {
+  const q = employeePickerDialog.search.trim().toLowerCase()
+  const base = employeePickerDialog.employees.filter(e => !e.already_assigned)
+  if (!q) return base
+  return base.filter(e => e.name.toLowerCase().includes(q) || e.position.toLowerCase().includes(q))
+})
+
+async function confirmAssignment() {
+  if (!employeePickerDialog.batchId || employeePickerDialog.selected.length === 0) return
+  employeePickerDialog.assigning = true
+  const result = await assignEmployeesToBatch(employeePickerDialog.batchId, employeePickerDialog.selected)
+  employeePickerDialog.assigning = false
+
+  if (result.success) {
+    employeePickerDialog.visible = false
+    showToast(result.message)
+    if (batchDetailDialog.batch?.id === employeePickerDialog.batchId) {
+      batchDetailDialog.assignedEmployees = await fetchBatchEmployees(employeePickerDialog.batchId)
+    }
+  } else {
+    showToast(result.message, 'error')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Custom / Individual Contract Break dialog
+// ---------------------------------------------------------------------------
+const customBreakDialog = reactive({
+  visible: false,
+  editId: null as number | null,
+  empId: null as number | null,
+  empName: '',
+  startDate: '',
+  endDate: '',
+  resumptionDate: '',
+  error: '',
+  loading: false,
+  employeeSearch: '',
+  employees: [] as ContractBreakEmployeePickerRow[],
+  loadingEmployees: false,
+})
+
+async function openCustomBreakDialog(existing?: EmployeeContractBreak) {
+  customBreakDialog.editId          = existing?.id ?? null
+  customBreakDialog.empId           = existing?.emp_id ?? null
+  customBreakDialog.empName         = existing?.emp_name ?? ''
+  customBreakDialog.startDate       = existing?.start_date ?? ''
+  customBreakDialog.endDate         = existing?.end_date ?? ''
+  customBreakDialog.resumptionDate  = existing?.resumption_date ?? ''
+  customBreakDialog.error           = ''
+  customBreakDialog.loading         = false
+  customBreakDialog.employeeSearch  = ''
+  customBreakDialog.visible         = true
+
+  if (!existing) {
+    customBreakDialog.loadingEmployees = true
+    customBreakDialog.employees = await fetchContractBreakEmployeePicker()
+    customBreakDialog.loadingEmployees = false
+  }
+}
+
+function closeCustomBreakDialog() { customBreakDialog.visible = false }
+
+const filteredCustomEmployees = computed(() => {
+  const q = customBreakDialog.employeeSearch.trim().toLowerCase()
+  if (!q) return customBreakDialog.employees
+  return customBreakDialog.employees.filter(e => e.name.toLowerCase().includes(q))
+})
+
+function selectCustomEmployee(emp: ContractBreakEmployeePickerRow) {
+  customBreakDialog.empId   = emp.emp_id
+  customBreakDialog.empName = emp.name
+}
+
+async function submitCustomBreak() {
+  customBreakDialog.error = ''
+  if (!customBreakDialog.empId)          { customBreakDialog.error = 'Please select an employee.'; return }
+  if (!customBreakDialog.startDate)      { customBreakDialog.error = 'Please select a start date.'; return }
+  if (!customBreakDialog.endDate)        { customBreakDialog.error = 'Please select an end date.'; return }
+  if (!customBreakDialog.resumptionDate) { customBreakDialog.error = 'Please select a resumption date.'; return }
+  if (customBreakDialog.resumptionDate <= customBreakDialog.endDate) {
+    customBreakDialog.error = 'Resumption date must be after the end date.'
+    return
+  }
+
+  customBreakDialog.loading = true
+  const result = customBreakDialog.editId
+    ? await updateCustomContractBreak(customBreakDialog.editId, customBreakDialog.startDate, customBreakDialog.endDate, customBreakDialog.resumptionDate)
+    : await addCustomContractBreak(customBreakDialog.empId, customBreakDialog.startDate, customBreakDialog.endDate, customBreakDialog.resumptionDate)
+
+  customBreakDialog.loading = false
+  if (result === true) {
+    closeCustomBreakDialog()
+    showToast(customBreakDialog.editId ? 'Custom break updated.' : 'Custom break added.')
+  } else {
+    customBreakDialog.error = result
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // Delete dialog

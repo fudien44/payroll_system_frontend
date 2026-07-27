@@ -16,6 +16,37 @@ export interface Holiday {
   is_half_day: boolean      // only meaningful when type === 'special'
 }
 
+export interface ContractBreakBatch {
+  id:               number
+  label:            string
+  start_date:       string
+  end_date:         string
+  resumption_date:  string
+  notes:            string | null
+  employee_breaks_count?: number
+}
+
+export interface EmployeeContractBreak {
+  id:               number
+  emp_id:           number
+  batch_id:         number | null
+  emp_name:         string | null
+  division_name:    string | null
+  start_date:       string | null
+  end_date:         string | null
+  resumption_date:  string | null
+  batch?:           ContractBreakBatch | null
+}
+
+export interface ContractBreakEmployeePickerRow {
+  emp_id:            number
+  name:              string
+  position:          string
+  division_name:     string | null
+  section_name:      string | null
+  already_assigned:  boolean
+}
+
 export interface SuspensionDay {
   id:          number
   date:        string       // ISO: YYYY-MM-DD
@@ -56,7 +87,8 @@ export function formatDisplayDate(isoDate: string): string {
 // ---------------------------------------------------------------------------
 // Module-level cache — shared across all component instances
 // ---------------------------------------------------------------------------
-
+const contractBreakBatches = ref<ContractBreakBatch[]>([])
+const batchesFetched = ref(false)
 const holidays    = ref<Holiday[]>([])
 const suspensions = ref<SuspensionDay[]>([])
 const loading     = ref(false)
@@ -86,6 +118,151 @@ export function usePayrollCalendar() {
   }
 
   // ── Fetch ────────────────────────────────────────────────────────────────
+
+  async function fetchContractBreakBatches(force = false): Promise<void> {
+  if (batchesFetched.value && !force) return
+  try {
+    const { data } = await axiosInstance.get('/api/calendar/contract-breaks/batches')
+    if (data.success) {
+      contractBreakBatches.value = data.data
+      batchesFetched.value = true
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+async function addContractBreakBatch(
+  label: string, startDate: string, endDate: string, resumptionDate: string, notes = '',
+): Promise<true | string> {
+  try {
+    const res = await axiosInstance.post('/api/calendar/contract-breaks/batches', {
+      label: label.trim(), start_date: startDate, end_date: endDate,
+      resumption_date: resumptionDate, notes: notes.trim() || null,
+    })
+    if (res.data.success) {
+      contractBreakBatches.value.push(res.data.data)
+      return true
+    }
+    return res.data.message ?? 'Failed to add batch.'
+  } catch (err: any) {
+    const errors = err?.response?.data?.errors
+    if (errors) return Object.values(errors).flat().join(' ')
+    return err?.response?.data?.message ?? 'Failed to add batch.'
+  }
+}
+
+async function updateContractBreakBatch(
+  id: number, label: string, startDate: string, endDate: string, resumptionDate: string, notes = '',
+): Promise<true | string> {
+  try {
+    const res = await axiosInstance.post(`/api/calendar/contract-breaks/batches/update/${id}`, {
+      label: label.trim(), start_date: startDate, end_date: endDate,
+      resumption_date: resumptionDate, notes: notes.trim() || null,
+    })
+    if (res.data.success) {
+      const idx = contractBreakBatches.value.findIndex(b => b.id === id)
+      if (idx !== -1) contractBreakBatches.value[idx] = res.data.data
+      return true
+    }
+    return res.data.message ?? 'Failed to update batch.'
+  } catch (err: any) {
+    const errors = err?.response?.data?.errors
+    if (errors) return Object.values(errors).flat().join(' ')
+    return err?.response?.data?.message ?? 'Failed to update batch.'
+  }
+}
+
+async function removeContractBreakBatch(id: number): Promise<true | string> {
+  try {
+    const res = await axiosInstance.post(`/api/calendar/contract-breaks/batches/delete/${id}`)
+    if (res.data.success) {
+      contractBreakBatches.value = contractBreakBatches.value.filter(b => b.id !== id)
+      return true
+    }
+    return res.data.message ?? 'Failed to delete batch.'
+  } catch (err: any) {
+    return err?.response?.data?.message ?? 'Failed to delete batch.'
+  }
+}
+
+async function fetchBatchEmployees(batchId: number): Promise<EmployeeContractBreak[]> {
+  try {
+    const { data } = await axiosInstance.get(`/api/calendar/contract-breaks/batches/${batchId}/employees`)
+    return data.success ? data.data : []
+  } catch {
+    return []
+  }
+}
+
+async function assignEmployeesToBatch(batchId: number, empIds: number[]): Promise<
+  { success: true; message: string; data: EmployeeContractBreak[] } | { success: false; message: string }
+  > {
+  try {
+    const { data } = await axiosInstance.post(`/api/calendar/contract-breaks/batches/${batchId}/assign`, {
+      emp_ids: empIds,
+    })
+    if (data.success) {
+      // Keep the batch's assigned-count badge in sync
+      const idx = contractBreakBatches.value.findIndex(b => b.id === batchId)
+      if (idx !== -1) contractBreakBatches.value[idx].employee_breaks_count = data.data.length
+      return { success: true, message: data.message, data: data.data }
+    }
+    return { success: false, message: data.message ?? 'Failed to assign employees.' }
+  } catch (err: any) {
+    return { success: false, message: err?.response?.data?.message ?? 'Failed to assign employees.' }
+  }
+}
+
+async function unassignEmployeeBreak(id: number): Promise<true | string> {
+  try {
+    const res = await axiosInstance.post(`/api/calendar/contract-breaks/${id}/unassign`)
+    return res.data.success ? true : (res.data.message ?? 'Failed to unassign.')
+  } catch (err: any) {
+    return err?.response?.data?.message ?? 'Failed to unassign.'
+  }
+}
+
+async function addCustomContractBreak(
+  empId: number, startDate: string, endDate: string, resumptionDate: string,
+): Promise<true | string> {
+  try {
+    const res = await axiosInstance.post('/api/calendar/contract-breaks/custom', {
+      emp_id: empId, start_date: startDate, end_date: endDate, resumption_date: resumptionDate,
+    })
+    return res.data.success ? true : (res.data.message ?? 'Failed to add custom contract break.')
+  } catch (err: any) {
+    const errors = err?.response?.data?.errors
+    if (errors) return Object.values(errors).flat().join(' ')
+    return err?.response?.data?.message ?? 'Failed to add custom contract break.'
+  }
+}
+
+async function updateCustomContractBreak(
+  id: number, startDate: string, endDate: string, resumptionDate: string,
+): Promise<true | string> {
+  try {
+    const res = await axiosInstance.post(`/api/calendar/contract-breaks/${id}/update-custom`, {
+      start_date: startDate, end_date: endDate, resumption_date: resumptionDate,
+    })
+    return res.data.success ? true : (res.data.message ?? 'Failed to update.')
+  } catch (err: any) {
+    const errors = err?.response?.data?.errors
+    if (errors) return Object.values(errors).flat().join(' ')
+    return err?.response?.data?.message ?? 'Failed to update.'
+  }
+}
+
+async function fetchContractBreakEmployeePicker(batchId?: number): Promise<ContractBreakEmployeePickerRow[]> {
+  try {
+    const { data } = await axiosInstance.get('/api/calendar/contract-breaks/employees-picker', {
+      params: batchId ? { batch_id: batchId } : {},
+    })
+    return data.success ? data.data : []
+  } catch {
+    return []
+  }
+}
 
   async function fetchMonth(year: number, month: number): Promise<void> {
     const key = `${year}-${month}`
@@ -340,5 +517,17 @@ export function usePayrollCalendar() {
     addSuspensionDay,
     updateSuspensionDay,
     removeSuspensionDay,
+
+    contractBreakBatches: computed(() => contractBreakBatches.value),
+    fetchContractBreakBatches,
+    addContractBreakBatch,
+    updateContractBreakBatch,
+    removeContractBreakBatch,
+    fetchBatchEmployees,
+    assignEmployeesToBatch,
+    unassignEmployeeBreak,
+    addCustomContractBreak,
+    updateCustomContractBreak,
+    fetchContractBreakEmployeePicker,
   }
 }

@@ -6,15 +6,17 @@ import axios from '@axios';
    PROPS / EMITS
 ───────────────────────────────────────── */
 const props = defineProps<{
-  type:          'pass_slip' | 'official_travel' | 'leave' | ''
-  periodMonth:   number
-  periodYear:    number
-  date:          string
-  dateTo:        string | null
-  disabled?:     boolean
+  type:           'pass_slip' | 'official_travel' | 'leave' | 'contract_break' | ''
+  periodMonth:    number
+  periodYear:     number
+  date:           string
+  dateTo:         string | null
+  disabled?:      boolean
   errorMessages?: string | string[]
+  isHalfDay?:     boolean                                  
+  carryOverRange?: { from: string; to: string } | null      
 }>()
-
+const isReadOnlyType = computed(() => props.type === 'contract_break')
 const emit = defineEmits<{
   (e: 'update:date', v: string): void
   (e: 'update:dateTo', v: string | null): void
@@ -40,7 +42,7 @@ const MONTH_NAMES = ['January','February','March','April','May','June','July','A
 /* ─────────────────────────────────────────
    COMPUTED
 ───────────────────────────────────────── */
-const isRangeType = computed(() => props.type !== 'pass_slip' && !!props.type)
+const isRangeType = computed(() => props.type !== 'pass_slip' && props.type !== 'contract_break' && !!props.type && !props.isHalfDay)
 
 const monthLabel = computed(() => `${MONTH_NAMES[props.periodMonth - 1]} ${props.periodYear}`)
 
@@ -48,6 +50,7 @@ const typeLabel = computed(() => {
   if (props.type === 'pass_slip')       return 'Pass Slip'
   if (props.type === 'official_travel') return 'Official Travel'
   if (props.type === 'leave')           return 'Leave'
+   if (props.type === 'contract_break')  return 'Contract Break'
   return 'Select a type first'
 })
 
@@ -55,11 +58,17 @@ const typeColor = computed(() => {
   if (props.type === 'pass_slip')       return 'orange'
   if (props.type === 'official_travel') return 'blue'
   if (props.type === 'leave')           return 'teal'
+  if (props.type === 'contract_break')  return 'grey-darken-1'
   return 'grey'
 })
 
 const displayText = computed(() => {
   if (!props.date) return ''
+  if (props.type === 'contract_break') {
+    return !props.dateTo || props.dateTo === props.date
+      ? formatDisplayDate(props.date)
+      : `${formatDisplayDate(props.date)} → ${formatDisplayDate(props.dateTo)}`
+  }
   if (!isRangeType.value) return formatDisplayDate(props.date)
   if (!props.dateTo || props.dateTo === props.date) return formatDisplayDate(props.date)
   return `${formatDisplayDate(props.date)} → ${formatDisplayDate(props.dateTo)}`
@@ -67,11 +76,7 @@ const displayText = computed(() => {
 
 interface Cell { date: Date | null; iso: string; dow: number }
 
-const cells = computed<Cell[]>(() => {
-  const year  = props.periodYear
-  const month = props.periodMonth
-  if (!year || !month) return []
-
+function buildCells(year: number, month: number, minDay = 1, maxDay = 31): Cell[] {
   const first    = new Date(year, month - 1, 1)
   const last     = new Date(year, month, 0)
   const startDow = first.getDay()
@@ -80,11 +85,35 @@ const cells = computed<Cell[]>(() => {
   const arr: Cell[] = []
   for (let i = 0; i < startDow; i++) arr.push({ date: null, iso: '', dow: i })
   for (let d = 1; d <= days; d++) {
+    if (d < minDay || d > maxDay) {
+      arr.push({ date: null, iso: '', dow: new Date(year, month - 1, d).getDay() })
+      continue
+    }
     const date = new Date(year, month - 1, d)
     arr.push({ date, iso: toISODate(date), dow: date.getDay() })
   }
   while (arr.length % 7 !== 0) arr.push({ date: null, iso: '', dow: arr.length % 7 })
   return arr
+}
+
+const cells = computed<Cell[]>(() => {
+  if (!props.periodYear || !props.periodMonth) return []
+  return buildCells(props.periodYear, props.periodMonth)
+})
+
+// Carried-over Dec 16-31 mini-grid — only rendered when the parent passes
+// a carryOverRange (i.e. this is a January run for an employee with a
+// Dec 16-31 carry-over).
+const carryOverCells = computed<Cell[]>(() => {
+  if (!props.carryOverRange) return []
+  const d = new Date(props.carryOverRange.from + 'T00:00:00')
+  return buildCells(d.getFullYear(), d.getMonth() + 1, 16, 31)
+})
+
+const carryOverMonthLabel = computed(() => {
+  if (!props.carryOverRange) return ''
+  const d = new Date(props.carryOverRange.from + 'T00:00:00')
+  return `${MONTH_NAMES[d.getMonth()]} 16–31, ${d.getFullYear()} (Carried Over)`
 })
 
 const rangeSummary = computed(() => {
@@ -229,14 +258,14 @@ function cancelSelection() {
       <VTextField
         v-bind="menuProps"
         :model-value="displayText"
-        :label="isRangeType ? 'Date Range' : 'Date'"
+        :label="isRangeType ? 'Date Range' : (props.type === 'contract_break' ? 'Contract Break Period' : 'Date')"
         placeholder="Pick a date"
         readonly
         variant="outlined"
         density="compact"
-        prepend-inner-icon="mdi-calendar-outline"
-        append-inner-icon="mdi-menu-down"
-        :disabled="disabled"
+        prepend-inner-icon="mdi-calendar-remove-outline"
+        :append-inner-icon="isReadOnlyType ? undefined : 'mdi-menu-down'"
+        :disabled="disabled || isReadOnlyType"
         :error-messages="errorMessages"
         hide-details="auto"
       />
@@ -248,7 +277,32 @@ function cancelSelection() {
           <span class="text-body-2 font-weight-medium">{{ monthLabel }}</span>
           <VChip size="x-small" variant="tonal" :color="typeColor" label>{{ typeLabel }}</VChip>
         </div>
-
+         <template v-if="carryOverCells.length">
+    <div class="d-flex align-center gap-1 mb-1">
+      <VIcon icon="mdi-calendar-arrow-left" size="12" color="warning" />
+      <span class="text-caption font-weight-medium text-warning">{{ carryOverMonthLabel }}</span>
+    </div>
+    <div class="adp-grid adp-grid--header">
+      <span v-for="d in DAY_NAMES" :key="'co-'+d" class="adp-daylabel">{{ d }}</span>
+    </div>
+    <div class="adp-grid mb-2">
+      <div
+        v-for="(cell, i) in carryOverCells"
+        :key="'co-'+i"
+        class="adp-cell adp-cell--carried-over"
+        :class="{
+          'adp-cell--empty':    !cell.date,
+          'adp-cell--selected': cell.date && inRange(cell.iso),
+          'adp-cell--edge':     cell.date && isRangeEdge(cell.iso),
+        }"
+        @mousedown="onCellMouseDown(cell)"
+        @mouseenter="onCellMouseEnter(cell)"
+      >
+        <span v-if="cell.date">{{ cell.date.getDate() }}</span>
+      </div>
+    </div>
+    <VDivider class="mb-2" />
+  </template>
         <div class="adp-grid adp-grid--header">
           <span v-for="d in DAY_NAMES" :key="d" class="adp-daylabel">{{ d }}</span>
         </div>
@@ -336,6 +390,10 @@ function cancelSelection() {
   cursor: pointer;
   user-select: none;
   transition: background 0.1s ease;
+}
+.adp-cell--carried-over:not(.adp-cell--empty) {
+  background: rgba(var(--v-theme-warning), 0.06);
+  border: 1px dashed rgba(var(--v-theme-warning), 0.4);
 }
 
 .adp-cell--empty    { cursor: default; }

@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import BaseAlert from '@/components/base/BaseAlert.vue'
 import PayrollItemAdjustmentsDialog from '@/components/payroll/PayrollItemAdjustmentsDialog.vue'
+import { ensurePhotosLoaded, getPhoto } from '@/composable/useEmployeePhotos'
 import axios from '@axios'
 import { useRoute, useRouter } from 'vue-router'
-
 /* ─────────────────────────────────────────
    TYPES
 ───────────────────────────────────────── */
@@ -12,6 +12,7 @@ interface Signatory {
   name:     string
   position: string
   role:     'approved_by' | 'certified_by'
+  photo_url?: string | null
 }
 
 interface SelectableEmployee {
@@ -25,8 +26,10 @@ interface SelectableEmployee {
   hrmis_wage:      number | null   
   has_hrmis_wage:  boolean 
   already_added:   boolean
-  already_paid:    boolean          // NEW: finalized in another run for this same period
-  paid_payroll_no: string | null    // NEW: which run they were paid under, for the tooltip/chip
+  already_paid:    boolean
+  paid_payroll_no: string | null
+  current_wage_effective_date: string | null // NEW
+  current_wage_amount:         number | null // NEW
 }
 
 interface BatchItem {
@@ -62,6 +65,11 @@ interface BatchItem {
   dtr_absent_days:         number
   dtr_late_minutes:        number
   dtr_undertime_minutes:   number
+   dtr_carried_over_absent_days:       number
+  dtr_carried_over_late_minutes:      number
+  dtr_carried_over_undertime_minutes: number
+  current_carried_over_absent_days:  number
+current_carried_over_late_minutes: number
 }
 
 interface SectionGroup {
@@ -112,12 +120,14 @@ const MONTH_NAMES = [
   'January','February','March','April','May','June',
   'July','August','September','October','November','December',
 ]
-const HARDCODED_APPROVED_BY_PAYROLL: Signatory = {
-  id: 0,
-  name: 'EXUPERIA B. SABALBERINO, MD, MPH, CESE',
-  position: 'DIRECTOR IV',
-  role: 'approved_by',
+const brokenPhotoIds = ref(new Set<number | null>())
+function markPhotoBroken(id: number | null) {
+  if (id == null) return
+  brokenPhotoIds.value.add(id)
 }
+const approvedByPool = ref<Signatory[]>([])
+const revertDialog = ref(false)
+const revertReason = ref('')
 const WAGE_SG_CUTOFF     = 16
 const WAGE_PAGIBIG_MIN   = 400
 const WAGE_SSS_MIN       = 750
@@ -131,6 +141,9 @@ const WAGE_PREMIUM_OPTIONS = [
 /* ─────────────────────────────────────────
    STATE
 ───────────────────────────────────────── */
+const recomputeConfirmData      = ref<{ old_wage: number; new_wage: number; old_gross: number; new_gross: number } | null>(null)
+const recomputeNeedsDoubleConfirm = ref(false)
+
 const route  = useRoute()
 const router = useRouter()
 
@@ -164,15 +177,42 @@ const wageDialog       = ref(false)
 const wageSaving       = ref(false)
 const wageSssOptIn     = ref(false)
 const wageTargetEmp    = ref<SelectableEmployee | null>(null)
-const wageForm         = ref({
+const wageForm = ref({
   wage: 0, premium_percent: 0.05, philhealth: 500,
   pag_ibig: WAGE_PAGIBIG_MIN, sss: 0, ewt_rate: 5,
+  effective_date: new Date().toISOString().slice(0, 10), // NEW
 })
 const wageFormErrors   = ref<Partial<Record<keyof typeof wageForm.value, string>>>({})
 
 // ── Inline Edit ──
 const editingItem    = ref<BatchItem | null>(null)
-const editForm       = ref<Partial<BatchItem> & { days_absent?: number; minutes_late_ut?: number }>({})
+const editForm = ref<Partial<BatchItem> & {
+  days_absent?: number
+  minutes_late_ut?: number
+  days_absent_dec?: number
+  days_absent_jan?: number
+  minutes_late_ut_dec?: number
+  minutes_late_ut_jan?: number
+}>({})
+
+const editCarryOverActive = computed(() => {
+  if (!editingItem.value) return false
+  return Number(editingItem.value.dtr_carried_over_absent_days ?? 0) > 0
+      || Number(editingItem.value.dtr_carried_over_late_minutes ?? 0) > 0
+      || Number(editingItem.value.dtr_carried_over_undertime_minutes ?? 0) > 0
+})
+
+const editPriorMonthAbbr = computed(() => {
+  if (!run.value) return ''
+  const d = new Date(run.value.period_year, run.value.period_month - 1, 1)
+  d.setMonth(d.getMonth() - 1)
+  return MONTH_NAMES[d.getMonth()].slice(0, 3).toUpperCase()
+})
+
+const editCurrentMonthAbbr = computed(() => {
+  if (!run.value) return ''
+  return MONTH_NAMES[run.value.period_month - 1].slice(0, 3).toUpperCase()
+})
 const editSaving     = ref(false)
 const editDialog     = ref(false)
 
@@ -185,6 +225,11 @@ const isAutoRemarksUpdate = ref(false)
 const removeTarget  = ref<BatchItem | null>(null)
 const removeDialog  = ref(false)
 const removeLoading = ref(false)
+
+// ── Bulk Remove ──
+const selectedRemoveIds  = ref<number[]>([])
+const removeBatchDialog  = ref(false)
+const removeBatchLoading = ref(false)
 
 // ── Adjustments ──
 const adjustmentTarget  = ref<BatchItem | null>(null)
@@ -258,6 +303,15 @@ watch(() => wageForm.value.wage, (newWage) => {
   }
 })
 
+
+const wageWillAffectHrmis = computed(() => {
+  if (!wageTargetEmp.value || !wageForm.value.effective_date) return false
+  const currentEff = wageTargetEmp.value.current_wage_effective_date
+  // No current row at all → this entry becomes the current one.
+  if (!currentEff) return true
+  return wageForm.value.effective_date >= currentEff
+})
+
 const canFinalize = computed(() => run.value?.status === 'draft' && (run.value?.employee_count ?? 0) > 0)
 const canRevert   = computed(() => run.value?.status === 'finalized')
 const canGenerate = computed(() => run.value?.status === 'finalized')
@@ -274,32 +328,59 @@ const filteredSelectableEmps = computed(() => {
 const availableEmps = computed(() =>
   filteredSelectableEmps.value.filter(e => !e.already_added)
 )
+// Only employees eligible for selection (has deductions set, not already finalized elsewhere)
+const selectableAvailableEmps = computed(() =>
+  availableEmps.value.filter(e => e.has_wage && !e.already_paid)
+)
 
+const allSelectableChecked = computed(() =>
+  selectableAvailableEmps.value.length > 0 &&
+  selectableAvailableEmps.value.every(e => selectedEmpIds.value.includes(e.emp_id))
+)
+
+const someSelectableChecked = computed(() =>
+  selectableAvailableEmps.value.some(e => selectedEmpIds.value.includes(e.emp_id)) &&
+  !allSelectableChecked.value
+)
 const docTypeLabel = computed(() => {
   if (docType.value === 'payroll_sheet') return 'Payroll Sheet'
   if (docType.value === 'ors')           return 'Obligation Request & Status (ORS)'
   return 'Disbursement Voucher (DV)'
 })
 
-// Approved By — always static, shown as read-only text
-const approvedByName = computed(() => {
-  const useHardcoded = docType.value === 'payroll_sheet' || docType.value === 'dv'
-  const sig = useHardcoded ? HARDCODED_APPROVED_BY_PAYROLL : approvedBySig.value
-  return sig?.name ?? '—'
-})
 
-const approvedByPosition = computed(() => {
-  const useHardcoded = docType.value === 'payroll_sheet' || docType.value === 'dv'
-  const sig = useHardcoded ? HARDCODED_APPROVED_BY_PAYROLL : approvedBySig.value
-  return sig?.position ?? ''
-})
-
-// Dropdown options for slot 1 when division is not mapped
-const slot1Options = computed(() =>
+// Options shared by every "Certified By" dropdown
+const certifiedOptions = computed(() =>
   selectablePool.value.map(s => ({
-    title: `${s.name} — ${s.position}`,
-    value: s.id,
+    title: s.name, subtitle: s.position, value: s.id as number | null,
+    vacant: false, photo_url: s.photo_url ?? null,
   }))
+)
+
+// Options for the Approved By dropdown, with an explicit vacant choice
+const approvedByOptions = computed(() => [
+  { title: 'Vacant / No Approving Authority', subtitle: 'Leave blank on the document', value: null as number | null, vacant: true, photo_url: null as string | null },
+  ...approvedByPool.value.map(s => ({
+    title: s.name, subtitle: s.position, value: s.id as number | null,
+    vacant: false, photo_url: s.photo_url ?? null,
+  })),
+])
+
+watch([certifiedOptions, approvedByOptions], ([certified, approved]) => {
+  ensurePhotosLoaded([
+    ...certified.map(o => o.photo_url),
+    ...approved.map(o => o.photo_url),
+  ])
+}, { immediate: true })
+// Per-doc-type labels for each Certified By slot
+const certifiedSlotLabels = computed(() => {
+  if (docType.value === 'ors') return ['Certified by - Division Head', 'Certified by - Budget Officer']
+  if (docType.value === 'dv')  return ['Certified by - Division Head', 'Certified by - Accountant Head']
+  return ['Certified by - Division Head', 'Certified by - Accountant Head', 'Certified by - Cashier Head']
+})
+
+const approvedByLabel = computed(() =>
+  docType.value === 'dv' ? 'Approved By' : 'Approved By'
 )
 
 // Number of certified slots per doc type
@@ -315,7 +396,7 @@ async function generateORSFromBackend() {
   try {
     const response = await axios.post(
       `/api/payroll-run/${run.value.id}/generate-ors`,
-      {},
+      { certified_by: selectedCertifiedBy.value },
       { responseType: 'blob' }
     )
     const filename = `ORS-${run.value.payroll_no}.pdf`
@@ -341,7 +422,7 @@ async function generatePayrollSheetFromBackend() {
   try {
     const response = await axios.post(
       `/api/payroll-run/${run.value.id}/generate-payroll-sheet`,
-      {},
+      { certified_by: selectedCertifiedBy.value, approved_by: selectedApprovedBy.value },
       { responseType: 'blob' }
     )
     const filename = `PAYROLL-${run.value.payroll_no}.pdf`
@@ -367,7 +448,7 @@ async function generateDVFromBackend() {
   try {
     const response = await axios.post(
       `/api/payroll-run/${run.value.id}/generate-dv`,
-      {},
+      { certified_by: selectedCertifiedBy.value, approved_by: selectedApprovedBy.value },
       { responseType: 'blob' }
     )
     const filename = `DV-${run.value.payroll_no}.pdf`
@@ -398,6 +479,21 @@ const fmtNum = (v: number | string) =>
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   }).format(Number(v) ?? 0)
 
+  const AVATAR_COLORS = ['primary', 'teal', 'orange', 'purple', 'pink', 'indigo'] as const
+
+function avatarColor(id: number | null): string {
+  return AVATAR_COLORS[(id ?? 0) % AVATAR_COLORS.length]
+}
+
+function initials(name: string) {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(w => w[0].toUpperCase())
+    .join('')
+}
+
 function showAlert(type: AlertType, message: string) {
   alertType.value    = type
   alertMessage.value = message
@@ -421,6 +517,29 @@ function allEmployees(): BatchItem[] {
   return run.value.groups.flatMap(d => d.sections.flatMap(s => s.employees))
 }
 
+const allEmpIds = computed(() => allEmployees().map(e => e.emp_id))
+
+const allRemoveChecked = computed(() =>
+  allEmpIds.value.length > 0 && allEmpIds.value.every(id => selectedRemoveIds.value.includes(id))
+)
+const someRemoveChecked = computed(() =>
+  allEmpIds.value.some(id => selectedRemoveIds.value.includes(id)) && !allRemoveChecked.value
+)
+
+function toggleRemoveSelect(empId: number) {
+  const idx = selectedRemoveIds.value.indexOf(empId)
+  if (idx === -1) selectedRemoveIds.value.push(empId)
+  else selectedRemoveIds.value.splice(idx, 1)
+}
+
+function toggleSelectAllRemove() {
+  selectedRemoveIds.value = allRemoveChecked.value ? [] : [...allEmpIds.value]
+}
+
+const selectedRemoveNames = computed(() =>
+  allEmployees().filter(e => selectedRemoveIds.value.includes(e.emp_id)).map(e => e.emp_name)
+)
+
 /* ─────────────────────────────────────────
    API
 ───────────────────────────────────────── */
@@ -430,6 +549,9 @@ async function fetchRun() {
     const { data } = await axios.get(`/api/payroll-run/${route.params.id}`)
     run.value = data.data
     syncMetaForm()
+    // NEW: drop any selected ids no longer present in the refreshed batch
+    const validIds = new Set(allEmpIds.value)
+    selectedRemoveIds.value = selectedRemoveIds.value.filter(id => validIds.has(id))
   } catch {
     showAlert('error', 'Failed to load payroll run.')
   } finally {
@@ -464,6 +586,7 @@ async function fetchSignatories(type: DocType) {
     // Approved By — static, just store it
     approvedBySig.value      = payload.approved_by ?? null
     selectedApprovedBy.value = approvedBySig.value?.id ?? null
+    approvedByPool.value     = payload.approved_by_pool ?? []
 
     // Certified By — ordered slots from backend
     certifiedBySlots.value = payload.certified_by    // (Signatory | null)[]
@@ -501,6 +624,16 @@ async function addSelectedEmployees() {
     selectedEmpIds.value = []
     await fetchRun()
     await fetchSelectableEmployees()
+
+    // Prompt one-at-a-time for employees skipped due to no wage
+    // record effective for this period (common on backprocessed runs)
+    if (data.no_wage_history_emps?.length) {
+      wageQueue.value        = [...data.no_wage_history_emps]
+      wageQueueTotal.value   = wageQueue.value.length
+      wageQueueDoneIds.value = []
+      wageQueueActive.value  = true
+      startNextWageQueueItem()
+    }
   } catch (err: any) {
     showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to add employees.')
   } finally {
@@ -540,12 +673,21 @@ async function finalizeRun() {
   }
 }
 
-async function revertRun() {
+async function confirmRevert() {
+  if (!run.value) return
+  if (!revertReason.value.trim()) {
+    showAlert('warning', 'Please provide a reason for reverting.')
+    return
+  }
   revertLoading.value = true
   try {
-    const { data } = await axios.post(`/api/payroll-run/revert/${run.value!.id}`)
+    const { data } = await axios.post(`/api/payroll-run/revert/${run.value.id}`, {
+      reason: revertReason.value.trim(),
+    })
     if (!data.success) throw new Error(data.message)
-    run.value!.status = 'draft'
+    run.value.status = 'draft'
+    revertDialog.value = false
+    revertReason.value = ''
     showAlert('success', 'Reverted to Draft.')
   } catch (err: any) {
     showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to revert.')
@@ -558,17 +700,31 @@ async function saveEditForm() {
   if (!editingItem.value || !run.value) return
   editSaving.value = true
   try {
+    const payload = editCarryOverActive.value
+      ? {
+          days_absent_dec:     editForm.value.days_absent_dec,
+          days_absent_jan:     editForm.value.days_absent_jan,
+          minutes_late_ut_dec: editForm.value.minutes_late_ut_dec,
+          minutes_late_ut_jan: editForm.value.minutes_late_ut_jan,
+          philhealth:          editForm.value.philhealth,
+          pag_ibig:            editForm.value.pag_ibig,
+          sss:                 editForm.value.sss,
+          ewt:                 editForm.value.ewt,
+          remarks:             editForm.value.remarks?.trim() || null,
+        }
+      : {
+          days_absent:     editForm.value.days_absent,
+          minutes_late_ut: editForm.value.minutes_late_ut,
+          philhealth:      editForm.value.philhealth,
+          pag_ibig:        editForm.value.pag_ibig,
+          sss:             editForm.value.sss,
+          ewt:             editForm.value.ewt,
+          remarks:         editForm.value.remarks?.trim() || null,
+        }
+
     const { data } = await axios.post(
       `/api/payroll-run/${run.value.id}/items/${editingItem.value.id}/update`,
-      {
-        days_absent:     editForm.value.days_absent,
-        minutes_late_ut: editForm.value.minutes_late_ut,
-        philhealth:      editForm.value.philhealth,
-        pag_ibig:        editForm.value.pag_ibig,
-        sss:             editForm.value.sss,
-        ewt:             editForm.value.ewt,
-        remarks:         editForm.value.remarks?.trim() || null,
-      }
+      payload
     )
     if (!data.success) throw new Error(data.message)
     showAlert('success', 'Employee row updated.')
@@ -580,7 +736,6 @@ async function saveEditForm() {
     editSaving.value = false
   }
 }
-
 async function confirmRemove() {
   if (!removeTarget.value || !run.value) return
   removeLoading.value = true
@@ -600,18 +755,47 @@ async function confirmRemove() {
   }
 }
 
-async function confirmRecompute() {
+async function confirmRemoveBatch() {
+  if (!selectedRemoveIds.value.length || !run.value) return
+  removeBatchLoading.value = true
+  try {
+    const { data } = await axios.post(
+      `/api/payroll-run/${run.value.id}/employees/remove-batch`,
+      { emp_ids: selectedRemoveIds.value }
+    )
+    if (!data.success) throw new Error(data.message)
+    showAlert('success', data.message)
+    removeBatchDialog.value = false
+    selectedRemoveIds.value = []
+    await fetchRun()
+    await fetchSelectableEmployees()
+  } catch (err: any) {
+    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to remove employees.')
+  } finally {
+    removeBatchLoading.value = false
+  }
+}
+
+async function confirmRecompute(forceConfirm = false) {
   if (!recomputeTarget.value || !run.value) return
   recomputeLoading.value = true
   try {
     const { data } = await axios.post(
-      `/api/payroll-run/${run.value.id}/employees/${recomputeTarget.value.emp_id}/recompute`
+      `/api/payroll-run/${run.value.id}/employees/${recomputeTarget.value.emp_id}/recompute`,
+      { confirm: forceConfirm }
     )
     if (!data.success) throw new Error(data.message)
     showAlert('success', `${recomputeTarget.value.emp_name} recomputed from latest DTR data.`)
     recomputeDialog.value = false
+    recomputeNeedsDoubleConfirm.value = false
+    recomputeConfirmData.value = null
     await fetchRun()
   } catch (err: any) {
+    if (err.response?.status === 409 && err.response?.data?.requires_confirm) {
+      recomputeConfirmData.value = err.response.data.data
+      recomputeNeedsDoubleConfirm.value = true
+      return // keep dialog open, now showing the comparison
+    }
     showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to recompute.')
   } finally {
     recomputeLoading.value = false
@@ -628,13 +812,30 @@ function buildAutoRemarks(days: number, mins: number): string {
   return parts.join(', ')
 }
 
+function buildAutoRemarksSplit(decDays: number, decMins: number, janDays: number, janMins: number): string {
+  const priorParts: string[] = []
+  if (decDays > 0) priorParts.push(`ABSENT ${decDays} DAY${decDays !== 1 ? 'S' : ''}-${editPriorMonthAbbr.value}`)
+  if (decMins > 0) priorParts.push(`${decMins} MINS LATE-${editPriorMonthAbbr.value}`)
+
+  const currentParts: string[] = []
+  if (janDays > 0) currentParts.push(`ABSENT ${janDays} DAY${janDays !== 1 ? 'S' : ''}-${editCurrentMonthAbbr.value}`)
+  if (janMins > 0) currentParts.push(`${janMins} MINS LATE-${editCurrentMonthAbbr.value}`)
+
+  const segments = [priorParts.join(', '), currentParts.join(', ')].filter(Boolean)
+  return segments.join('; ')
+}
+
 function resetRemarksToAuto() {
   remarksDirty.value        = false
   isAutoRemarksUpdate.value = true
-  editForm.value.remarks = buildAutoRemarks(
-    Number(editForm.value.days_absent ?? 0),
-    Number(editForm.value.minutes_late_ut ?? 0)
-  ) || null
+  editForm.value.remarks = editCarryOverActive.value
+    ? (buildAutoRemarksSplit(
+        Number(editForm.value.days_absent_dec ?? 0),
+        Number(editForm.value.minutes_late_ut_dec ?? 0),
+        Number(editForm.value.days_absent_jan ?? 0),
+        Number(editForm.value.minutes_late_ut_jan ?? 0),
+      ) || null)
+    : (buildAutoRemarks(Number(editForm.value.days_absent ?? 0), Number(editForm.value.minutes_late_ut ?? 0)) || null)
   nextTick(() => { isAutoRemarksUpdate.value = false })
 }
 
@@ -642,31 +843,68 @@ function openEditDialog(item: BatchItem) {
   editingItem.value = item
   const days = Number(item.total_absent_days)
   const mins = Number(item.total_late_minutes) + Number(item.total_undertime_minutes)
-  const autoRemarks = buildAutoRemarks(days, mins)
 
-  remarksDirty.value = (item.remarks ?? '') !== autoRemarks
+  if (editCarryOverActive.value) {
+    const carriedDays = Number(item.current_carried_over_absent_days ?? 0)   // was dtr_carried_over_absent_days
+    const carriedMins = Number(item.current_carried_over_late_minutes ?? 0)  // was dtr_carried_over_late + undertime
+    const currentDays = Math.max(0, days - carriedDays)
+    const currentMins = Math.max(0, mins - carriedMins)
 
-  editForm.value = {
-    days_absent:     days,
-    minutes_late_ut: mins,
-    philhealth:      Number(item.philhealth),
-    pag_ibig:        Number(item.pag_ibig),
-    sss:             Number(item.sss),
-    ewt:             Number(item.ewt),
-    remarks:         item.remarks ?? (autoRemarks || null),
+    const autoRemarks = buildAutoRemarksSplit(carriedDays, carriedMins, currentDays, currentMins)
+    remarksDirty.value = (item.remarks ?? '') !== autoRemarks
+
+    editForm.value = {
+      days_absent_dec:     carriedDays,
+      days_absent_jan:     currentDays,
+      minutes_late_ut_dec: carriedMins,
+      minutes_late_ut_jan: currentMins,
+      philhealth:          Number(item.philhealth),
+      pag_ibig:            Number(item.pag_ibig),
+      sss:                 Number(item.sss),
+      ewt:                 Number(item.ewt),
+      remarks:             item.remarks ?? (autoRemarks || null),
+    }
+  } else {
+    const autoRemarks = buildAutoRemarks(days, mins)
+    remarksDirty.value = (item.remarks ?? '') !== autoRemarks
+
+    editForm.value = {
+      days_absent:     days,
+      minutes_late_ut: mins,
+      philhealth:      Number(item.philhealth),
+      pag_ibig:        Number(item.pag_ibig),
+      sss:             Number(item.sss),
+      ewt:             Number(item.ewt),
+      remarks:         item.remarks ?? (autoRemarks || null),
+    }
   }
   editDialog.value = true
 }
 
 watch(
-  [() => editForm.value.days_absent, () => editForm.value.minutes_late_ut],
-  ([days, mins]) => {
+  [
+    () => editForm.value.days_absent, () => editForm.value.minutes_late_ut,
+    () => editForm.value.days_absent_dec, () => editForm.value.days_absent_jan,
+    () => editForm.value.minutes_late_ut_dec, () => editForm.value.minutes_late_ut_jan,
+  ],
+  () => {
     if (remarksDirty.value) return
     isAutoRemarksUpdate.value = true
-    editForm.value.remarks = buildAutoRemarks(Number(days ?? 0), Number(mins ?? 0)) || null
+    editForm.value.remarks = editCarryOverActive.value
+      ? (buildAutoRemarksSplit(
+          Number(editForm.value.days_absent_dec ?? 0),
+          Number(editForm.value.minutes_late_ut_dec ?? 0),
+          Number(editForm.value.days_absent_jan ?? 0),
+          Number(editForm.value.minutes_late_ut_jan ?? 0),
+        ) || null)
+      : (buildAutoRemarks(Number(editForm.value.days_absent ?? 0), Number(editForm.value.minutes_late_ut ?? 0)) || null)
     nextTick(() => { isAutoRemarksUpdate.value = false })
   }
 )
+
+watch(() => metaForm.value.fund_cluster, (val) => {
+  metaForm.value.saa_no = val
+})
 
 watch(() => editForm.value.remarks, (val) => {
   if (isAutoRemarksUpdate.value) return
@@ -705,7 +943,7 @@ function onAdjustmentUpdated(updatedItem: BatchItem) {
     for (const sec of div.sections) {
       const idx = sec.employees.findIndex(e => e.id === updatedItem.id)
       if (idx !== -1) {
-        sec.employees[idx] = { ...sec.employees[idx], ...updatedItem }
+        Object.assign(sec.employees[idx], updatedItem)   // mutate, don't replace
         return
       }
     }
@@ -715,10 +953,15 @@ function onAdjustmentUpdated(updatedItem: BatchItem) {
 
 function openRecomputeDialog(item: BatchItem) {
   recomputeTarget.value = item
+  recomputeNeedsDoubleConfirm.value = false
+  recomputeConfirmData.value = null
   recomputeDialog.value = true
 }
-
-function openWageDialog(emp: SelectableEmployee) {
+const wageQueue       = ref<{ emp_id: number; name: string }[]>([])
+const wageQueueActive  = ref(false)
+const wageQueueDoneIds = ref<number[]>([])
+const wageQueueTotal   = ref(0)
+function openWageDialog(emp: SelectableEmployee, defaultEffectiveDate?: string) {
   wageTargetEmp.value = emp
   wageSssOptIn.value  = false
   const prefillWage = emp.has_hrmis_wage && emp.hrmis_wage ? emp.hrmis_wage : (emp.wage || 0)
@@ -731,15 +974,75 @@ function openWageDialog(emp: SelectableEmployee) {
     pag_ibig: WAGE_PAGIBIG_MIN,
     sss: 0,
     ewt_rate: 5,
+    effective_date: defaultEffectiveDate ?? new Date().toISOString().slice(0, 10),
   }
   wageFormErrors.value = {}
   wageDialog.value = true
 }
 
+function periodStartStr(): string {
+  return run.value
+    ? `${run.value.period_year}-${String(run.value.period_month).padStart(2, '0')}-01`
+    : new Date().toISOString().slice(0, 10)
+}
+
+function periodEndStr(): string {
+  if (!run.value) return new Date().toISOString().slice(0, 10)
+  const lastDay = new Date(run.value.period_year, run.value.period_month, 0).getDate()
+  return `${run.value.period_year}-${String(run.value.period_month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+}
+
+function startNextWageQueueItem() {
+  if (!wageQueue.value.length) { wageQueueActive.value = false; return }
+  const next = wageQueue.value[0]
+  const emp  = selectableEmps.value.find(e => e.emp_id === next.emp_id)
+  if (!emp) { wageQueue.value.shift(); startNextWageQueueItem(); return }
+  openWageDialog(emp, periodStartStr())
+}
+
+async function retryAddQueuedEmployees() {
+  if (!wageQueueDoneIds.value.length) return
+  addingEmployees.value = true
+  try {
+    const { data } = await axios.post(
+      `/api/payroll-run/${route.params.id}/add-employees`,
+      { emp_ids: wageQueueDoneIds.value }
+    )
+    if (data.success) {
+      showAlert('success', `${data.added} employee(s) added after setting wage.`)
+      await fetchRun()
+      await fetchSelectableEmployees()
+    } else {
+      showAlert('error', data.message ?? 'Failed to add employees after setting wage.')
+    }
+  } catch (err: any) {
+    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to add employees after setting wage.')
+  } finally {
+    addingEmployees.value = false
+    wageQueueDoneIds.value = []
+  }
+}
+
+function toggleSelectAll() {
+  if (allSelectableChecked.value) {
+    const ids = new Set(selectableAvailableEmps.value.map(e => e.emp_id))
+    selectedEmpIds.value = selectedEmpIds.value.filter(id => !ids.has(id))
+  } else {
+    const merged = new Set(selectedEmpIds.value)
+    selectableAvailableEmps.value.forEach(e => merged.add(e.emp_id))
+    selectedEmpIds.value = Array.from(merged)
+  }
+}
+
+
 function validateWageForm(): boolean {
   const errs: Partial<Record<keyof typeof wageForm.value, string>> = {}
   if (!wageForm.value.wage || Number(wageForm.value.wage) <= 0)
     errs.wage = 'Monthly wage is required and must be greater than ₱0.'
+  if (!wageForm.value.effective_date)
+    errs.effective_date = 'Effective date is required.'
+  else if (wageForm.value.effective_date > periodEndStr())
+    errs.effective_date = `Effective date cannot be later than ${periodEndStr()} (end of this run's period).`
   if (Number(wageForm.value.philhealth) < wagePhilhealthMin.value)
     errs.philhealth = `PhilHealth must be at least ${fmt(wagePhilhealthMin.value)}.`
   if (Number(wageForm.value.pag_ibig) < WAGE_PAGIBIG_MIN)
@@ -760,6 +1063,19 @@ async function saveWage() {
     showAlert('success', `Deductions saved for ${wageTargetEmp.value.name}.`)
     wageDialog.value = false
     await fetchSelectableEmployees()   // refreshes chip + unlocks checkbox
+
+    // Continue the backprocessing wage-entry queue if active
+    if (wageQueueActive.value && wageQueue.value.length) {
+      const justSaved = wageQueue.value.shift()
+      if (justSaved) wageQueueDoneIds.value.push(justSaved.emp_id)
+
+      if (wageQueue.value.length) {
+        startNextWageQueueItem()
+      } else {
+        wageQueueActive.value = false
+        await retryAddQueuedEmployees()
+      }
+    }
   } catch (err: any) {
     if (err.response?.data?.errors) {
       wageFormErrors.value = Object.fromEntries(
@@ -799,14 +1115,18 @@ function openDocDialog(type: DocType) {
 
 const editComputedAbsent = computed(() => {
   if (!editingItem.value) return 0
-  const days      = Number(editForm.value.days_absent ?? 0)
+  const days = editCarryOverActive.value
+    ? Number(editForm.value.days_absent_dec ?? 0) + Number(editForm.value.days_absent_jan ?? 0)
+    : Number(editForm.value.days_absent ?? 0)
   const dailyRate = Number(editingItem.value.daily_rate ?? 0)
   return Math.round(days * dailyRate * 100) / 100
 })
 
 const editComputedLateUt = computed(() => {
   if (!editingItem.value) return 0
-  const mins      = Number(editForm.value.minutes_late_ut ?? 0)
+  const mins = editCarryOverActive.value
+    ? Number(editForm.value.minutes_late_ut_dec ?? 0) + Number(editForm.value.minutes_late_ut_jan ?? 0)
+    : Number(editForm.value.minutes_late_ut ?? 0)
   const dailyRate = Number(editingItem.value.daily_rate ?? 0)
   const perHour   = Math.round(dailyRate / 8 * 100) / 100
   const perMinute = Math.round(perHour / 60 * 100) / 100
@@ -838,6 +1158,7 @@ async function generateDocument() {
     return
   }
   if (docType.value === 'ors') {
+
     await generateORSFromBackend()
     docDialog.value = false
     return
@@ -1123,7 +1444,7 @@ onMounted(async () => {
         <!-- Status Actions -->
         <div v-if="run" class="d-flex gap-2 flex-wrap">
           <VBtn v-if="canRevert" variant="outlined" color="warning" size="small"
-            prepend-icon="mdi-undo" :loading="revertLoading" @click="revertRun">
+            prepend-icon="mdi-undo" @click="revertDialog = true">
             Revert to Draft
           </VBtn>
           <VBtn v-if="canFinalize" color="success" size="small"
@@ -1136,10 +1457,25 @@ onMounted(async () => {
       <VSkeletonLoader v-if="loading" type="card, table" class="mt-4" />
 
       <template v-else-if="run">
-        <VRow>
+
+        <VTabs v-model="activeTab" class="mb-4">
+          <VTab value="employees">
+            <VIcon start size="16">mdi-account-group-outline</VIcon>
+            Employees
+            <VChip size="x-small" class="ml-2" color="primary" variant="tonal">
+              {{ run.employee_count }}
+            </VChip>
+          </VTab>
+          <VTab value="meta">
+            <VIcon start size="16">mdi-file-cog-outline</VIcon>
+            Metadata
+          </VTab>
+        </VTabs>
+
+        <div class="run-detail-grid">
 
           <!-- ── LEFT PANEL ── -->
-          <VCol cols="12" lg="3">
+          <div class="run-detail-sidebar">
 
             <!-- Run Summary -->
             <VCard variant="tonal" color="primary" rounded="lg" flat class="mb-4">
@@ -1174,7 +1510,7 @@ onMounted(async () => {
                 </div>
               </VCardText>
             </VCard>
-
+          
             <!-- Document Generation -->
             <VCard variant="outlined" rounded="lg" class="mb-4">
               <VCardText>
@@ -1183,10 +1519,10 @@ onMounted(async () => {
                   Finalize this run to unlock document generation.
                 </VAlert>
                 <div class="d-flex flex-column gap-2">
-                  <VBtn block :disabled="!canGenerate" color="primary" variant="tonal"
-                    prepend-icon="mdi-file-table-outline" @click="openDocDialog('payroll_sheet')">
-                    Payroll Sheet
-                  </VBtn>
+                  <VBtn v-if="(run?.employee_count ?? 0) > 1" block :disabled="!canGenerate" color="primary" variant="tonal"
+                  prepend-icon="mdi-file-table-outline" @click="openDocDialog('payroll_sheet')">
+                  Payroll Sheet
+                </VBtn>
                   <VBtn block :disabled="!canGenerate" color="indigo" variant="tonal"
                     prepend-icon="mdi-file-document-outline"
                     @click="openDocDialog('ors')">
@@ -1201,31 +1537,17 @@ onMounted(async () => {
               </VCardText>
             </VCard>
 
-          </VCol>
+          </div>
 
           <!-- ── RIGHT PANEL ── -->
-          <VCol cols="12" lg="9">
-            <VTabs v-model="activeTab" class="mb-4">
-              <VTab value="employees">
-                <VIcon start size="16">mdi-account-group-outline</VIcon>
-                Employees
-                <VChip size="x-small" class="ml-2" color="primary" variant="tonal">
-                  {{ run.employee_count }}
-                </VChip>
-              </VTab>
-              <VTab value="meta">
-                <VIcon start size="16">mdi-file-cog-outline</VIcon>
-                Metadata
-              </VTab>
-            </VTabs>
+          <div class="run-detail-main">
 
-            <!-- ── EMPLOYEES TAB ── -->
             <VTabsWindow v-model="activeTab">
               <VTabsWindowItem value="employees">
 
                 <!-- Employee Selection (Draft only) -->
-                <VCard v-if="isDraft" variant="outlined" rounded="lg" class="mb-4">
-                  <VCardText>
+                <VCard v-if="isDraft" variant="outlined" rounded="lg" class="mb-4 flex-grow-1 d-flex flex-column">
+                  <VCardText class="d-flex flex-column flex-grow-1">
                     <div class="d-flex align-center justify-space-between mb-3">
                       <div>
                         <p class="text-body-2 font-weight-medium mb-0">Add Employees to Batch</p>
@@ -1255,6 +1577,23 @@ onMounted(async () => {
                       class="mb-3"
                     />
 
+                     <div
+                      v-if="selectableAvailableEmps.length > 0"
+                      class="d-flex align-center gap-2 mb-2 px-1"
+                    >
+                      <VCheckboxBtn
+                        :model-value="allSelectableChecked"
+                        :indeterminate="someSelectableChecked"
+                        density="compact"
+                        color="primary"
+                        hide-details
+                        @update:model-value="toggleSelectAll"
+                      />
+                      <span class="text-body-2 text-medium-emphasis">
+                        Select all with deductions set ({{ selectableAvailableEmps.length }})
+                      </span>
+                    </div>
+
                     <VSkeletonLoader v-if="selectableLoading" type="list-item-three-line" />
 
                     <div v-else-if="availableEmps.length === 0" class="text-center py-4">
@@ -1262,7 +1601,8 @@ onMounted(async () => {
                       <p class="text-body-2 text-medium-emphasis mb-0">All employees in this section have been added.</p>
                     </div>
 
-                    <div v-else style="max-height:260px; overflow-y:auto; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 8px;">
+                    <!-- NEW -->
+                    <div v-else class="flex-grow-1" style="max-height:365px; overflow-y:auto; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 8px;">
                       <VList density="compact" lines="two">
                         <VListItem
                         v-for="emp in availableEmps"
@@ -1306,14 +1646,14 @@ onMounted(async () => {
                             {{ fmt(emp.wage) }}
                           </VChip>
                           <VBtn
-                              v-else
-                              icon
-                              size="large"
-                              variant="tonal"
-                              color="amber-darken-4"
-                              density="comfortable"
-                              @click.stop="openWageDialog(emp)"
-                            >
+                            v-else
+                            icon
+                            size="large"
+                            variant="tonal"
+                            color="amber-darken-4"
+                            density="comfortable"
+                            @click.stop="openWageDialog(emp, periodStartStr())"
+                          >
                               <VIcon size="18">mdi-cash-plus</VIcon>
                               <VTooltip activator="parent" location="top">No deductions set yet — click to set</VTooltip>
                             </VBtn>
@@ -1323,172 +1663,6 @@ onMounted(async () => {
                     </div>
                   </VCardText>
                 </VCard>
-
-                <!-- Batch Items Table -->
-                <div v-if="run.groups.length === 0" class="text-center py-8">
-                  <VIcon icon="mdi-account-off-outline" size="48" class="text-medium-emphasis mb-3" />
-                  <p class="text-body-1 text-medium-emphasis mb-1">No employees added yet.</p>
-                  <p class="text-body-2 text-medium-emphasis">Select employees above and click Add Selected.</p>
-                </div>
-
-                <div v-for="divGroup in run.groups" :key="divGroup.division_name" class="mb-4">
-                  <div class="d-flex align-center gap-2 mb-3">
-                    <VIcon icon="mdi-domain" size="16" color="primary" />
-                    <span class="text-body-1 font-weight-bold">{{ divGroup.division_name }}</span>
-                    <VDivider class="flex-grow-1" />
-                  </div>
-
-                  <div v-for="secGroup in divGroup.sections" :key="secGroup.section_name ?? 'none'" class="mb-3">
-                    <div v-if="secGroup.section_name" class="d-flex align-center gap-2 mb-2 ml-2">
-                      <VIcon icon="mdi-subdirectory-arrow-right" size="14" class="text-medium-emphasis" />
-                      <span class="text-body-2 text-medium-emphasis font-weight-medium">{{ secGroup.section_name }}</span>
-                    </div>
-
-                    <VCard variant="outlined" rounded="lg">
-                      <VTable density="compact" class="text-body-2">
-                        <thead>
-                          <tr style="background:rgb(var(--v-theme-surface-variant))">
-                            <th class="text-left" style="min-width:180px">#  Name</th>
-                            <th class="text-left">ENGAS No.</th>
-                            <th class="text-right">Wage</th>
-                            <th class="text-right">Premium</th>
-                            <th class="text-right">Gross</th>
-                            <th class="text-right">Absent Deduct</th>
-                            <th class="text-right">Late/UT Deduct</th>
-                            <th class="text-right">PhilHealth</th>
-                            <th class="text-right">Pag-IBIG</th>
-                            <th class="text-right">SSS</th>
-                            <th class="text-right">Total Deductions</th>
-                            <th class="text-right text-success">Net Pay</th>
-                            <th class="text-left">Remarks</th>
-                            <th class="text-center">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            v-for="(emp, idx) in secGroup.employees"
-                            :key="emp.emp_id"
-                            :style="idx % 2 === 0 ? '' : 'background:rgba(var(--v-theme-surface-variant),0.08)'"
-                          >
-                            <td>
-                              <div class="d-flex align-center gap-2">
-                                <span class="text-medium-emphasis text-caption">{{ idx+1 }}</span>
-                                <div>
-                                  <div class="font-weight-medium text-caption">{{ emp.emp_name }}</div>
-                                  <div class="text-caption text-medium-emphasis">{{ emp.position }}</div>
-                                  <div class="d-flex gap-1 mt-1">
-                                    <VChip v-if="emp.nip" color="orange" size="x-small" variant="tonal" label>NIP</VChip>
-                                    <VChip v-if="emp.is_overridden" color="amber" size="x-small" variant="tonal" label>
-                                      <VIcon start size="10">mdi-pencil</VIcon>Overridden
-                                    </VChip>
-                                  </div>
-                                </div>
-                              </div>
-                            </td>
-
-                            <!-- ENGAS No. inline edit -->
-                            <td style="min-width:110px">
-                              <template v-if="engasEditingItemId === emp.id">
-                                <div class="d-flex align-center gap-1">
-                                  <VTextField
-                                    v-model="engasEditValue"
-                                    density="compact"
-                                    variant="outlined"
-                                    hide-details
-                                    style="min-width:80px"
-                                    @keyup.enter="saveEngasNo(emp)"
-                                    @keyup.esc="engasEditingItemId = null"
-                                    autofocus
-                                  />
-                                  <VBtn icon size="x-small" color="success" variant="text" :loading="engasSaving" @click="saveEngasNo(emp)">
-                                    <VIcon size="14">mdi-check</VIcon>
-                                  </VBtn>
-                                  <VBtn icon size="x-small" variant="text" @click="engasEditingItemId = null">
-                                    <VIcon size="14">mdi-close</VIcon>
-                                  </VBtn>
-                                </div>
-                              </template>
-                              <template v-else>
-                                <div class="d-flex align-center gap-1">
-                                  <span v-if="emp.engas_no" class="text-caption font-monospace">{{ emp.engas_no }}</span>
-                                  <VChip v-else size="x-small" color="warning" variant="tonal" label>Not matched</VChip>
-                                  <VBtn v-if="isDraft" icon size="x-small" variant="text" color="primary"
-                                    @click="openEngasEdit(emp)">
-                                    <VIcon size="12">mdi-pencil-outline</VIcon>
-                                    <VTooltip activator="parent" location="top">Edit ENGAS No.</VTooltip>
-                                  </VBtn>
-                                </div>
-                              </template>
-                            </td>
-                            <td class="text-right text-caption">{{ fmt(emp.wage) }}</td>
-                            <td class="text-right text-caption">{{ fmt(emp.premium) }}</td>
-                            <td class="text-right text-caption font-weight-medium">{{ fmt(emp.gross) }}</td>
-                            <td class="text-right text-caption text-error">{{ fmt(emp.absent_deduction) }}</td>
-                            <td class="text-right text-caption text-error">{{ fmt(emp.late_ut_deduction) }}</td>
-                            <td class="text-right text-caption text-error">{{ fmt(emp.philhealth) }}</td>
-                            <td class="text-right text-caption text-error">{{ fmt(emp.pag_ibig) }}</td>
-                            <td class="text-right text-caption text-error">{{ emp.sss > 0 ? fmt(emp.sss) : '—' }}</td>
-                            <td class="text-right text-caption font-weight-bold text-error">{{ fmt(emp.total_deductions) }}</td>
-                            <td class="text-right text-caption font-weight-bold text-success">{{ fmt(emp.net_pay) }}</td>
-                            <td class="text-caption text-medium-emphasis" style="max-width:120px;white-space:pre-wrap">
-                              {{ emp.remarks || '—' }}
-                            </td>
-                            <td class="text-center">
-                              <div class="d-flex align-center justify-center gap-1">
-                                <VBtn v-if="isDraft" icon size="x-small" variant="text" color="indigo"
-                                  @click="openAdjustmentDialog(emp)">
-                                  <VIcon size="15">mdi-calendar-edit-outline</VIcon>
-                                  <VTooltip activator="parent" location="top">Attendance Adjustments</VTooltip>
-                                </VBtn>
-                                <VBtn v-if="isDraft" icon size="x-small" variant="text" color="primary"
-                                  @click="openEditDialog(emp)">
-                                  <VIcon size="15">mdi-pencil-outline</VIcon>
-                                  <VTooltip activator="parent" location="top">Override</VTooltip>
-                                </VBtn>
-                                <VBtn v-if="isDraft && emp.is_overridden" icon size="x-small" variant="text" color="warning"
-                                  @click="openRecomputeDialog(emp)">
-                                  <VIcon size="15">mdi-refresh</VIcon>
-                                  <VTooltip activator="parent" location="top">Recompute from DTR</VTooltip>
-                                </VBtn>
-                                <VBtn v-if="isDraft" icon size="x-small" variant="text" color="error"
-                                  @click="openRemoveDialog(emp)">
-                                  <VIcon size="15">mdi-delete-outline</VIcon>
-                                  <VTooltip activator="parent" location="top">Remove</VTooltip>
-                                </VBtn>
-                              </div>
-                            </td>
-                          </tr>
-                        </tbody>
-                        <tfoot>
-                          <tr style="background:rgba(var(--v-theme-primary),0.06)">
-                            <td class="text-right text-caption font-weight-bold pr-2">Section Total</td>
-                            <td colspan="2"></td>
-                            <td class="text-right text-caption font-weight-bold">{{ fmt(secGroup.subtotal.gross) }}</td>
-                            <td colspan="6" class="text-right text-caption font-weight-bold text-error">
-                              Deductions: {{ fmt(secGroup.subtotal.total_deductions) }}
-                            </td>
-                            <td class="text-right text-caption font-weight-bold text-success">{{ fmt(secGroup.subtotal.net_pay) }}</td>
-                            <td colspan="2"></td>
-                          </tr>
-                        </tfoot>
-                      </VTable>
-                    </VCard>
-                  </div>
-
-                  <!-- Division subtotal -->
-                  <VCard variant="tonal" color="primary" rounded="lg" flat class="mt-1 ml-2">
-                    <VCardText class="py-2 px-4">
-                      <div class="d-flex align-center gap-4 flex-wrap">
-                        <span class="text-caption font-weight-bold text-uppercase">{{ divGroup.division_name }} Total</span>
-                        <div class="d-flex gap-4 ml-auto flex-wrap">
-                          <div class="text-caption">Gross: <strong>{{ fmt(divGroup.subtotal.gross) }}</strong></div>
-                          <div class="text-caption text-error">Deductions: <strong>{{ fmt(divGroup.subtotal.total_deductions) }}</strong></div>
-                          <div class="text-caption text-success">Net: <strong>{{ fmt(divGroup.subtotal.net_pay) }}</strong></div>
-                        </div>
-                      </div>
-                    </VCardText>
-                  </VCard>
-                </div>
 
               </VTabsWindowItem>
 
@@ -1535,7 +1709,7 @@ onMounted(async () => {
                           <VTextField v-model="metaForm.fund_cluster" label="Fund Cluster" variant="outlined" density="compact" prepend-inner-icon="mdi-bank-outline" />
                         </VCol>
                         <VCol cols="12" sm="6">
-                          <VTextField v-model="metaForm.saa_no" label="SAA No." variant="outlined" density="compact" prepend-inner-icon="mdi-pound" />
+                        <VTextField v-model="metaForm.saa_no" label="SAA No." variant="outlined" density="compact" prepend-inner-icon="mdi-pound" hint="Mirrors Fund Cluster" persistent-hint readonly />
                         </VCol>
                         <VCol cols="12" sm="6">
                           <VTextField v-model="metaForm.ors_no" label="ORS/BURS No." variant="outlined" density="compact" prepend-inner-icon="mdi-pound" />
@@ -1559,8 +1733,215 @@ onMounted(async () => {
                 </VCard>
               </VTabsWindowItem>
             </VTabsWindow>
-          </VCol>
-        </VRow>
+          </div>
+         
+        
+
+        <!-- ── BATCH ITEMS TABLE — full width, own row ── -->
+        <div v-if="activeTab === 'employees'" class="run-detail-table">
+          
+
+            <div v-if="isDraft && run.groups.length > 0" class="d-flex align-center gap-2 mb-3">
+              <VCheckboxBtn
+                :model-value="allRemoveChecked"
+                :indeterminate="someRemoveChecked"
+                density="compact"
+                color="error"
+                hide-details
+                @update:model-value="toggleSelectAllRemove"
+              />
+              <span class="text-body-2 text-medium-emphasis">
+                {{ selectedRemoveIds.length ? `${selectedRemoveIds.length} selected` : 'Select all' }}
+              </span>
+              <VSpacer />
+              <VBtn
+                color="error" size="small" variant="tonal"
+                prepend-icon="mdi-delete-outline"
+                :disabled="!selectedRemoveIds.length"
+                @click="removeBatchDialog = true"
+              >
+                Remove Selected ({{ selectedRemoveIds.length }})
+              </VBtn>
+            </div>
+
+            <!-- Batch Items Table -->
+            <div v-if="run.groups.length === 0" class="text-center py-8">
+              <VIcon icon="mdi-account-off-outline" size="48" class="text-medium-emphasis mb-3" />
+              <p class="text-body-1 text-medium-emphasis mb-1">No employees added yet.</p>
+              <p class="text-body-2 text-medium-emphasis">Select employees above and click Add Selected.</p>
+            </div>
+
+            <div v-for="divGroup in run.groups" :key="divGroup.division_name" class="mb-4">
+              <div class="d-flex align-center gap-2 mb-3">
+                <VIcon icon="mdi-domain" size="16" color="primary" />
+                <span class="text-body-1 font-weight-bold">{{ divGroup.division_name }}</span>
+                <VDivider class="flex-grow-1" />
+              </div>
+
+              <div v-for="secGroup in divGroup.sections" :key="secGroup.section_name ?? 'none'" class="mb-3">
+                <div v-if="secGroup.section_name" class="d-flex align-center gap-2 mb-2 ml-2">
+                  <VIcon icon="mdi-subdirectory-arrow-right" size="14" class="text-medium-emphasis" />
+                  <span class="text-body-2 text-medium-emphasis font-weight-medium">{{ secGroup.section_name }}</span>
+                </div>
+
+                <VCard variant="outlined" rounded="lg">
+                  <VTable density="compact" class="text-body-2">
+                    <thead>
+                      <tr style="background:rgb(var(--v-theme-surface-variant))">
+                        <th v-if="isDraft" style="width:36px"></th>
+                        <th class="text-left" style="min-width:180px">#  Name</th>
+                        <th class="text-left">ENGAS No.</th>
+                        <th class="text-right">Wage</th>
+                        <th class="text-right">Premium</th>
+                        <th class="text-right">Gross</th>
+                        <th class="text-right">Absent Deduct</th>
+                        <th class="text-right">Late/UT Deduct</th>
+                        <th class="text-right">PhilHealth</th>
+                        <th class="text-right">Pag-IBIG</th>
+                        <th class="text-right">SSS</th>
+                        <th class="text-right">Total Deductions</th>
+                        <th class="text-right text-success">Net Pay</th>
+                        <th class="text-left">Remarks</th>
+                        <th class="text-center">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        v-for="(emp, idx) in secGroup.employees"
+                        :key="emp.emp_id"
+                        :style="idx % 2 === 0 ? '' : 'background:rgba(var(--v-theme-surface-variant),0.08)'"
+                      >
+                      <td v-if="isDraft">
+                        <VCheckboxBtn
+                          :model-value="selectedRemoveIds.includes(emp.emp_id)"
+                          density="compact"
+                          color="error"
+                          hide-details
+                          @update:model-value="() => toggleRemoveSelect(emp.emp_id)"
+                        />
+                      </td>
+                        <td>
+                          <div class="d-flex align-center gap-2">
+                            <span class="text-medium-emphasis text-caption">{{ idx+1 }}</span>
+                            <div>
+                              <div class="font-weight-medium text-caption">{{ emp.emp_name }}</div>
+                              <div class="text-caption text-medium-emphasis">{{ emp.position }}</div>
+                              <div class="d-flex gap-1 mt-1">
+                                <VChip v-if="emp.nip" color="orange" size="x-small" variant="tonal" label>NIP</VChip>
+                                <VChip v-if="emp.is_overridden" color="amber" size="x-small" variant="tonal" label>
+                                  <VIcon start size="10">mdi-pencil</VIcon>Overridden
+                                </VChip>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        <!-- ENGAS No. inline edit -->
+                        <td style="min-width:110px">
+                          <template v-if="engasEditingItemId === emp.id">
+                            <div class="d-flex align-center gap-1">
+                              <VTextField
+                                v-model="engasEditValue"
+                                density="compact"
+                                variant="outlined"
+                                hide-details
+                                style="min-width:80px"
+                                @keyup.enter="saveEngasNo(emp)"
+                                @keyup.esc="engasEditingItemId = null"
+                                autofocus
+                              />
+                              <VBtn icon size="x-small" color="success" variant="text" :loading="engasSaving" @click="saveEngasNo(emp)">
+                                <VIcon size="14">mdi-check</VIcon>
+                              </VBtn>
+                              <VBtn icon size="x-small" variant="text" @click="engasEditingItemId = null">
+                                <VIcon size="14">mdi-close</VIcon>
+                              </VBtn>
+                            </div>
+                          </template>
+                          <template v-else>
+                            <div class="d-flex align-center gap-1">
+                              <span v-if="emp.engas_no" class="text-caption font-monospace">{{ emp.engas_no }}</span>
+                              <VChip v-else size="x-small" color="warning" variant="tonal" label>Not matched</VChip>
+                              <VBtn v-if="isDraft" icon size="x-small" variant="text" color="primary"
+                                @click="openEngasEdit(emp)">
+                                <VIcon size="12">mdi-pencil-outline</VIcon>
+                                <VTooltip activator="parent" location="top">Edit ENGAS No.</VTooltip>
+                              </VBtn>
+                            </div>
+                          </template>
+                        </td>
+                        <td class="text-right text-caption">{{ fmt(emp.wage) }}</td>
+                        <td class="text-right text-caption">{{ fmt(emp.premium) }}</td>
+                        <td class="text-right text-caption font-weight-medium">{{ fmt(emp.gross) }}</td>
+                        <td class="text-right text-caption text-error">{{ fmt(emp.absent_deduction) }}</td>
+                        <td class="text-right text-caption text-error">{{ fmt(emp.late_ut_deduction) }}</td>
+                        <td class="text-right text-caption text-error">{{ fmt(emp.philhealth) }}</td>
+                        <td class="text-right text-caption text-error">{{ fmt(emp.pag_ibig) }}</td>
+                        <td class="text-right text-caption text-error">{{ emp.sss > 0 ? fmt(emp.sss) : '—' }}</td>
+                        <td class="text-right text-caption font-weight-bold text-error">{{ fmt(emp.total_deductions) }}</td>
+                        <td class="text-right text-caption font-weight-bold text-success">{{ fmt(emp.net_pay) }}</td>
+                        <td class="text-caption text-medium-emphasis" style="max-width:120px;white-space:pre-wrap">
+                          {{ emp.remarks || '—' }}
+                        </td>
+                        <td class="text-center">
+                          <div class="d-flex align-center justify-center gap-1">
+                            <VBtn v-if="isDraft" icon size="x-small" variant="text" color="indigo"
+                              @click="openAdjustmentDialog(emp)">
+                              <VIcon size="15">mdi-calendar-edit-outline</VIcon>
+                              <VTooltip activator="parent" location="top">Attendance Adjustments</VTooltip>
+                            </VBtn>
+                            <VBtn v-if="isDraft" icon size="x-small" variant="text" color="primary"
+                              @click="openEditDialog(emp)">
+                              <VIcon size="15">mdi-pencil-outline</VIcon>
+                              <VTooltip activator="parent" location="top">Override</VTooltip>
+                            </VBtn>
+                            <VBtn v-if="isDraft && emp.is_overridden" icon size="x-small" variant="text" color="warning"
+                              @click="openRecomputeDialog(emp)">
+                              <VIcon size="15">mdi-refresh</VIcon>
+                              <VTooltip activator="parent" location="top">Recompute from DTR</VTooltip>
+                            </VBtn>
+                            <VBtn v-if="isDraft" icon size="x-small" variant="text" color="error"
+                              @click="openRemoveDialog(emp)">
+                              <VIcon size="15">mdi-delete-outline</VIcon>
+                              <VTooltip activator="parent" location="top">Remove</VTooltip>
+                            </VBtn>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                    <tfoot>
+                      <tr style="background:rgba(var(--v-theme-primary),0.06)">
+                        <td v-if="isDraft"></td>
+                        <td class="text-right text-caption font-weight-bold pr-2">Section Total</td>
+                        <td colspan="2"></td>
+                        <td class="text-right text-caption font-weight-bold">{{ fmt(secGroup.subtotal.gross) }}</td>
+                        <td colspan="6" class="text-right text-caption font-weight-bold text-error">
+                          Deductions: {{ fmt(secGroup.subtotal.total_deductions) }}
+                        </td>
+                        <td class="text-right text-caption font-weight-bold text-success">{{ fmt(secGroup.subtotal.net_pay) }}</td>
+                        <td colspan="2"></td>
+                      </tr>
+                    </tfoot>
+                  </VTable>
+                </VCard>
+              </div>
+
+              <!-- Division subtotal -->
+              <VCard variant="tonal" color="primary" rounded="lg" flat class="mt-1 ml-2">
+                <VCardText class="py-2 px-4">
+                  <div class="d-flex align-center gap-4 flex-wrap">
+                    <span class="text-caption font-weight-bold text-uppercase">{{ divGroup.division_name }} Total</span>
+                    <div class="d-flex gap-4 ml-auto flex-wrap">
+                      <div class="text-caption">Gross: <strong>{{ fmt(divGroup.subtotal.gross) }}</strong></div>
+                      <div class="text-caption text-error">Deductions: <strong>{{ fmt(divGroup.subtotal.total_deductions) }}</strong></div>
+                      <div class="text-caption text-success">Net: <strong>{{ fmt(divGroup.subtotal.net_pay) }}</strong></div>
+                    </div>
+                  </div>
+                </VCardText>
+              </VCard>
+            </div>
+        </div>
+        </div>
       </template>
     </VContainer>
 
@@ -1590,16 +1971,49 @@ onMounted(async () => {
                 Work Mins/Day: {{ editingItem?.work_minutes_per_day ?? 0 }}
               </p>
             </VCol>
-            <VCol cols="12" sm="6">
-              <VTextField v-model.number="editForm.days_absent" label="Days Absent" type="number"
-                variant="outlined" density="compact" prepend-inner-icon="mdi-calendar-remove-outline"
-                hint="From DTR" persistent-hint min="0" step="0.5" />
-            </VCol>
-            <VCol cols="12" sm="6">
-              <VTextField v-model.number="editForm.minutes_late_ut" label="Minutes Late/UT" type="number"
-                variant="outlined" density="compact" prepend-inner-icon="mdi-clock-alert-outline"
-                hint="Combined late + undertime" persistent-hint min="0" />
-            </VCol>
+            <!-- Flat (no carry-over) -->
+            <template v-if="!editCarryOverActive">
+              <VCol cols="12" sm="6">
+                <VTextField v-model.number="editForm.days_absent" label="Days Absent" type="number"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-calendar-remove-outline"
+                  hint="From DTR" persistent-hint min="0" step="0.5" />
+              </VCol>
+              <VCol cols="12" sm="6">
+                <VTextField v-model.number="editForm.minutes_late_ut" label="Minutes Late/UT" type="number"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-clock-alert-outline"
+                  hint="Combined late + undertime" persistent-hint min="0" />
+              </VCol>
+            </template>
+
+            <!-- Split (Dec carry-over present) -->
+            <template v-else>
+              <VCol cols="12">
+                <VAlert type="warning" variant="tonal" density="compact" icon="mdi-calendar-arrow-left" class="text-body-2 mb-1">
+                  This employee has a Dec 16-31 carry-over — Days Absent and Late/UT are split by period.
+                  Editing the {{ editPriorMonthAbbr }} fields updates the stored carried-over baseline itself.
+                </VAlert>
+              </VCol>
+              <VCol cols="12" sm="6">
+                <VTextField v-model.number="editForm.days_absent_dec" :label="`Days Absent (${editPriorMonthAbbr})`" type="number"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-calendar-remove-outline"
+                  hint="Carried-over baseline" persistent-hint min="0" step="0.5" />
+              </VCol>
+              <VCol cols="12" sm="6">
+                <VTextField v-model.number="editForm.days_absent_jan" :label="`Days Absent (${editCurrentMonthAbbr})`" type="number"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-calendar-remove-outline"
+                  hint="This run's period" persistent-hint min="0" step="0.5" />
+              </VCol>
+              <VCol cols="12" sm="6">
+                <VTextField v-model.number="editForm.minutes_late_ut_dec" :label="`Minutes Late/UT (${editPriorMonthAbbr})`" type="number"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-clock-alert-outline"
+                  hint="Carried-over baseline" persistent-hint min="0" />
+              </VCol>
+              <VCol cols="12" sm="6">
+                <VTextField v-model.number="editForm.minutes_late_ut_jan" :label="`Minutes Late/UT (${editCurrentMonthAbbr})`" type="number"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-clock-alert-outline"
+                  hint="This run's period" persistent-hint min="0" />
+              </VCol>
+            </template>
             <VCol cols="12" sm="6">
               <VTextField :model-value="fmt(editComputedAbsent)" label="Absent Deduction (computed)"
                 variant="outlined" density="compact" prepend-inner-icon="mdi-calculator-variant-outline"
@@ -1669,6 +2083,43 @@ onMounted(async () => {
       </VCard>
     </VDialog>
 
+    <VDialog v-model="revertDialog" max-width="460" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar color="warning" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-undo" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">Revert to Draft?</div>
+          <div class="text-caption text-medium-emphasis">{{ run?.payroll_no }}</div>
+        </div>
+      </div>
+      <VAlert type="warning" variant="tonal" density="compact" icon="mdi-alert-outline" class="mb-4 text-body-2">
+        This run was finalized — documents may already have been generated or submitted.
+        Reverting unlocks editing and recomputation. A reason is required and will be recorded.
+      </VAlert>
+      <VTextarea
+        v-model="revertReason"
+        label="Reason for reverting"
+        variant="outlined"
+        density="compact"
+        rows="3"
+        auto-grow
+        hint="e.g. &quot;Correcting a late DTR entry for employee X&quot;"
+        persistent-hint
+      />
+    </VCardText>
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" :disabled="revertLoading" @click="revertDialog = false; revertReason = ''">Cancel</VBtn>
+      <VBtn color="warning" variant="tonal" :loading="revertLoading" :disabled="!revertReason.trim()" @click="confirmRevert">
+        <VIcon start size="16">mdi-undo</VIcon>Yes, Revert
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
     <!-- ── Remove Dialog ── -->
     <VDialog v-model="removeDialog" max-width="420" persistent>
       <VCard rounded="lg">
@@ -1696,32 +2147,95 @@ onMounted(async () => {
       </VCard>
     </VDialog>
 
+    <VDialog v-model="removeBatchDialog" max-width="460" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar color="error" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-delete-outline" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">Remove {{ selectedRemoveIds.length }} Employee(s)?</div>
+          <div class="text-caption text-medium-emphasis">This batch — {{ run?.payroll_no }}</div>
+        </div>
+      </div>
+      <p class="text-body-2 text-medium-emphasis mb-2">
+        The following employees will be removed from this payroll batch. You can re-add them later.
+      </p>
+      <ul class="text-body-2 mb-0" style="max-height:160px; overflow-y:auto; padding-left:20px;">
+        <li v-for="name in selectedRemoveNames" :key="name">{{ name }}</li>
+      </ul>
+    </VCardText>
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" :disabled="removeBatchLoading" @click="removeBatchDialog = false">Cancel</VBtn>
+      <VBtn color="error" variant="tonal" :loading="removeBatchLoading" @click="confirmRemoveBatch">
+        <VIcon start size="16">mdi-delete-outline</VIcon>Yes, Remove All
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
     <!-- ── Recompute Dialog ── -->
-    <VDialog v-model="recomputeDialog" max-width="420" persistent>
-      <VCard rounded="lg">
-        <VCardText class="pa-6">
-          <div class="d-flex align-center gap-3 mb-4">
-            <VAvatar color="warning" variant="tonal" size="44" rounded="lg">
-              <VIcon icon="mdi-refresh" size="22" />
-            </VAvatar>
-            <div>
-              <div class="text-body-1 font-weight-medium">Recompute from DTR?</div>
-              <div class="text-caption text-medium-emphasis">{{ recomputeTarget?.emp_name }}</div>
-            </div>
+    <VDialog v-model="recomputeDialog" max-width="440" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar :color="recomputeNeedsDoubleConfirm ? 'error' : 'warning'" variant="tonal" size="44" rounded="lg">
+          <VIcon :icon="recomputeNeedsDoubleConfirm ? 'mdi-alert-octagon-outline' : 'mdi-refresh'" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">
+            {{ recomputeNeedsDoubleConfirm ? 'Wage Has Changed Since Finalization' : 'Recompute from DTR?' }}
           </div>
-          <p class="text-body-2 text-medium-emphasis mb-0">
-            This will reset all manually overridden values for <strong class="text-high-emphasis">{{ recomputeTarget?.emp_name }}</strong> back to the latest DTR and wage data.
-          </p>
-        </VCardText>
-        <VDivider />
-        <VCardActions class="justify-end pa-4 gap-2">
-          <VBtn variant="text" :disabled="recomputeLoading" @click="recomputeDialog = false">Cancel</VBtn>
-          <VBtn color="warning" variant="tonal" :loading="recomputeLoading" @click="confirmRecompute">
-            <VIcon start size="16">mdi-refresh</VIcon>Yes, Recompute
-          </VBtn>
-        </VCardActions>
-      </VCard>
-    </VDialog>
+          <div class="text-caption text-medium-emphasis">{{ recomputeTarget?.emp_name }}</div>
+        </div>
+      </div>
+
+      <template v-if="!recomputeNeedsDoubleConfirm">
+        <p class="text-body-2 text-medium-emphasis mb-0">
+          This will reset all manually overridden values for <strong class="text-high-emphasis">{{ recomputeTarget?.emp_name }}</strong> back to the latest DTR and wage data.
+        </p>
+      </template>
+
+      <template v-else>
+        <VAlert type="error" variant="tonal" density="compact" icon="mdi-alert-outline" class="mb-4 text-body-2">
+          This run was previously finalized. Recomputing now will change the wage figures — this will be logged.
+        </VAlert>
+        <VTable density="compact" class="mb-2">
+          <thead>
+            <tr><th></th><th class="text-right">Previous</th><th class="text-right">New</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="text-caption">Wage</td>
+              <td class="text-right text-caption">{{ fmt(recomputeConfirmData?.old_wage ?? 0) }}</td>
+              <td class="text-right text-caption font-weight-bold">{{ fmt(recomputeConfirmData?.new_wage ?? 0) }}</td>
+            </tr>
+            <tr>
+              <td class="text-caption">Gross</td>
+              <td class="text-right text-caption">{{ fmt(recomputeConfirmData?.old_gross ?? 0) }}</td>
+              <td class="text-right text-caption font-weight-bold">{{ fmt(recomputeConfirmData?.new_gross ?? 0) }}</td>
+            </tr>
+          </tbody>
+        </VTable>
+      </template>
+    </VCardText>
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" :disabled="recomputeLoading" @click="recomputeDialog = false">Cancel</VBtn>
+      <VBtn
+        :color="recomputeNeedsDoubleConfirm ? 'error' : 'warning'"
+        variant="tonal"
+        :loading="recomputeLoading"
+        @click="confirmRecompute(recomputeNeedsDoubleConfirm)"
+      >
+        <VIcon start size="16">{{ recomputeNeedsDoubleConfirm ? 'mdi-alert-octagon-outline' : 'mdi-refresh' }}</VIcon>
+        {{ recomputeNeedsDoubleConfirm ? 'Yes, Proceed Anyway' : 'Yes, Recompute' }}
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
 
     <!-- ── Set Deduction Dialog (quick-set from Add Employees panel) ── -->
       <VDialog v-model="wageDialog" max-width="560" persistent>
@@ -1736,6 +2250,22 @@ onMounted(async () => {
                 <div class="text-caption text-medium-emphasis">{{ wageTargetEmp?.name }}</div>
               </div>
             </div>
+
+                   <VAlert v-if="wageQueueActive" type="warning" variant="tonal" density="compact" icon="mdi-calendar-clock-outline" class="mb-4">
+              <span class="text-body-2">
+                No wage record was effective for <strong>{{ periodLabel }}</strong> yet — enter what was effective at that time.
+                ({{ wageQueueTotal - wageQueue.length }} of {{ wageQueueTotal }})
+              </span>
+            </VAlert>
+
+            <VAlert v-if="wageWillAffectHrmis" type="warning" variant="tonal" density="compact" icon="mdi-alert-outline" class="mb-4">
+              <span class="text-body-2">
+                This effective date will become this employee's <strong>current</strong> wage record as of today
+                <span v-if="wageTargetEmp?.current_wage_amount != null">
+                  (replacing <strong>{{ fmt(wageTargetEmp.current_wage_amount) }}</strong>)
+                </span> — saving will also update the live HRMIS record, not just this backprocessed run.
+              </span>
+            </VAlert>
 
             <VAlert v-if="wageTargetEmp?.has_hrmis_wage" type="info" variant="tonal" density="compact" icon="mdi-database-sync-outline" class="mb-4">
               <span class="text-body-2">
@@ -1758,6 +2288,15 @@ onMounted(async () => {
                   v-model="wageForm.premium_percent" label="Premium Rate" :items="WAGE_PREMIUM_OPTIONS"
                   item-title="title" item-value="value" variant="outlined" density="compact"
                   prepend-inner-icon="mdi-percent-outline"
+                />
+              </VCol>
+              <VCol cols="12" sm="6">
+               <VTextField
+                  v-model="wageForm.effective_date" label="Effective Date" type="date"
+                  variant="outlined" density="compact" prepend-inner-icon="mdi-calendar-outline"
+                  :error-messages="wageFormErrors.effective_date"
+                  :max="periodEndStr()"
+                  hint="Cannot be later than the end of this run's period" persistent-hint
                 />
               </VCol>
               <VCol cols="12" sm="6">
@@ -1837,91 +2376,127 @@ onMounted(async () => {
           <template v-else>
 
             <!-- Approved By — hidden for ORS (ORS only uses 2 certified signatories) -->
-            <template v-if="docType !== 'ors'">
-              <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-1">Approved By</p>
-              <VCard variant="tonal" color="primary" rounded="lg" flat class="mb-4">
-                <VCardText class="py-2 px-4">
-                  <div class="d-flex align-center gap-2">
-                    <VIcon icon="mdi-account-check-outline" size="16" />
-                     <div>
-                      <div class="text-body-2 font-weight-medium">{{ approvedByName }}</div>
-                      <div class="text-caption">{{ approvedByPosition }}</div>
+             <template v-if="docType !== 'ors'">
+              <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-1">
+                {{ approvedByLabel }}
+              </p>
+              <VAutocomplete
+                v-model="selectedApprovedBy"
+                :items="approvedByOptions"
+                item-title="title"
+                item-value="value"
+                variant="outlined"
+                density="compact"
+                prepend-inner-icon="mdi-account-check-outline"
+                hide-details
+                clearable
+                class="mb-2"
+              >
+              <template #selection="{ item }">
+                  <div class="d-flex align-center gap-2 py-1">
+                    <VAvatar v-if="!item.raw.vacant" :color="avatarColor(item.raw.value)" variant="tonal" size="24">
+                     <VImg v-if="getPhoto(item.raw.photo_url)" :src="getPhoto(item.raw.photo_url)!" cover />
+      <span v-else style="font-size: 10px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                    </VAvatar>
+                    <VAvatar v-else color="default" variant="tonal" size="24">
+                      <VIcon size="14">mdi-account-off-outline</VIcon>
+                    </VAvatar>
+                    <div>
+                      <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
+                      <span v-if="item.raw.subtitle" class="text-caption text-medium-emphasis ml-2">{{ item.raw.subtitle }}</span>
                     </div>
                   </div>
-                </VCardText>
-              </VCard>
+                </template>
+
+                <template #item="{ item, props }">
+                  <VListItem v-bind="props" :title="undefined" class="py-2">
+                    <template #prepend>
+                      <VAvatar v-if="!item.raw.vacant" :color="avatarColor(item.raw.value)" variant="tonal" size="36" class="mr-3">
+                        <VImg
+                        v-if="item.raw.photo_url && !brokenPhotoIds.has(item.raw.value)"
+                        :src="item.raw.photo_url"
+                        cover
+                        @error="markPhotoBroken(item.raw.value)"
+                      />
+                      <span v-else style="font-size: 12px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                      </VAvatar>
+                      <VAvatar v-else color="default" variant="tonal" size="36" class="mr-3">
+                        <VIcon size="18">mdi-account-off-outline</VIcon>
+                      </VAvatar>
+                    </template>
+                    <VListItemTitle class="text-body-2 font-weight-medium">{{ item.raw.title }}</VListItemTitle>
+                    <VListItemSubtitle v-if="item.raw.subtitle" class="text-caption">{{ item.raw.subtitle }}</VListItemSubtitle>
+                  </VListItem>
+                </template>
+              </VAutocomplete>
+              
+              <VAlert
+                v-if="selectedApprovedBy === null"
+                type="warning" variant="tonal" density="compact"
+                icon="mdi-account-off-outline" class="mb-4 text-body-2"
+              >
+                No Approving Authority selected — the document will generate with a blank signature line.
+              </VAlert>
+              <div v-else class="mb-4" />
             </template>
 
             <!-- Certified By slots -->
             <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-2">
               Certified By
-              <span class="text-lowercase font-weight-regular">
-                ({{ certifiedSlotCount }} {{ certifiedSlotCount > 1 ? 'signatories' : 'signatory' }} required)
-              </span>
             </p>
 
-            <div class="d-flex flex-column gap-2">
-
-              <!-- Slot 1 — locked (division-matched) or free dropdown -->
-              <div class="d-flex align-center gap-2">
-                <VChip size="x-small" label color="primary" variant="tonal" class="flex-shrink-0">1</VChip>
-                <template v-if="slot1Locked">
-                  <VCard variant="outlined" rounded="lg" class="flex-grow-1">
-                    <VCardText class="py-2 px-3">
-                      <div class="d-flex align-center gap-2">
-                        <VIcon icon="mdi-check-decagram-outline" size="15" color="success" />
-                        <div>
-                          <div class="text-body-2 font-weight-medium">{{ certifiedBySlots[0]?.name }}</div>
-                          <div class="text-caption text-medium-emphasis">{{ certifiedBySlots[0]?.position }}</div>
-                        </div>
-                        <VSpacer />
-                        <VChip size="x-small" color="success" variant="tonal" label>Division Head</VChip>
-                      </div>
-                    </VCardText>
-                  </VCard>
-                </template>
-                <template v-else>
-                  <VSelect
-                    v-model="selectedCertifiedBy[0]"
-                    :items="slot1Options"
-                    item-title="title"
-                    item-value="value"
-                    variant="outlined"
-                    density="compact"
-                    prepend-inner-icon="mdi-account-multiple-check-outline"
-                    placeholder="Select signatory..."
-                    hide-details
-                    clearable
-                    class="flex-grow-1"
-                  />
-                </template>
-              </div>
-
-              <!-- Static slots (slot 2 and optionally slot 3) -->
-              <div
-                v-for="(slot, i) in certifiedBySlots.slice(1)"
-                :key="i + 2"
-                class="d-flex align-center gap-2"
-              >
-                <VChip size="x-small" label color="primary" variant="tonal" class="flex-shrink-0">{{ i + 2 }}</VChip>
-                <VCard variant="outlined" rounded="lg" class="flex-grow-1">
-                  <VCardText class="py-2 px-3">
-                    <div v-if="slot" class="d-flex align-center gap-2">
-                      <VIcon icon="mdi-check-decagram-outline" size="15" color="teal" />
+            <div class="d-flex flex-column gap-3">
+              <div v-for="(label, i) in certifiedSlotLabels" :key="i" class="d-flex flex-column gap-1">
+                <span class="text-caption text-medium-emphasis">{{ label }}</span>
+                <VAutocomplete
+                  v-model="selectedCertifiedBy[i]"
+                  :items="certifiedOptions"
+                  item-title="title"
+                  item-value="value"
+                  variant="outlined"
+                  density="compact"
+                  prepend-inner-icon="mdi-account-multiple-check-outline"
+                  placeholder="Select signatory..."
+                  hide-details
+                  clearable
+                >
+                <template #selection="{ item }">
+                    <div class="d-flex align-center gap-2 py-1">
+                      <VAvatar :color="avatarColor(item.raw.value)" variant="tonal" size="24">
+                        <VImg
+                        v-if="item.raw.photo_url && !brokenPhotoIds.has(item.raw.value)"
+                        :src="item.raw.photo_url"
+                        cover
+                        @error="markPhotoBroken(item.raw.value)"
+                      />
+                      <span v-else style="font-size: 10px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                      </VAvatar>
                       <div>
-                        <div class="text-body-2 font-weight-medium">{{ slot.name }}</div>
-                        <div class="text-caption text-medium-emphasis">{{ slot.position }}</div>
+                        <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
+                        <span class="text-caption text-medium-emphasis ml-2">{{ item.raw.subtitle }}</span>
                       </div>
-                      <VSpacer />
-                      <VChip size="x-small" color="teal" variant="tonal" label>Fixed</VChip>
                     </div>
-                    <div v-else class="text-caption text-medium-emphasis">
-                      Signatory not found — check active signatories
-                    </div>
-                  </VCardText>
-                </VCard>
-              </div>
+                  </template>
 
+                  <template #item="{ item, props }">
+                    <VListItem v-bind="props" :title="undefined" class="py-2">
+                      <template #prepend>
+                        <VAvatar :color="avatarColor(item.raw.value)" variant="tonal" size="36" class="mr-3">
+                          <VImg
+                            v-if="item.raw.photo_url && !brokenPhotoIds.has(item.raw.value)"
+                            :src="item.raw.photo_url"
+                            cover
+                            @error="markPhotoBroken(item.raw.value)"
+                          />
+                          <span v-else style="font-size: 12px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                        </VAvatar>
+                      </template>
+                      <VListItemTitle class="text-body-2 font-weight-medium">{{ item.raw.title }}</VListItemTitle>
+                      <VListItemSubtitle class="text-caption">{{ item.raw.subtitle }}</VListItemSubtitle>
+                    </VListItem>
+                  </template>
+                </VAutocomplete>
+              </div>
             </div>
           </template>
         </VCardText>
@@ -1989,3 +2564,41 @@ onMounted(async () => {
 </VDialog>
   </div>
 </template>
+
+<style scoped>
+.run-detail-grid {
+  display: grid;
+  grid-template-columns: 260px 1fr; /* sidebar width, then flexible main */
+  grid-template-rows: auto auto auto;
+  column-gap: 16px;
+}
+
+.run-detail-sidebar {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+}
+
+.run-detail-main {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-detail-table {
+   grid-column: 1 / -1;                  /* was: 2 — now spans both columns */
+  grid-row: 3;                          /* was: 2 — now sits below the sidebar's span */
+  margin-top: 20px;
+  overflow-x: auto;
+}
+
+@media (max-width: 1200px) {
+  .run-detail-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+  }
+  .run-detail-sidebar { grid-column: 1; grid-row: 1; }
+  .run-detail-main    { grid-column: 1; grid-row: 2; }
+  .run-detail-table   { grid-column: 1; grid-row: 3; }
+}
+</style>

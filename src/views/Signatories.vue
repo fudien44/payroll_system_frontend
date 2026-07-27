@@ -2,8 +2,8 @@
 import BaseAlert from '@/components/base/BaseAlert.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseTable from '@/components/base/BaseTable.vue'
+import { ensurePhotosLoaded, getPhoto } from '@/composable/useEmployeePhotos'
 import axios from '@axios'
-
 /* ─────────────────────────────────────────
    TYPES
 ───────────────────────────────────────── */
@@ -11,6 +11,7 @@ interface RegularEmployee {
   emp_id:   number
   name:     string
   position: string
+  photo_url?: string | null
 }
 
 interface Signatory {
@@ -20,6 +21,7 @@ interface Signatory {
   position:  string
   role:      'certified_by' | 'approved_by'
   is_active: boolean
+  photo_url?: string | null
 }
 
 type AlertType = 'success' | 'error' | 'warning' | 'info'
@@ -43,6 +45,10 @@ const BLANK_FORM = () => ({
 /* ─────────────────────────────────────────
    STATE
 ───────────────────────────────────────── */
+const brokenPhotoIds = ref(new Set<number>())
+function markPhotoBroken(id: number) {
+  brokenPhotoIds.value.add(id)
+}
 const signatories      = ref<Signatory[]>([])
 const regularEmployees = ref<RegularEmployee[]>([])
 const loading          = ref(false)
@@ -132,7 +138,9 @@ function validate(): boolean {
   formErrors.value = errs
   return Object.keys(errs).length === 0
 }
-
+watch(signatories, (list) => {
+  ensurePhotosLoaded(list.map(s => s.photo_url))
+}, { immediate: true })
 /* ─────────────────────────────────────────
    API
 ───────────────────────────────────────── */
@@ -382,7 +390,8 @@ onMounted(async () => {
         <template #item.name="{ item }">
           <div class="d-flex align-center gap-3">
             <VAvatar :color="avatarColor(item.emp_id)" variant="tonal" size="36">
-              <span class="text-caption font-weight-medium">{{ initials(item.name) }}</span>
+              <VImg v-if="getPhoto(item.photo_url)" :src="getPhoto(item.photo_url)!" cover />
+      <span v-else class="text-caption font-weight-medium">{{ initials(item.name) }}</span>
             </VAvatar>
             <div>
               <div class="text-body-2 font-weight-medium">{{ item.name }}</div>
