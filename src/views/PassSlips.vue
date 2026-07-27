@@ -59,25 +59,26 @@ const selectedYear  = ref(CURRENT_YEAR)
 const selectedDivisionId = ref<number | null>(null)
 const selectedSectionId  = ref<number | null>(null)
 
+interface OptionRecord {
+  id:   number
+  name: string
+}
+
+const divisions = ref<OptionRecord[]>([])
+const sections = ref<OptionRecord[]>([])
+const divisionsLoading = ref(false)
+const sectionsLoading = ref(false)
+
 /* ─────────────────────────────────────────
    COMPUTED
 ───────────────────────────────────────── */
-const divisionOptions = computed(() => {
-  const seen = new Map<number, string>()
-  for (const ps of passSlips.value) {
-    if (ps.division_id != null && ps.division) seen.set(ps.division_id, ps.division)
-  }
-  return Array.from(seen, ([value, title]) => ({ title, value }))
-})
+const divisionOptions = computed(() =>
+  divisions.value.map(d => ({ title: d.name, value: d.id }))
+)
 
-const sectionOptions = computed(() => {
-  const seen = new Map<number, string>()
-  for (const ps of passSlips.value) {
-    if (selectedDivisionId.value != null && ps.division_id !== selectedDivisionId.value) continue
-    if (ps.section_id != null && ps.section) seen.set(ps.section_id, ps.section)
-  }
-  return Array.from(seen, ([value, title]) => ({ title, value }))
-})
+const sectionOptions = computed(() =>
+  sections.value.map(s => ({ title: s.name, value: s.id }))
+)
 
 const filteredItems = computed(() =>
   passSlips.value
@@ -121,6 +122,32 @@ async function fetchPassSlips() {
   }
 }
 
+async function fetchDivisions() {
+  divisionsLoading.value = true
+  try {
+    const { data } = await axios.get('/api/pass-slip/divisions')
+    divisions.value = data.data ?? [] 
+  } catch {
+    //Non-critical - filter just stays empty on failure
+  } finally {
+    divisionsLoading.value = false
+  }
+}
+
+async function fetchSections() {
+  sectionsLoading.value = true
+  try {
+    const { data } = await axios.get('/api/pass-slip/sections', {
+      params: selectedDivisionId.value != null ? { division_id: selectedDivisionId.value } : {},
+    })
+    sections.value = data.data ?? []
+  } catch {
+    //Non critical - filter just stays empty on failure
+  } finally {
+    sectionsLoading.value = false
+  }
+}
+
 watch([selectedMonth, selectedYear], () => {
   selectedDivisionId.value = null
   selectedSectionId.value  = null
@@ -129,12 +156,17 @@ watch([selectedMonth, selectedYear], () => {
 
 watch(selectedDivisionId, () => {
   selectedSectionId.value = null
+  fetchSections()
 })
 
 /* ─────────────────────────────────────────
    INIT
 ───────────────────────────────────────── */
-onMounted(fetchPassSlips)
+onMounted(() => {
+  fetchPassSlips()
+  fetchDivisions()
+  fetchSections()
+})
 </script>
 
 <template>
@@ -147,7 +179,7 @@ onMounted(fetchPassSlips)
           <h4 class="text-h5 font-weight-bold mb-1">Pass Slip Reference</h4>
           <p class="text-body-2 text-medium-emphasis mb-0">
             Read-only list of approved, completed pass slips of all active JO employees for the selected period.
-            View DTR to make edits — this page is for reference only.
+            This page is for reference only.
           </p>
         </div>
       </div>
@@ -203,7 +235,8 @@ onMounted(fetchPassSlips)
             density="compact"
             clearable
             hide-details
-            :no-data-text="'No divisions in this period'"
+            :loading="divisionsLoading"
+            :no-data-text="'No divisions found'"
           />
         </VCol>
         <VCol cols="6" sm="3">
@@ -217,7 +250,8 @@ onMounted(fetchPassSlips)
             density="compact"
             clearable
             hide-details
-            :no-data-text="'No sections in this period'"
+            :loading="sectionsLoading"
+            :no-data-text="'No sections found'"
           />
         </VCol>
       </VRow>

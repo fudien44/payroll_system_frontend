@@ -29,6 +29,19 @@ interface Employee {
   emp_type:    string | null
   emp_status:  number | null
   is_flexi:    boolean
+  current_period_status: 'not_saved' | 'saved' | 'overridden'
+  last_saved: {
+    month: number
+    year:  number
+    label: string
+    date:  string | null
+  } | null
+}
+
+interface CurrentPeriod {
+  month: number
+  year: number
+  label: string
 }
 
 interface AttendanceDay {
@@ -162,6 +175,7 @@ const TABLE_HEADERS = [
   { title: 'Position', key: 'position',  sortable: true                            },
   { title: 'Division', key: 'division',  sortable: true                            },
   { title: 'Section',  key: 'section',   sortable: true                            },
+  { title: 'DTR Status',  key: 'current_period_status',   sortable: true           },
   { title: 'Actions',  key: 'actions',   sortable: false, align: 'center' as const },
 ]
 
@@ -183,6 +197,7 @@ const YEAR_ITEMS  = Array.from({ length: 5 }, (_, i) => currentYear - i)
 const employees    = ref<Employee[]>([])
 const deviceStatus = ref<DeviceStatus[]>([])
 const loading      = ref(false)
+const currentPeriod = ref<CurrentPeriod | null>(null)
 
 const modalOpen     = ref(false)
 const modalLoading  = ref(false)
@@ -307,6 +322,20 @@ watch([saveDtrMonth, saveDtrYear], () => {
   if (confirmSaveOpen.value) fetchPeriodSummary()
 })
 
+const isOverrideMode = computed(() => periodSummary.value?.already_saved === true)
+const saveDialogIcon = computed(() => {
+  if (!isMonthComplete.value) return 'mdi-calendar-alert'
+  return isOverrideMode.value ? 'mdi-restore-alert' : 'mdi-content-save-outline'
+})
+const saveDialogColor = computed(() => {
+  if (!isMonthComplete.value) return 'error'
+  return isOverrideMode.value ? 'warning' : 'success'
+})
+const saveDialogTitle = computed(() => {
+  if (!isMonthComplete.value) return 'Period Not Complete'
+  return isOverrideMode.value ? 'Override DTR' : 'Save DTR'
+})
+
 const alertVisible = ref(false)
 const alertMessage = ref('')
 const alertType    = ref<AlertType>('success')
@@ -342,6 +371,17 @@ const cooldownLabel = computed(() => {
  return `Available again in ${m}:${String(s).padStart(2, '0')}`
 })
 
+const saveDtrDisabledReason = computed(() => {
+  if (savingDtr.value) return null
+  if (!isMonthComplete.value) {
+    return `${saveDtrLabel.value} is not yet complete — DTR can only be saved after the month ends.`
+  }
+  if (cooldownActive.value) {
+    return `Save DTR is on cooldown. ${cooldownLabel.value}.`
+  }
+  return null
+})
+
 const saveDtrLabel = computed(() => {
   const m = MONTH_ITEMS.find(x => x.value === saveDtrMonth.value)
   return `${m?.title ?? ''} ${saveDtrYear.value}`
@@ -356,8 +396,9 @@ const savingElapsedLabel = computed(() => {
 })
 
 const saveProgressLabel = computed(() => {
-  if (saveProgressTotal.value === 0) return 'Saving...'
-  return `Saving DTR ${saveProgressDone.value} out of ${saveProgressTotal.value}`
+  const verb = isOverrideMode.value ? 'Overriding' : 'Saving'
+  if (saveProgressTotal.value === 0) return `${verb}...`
+  return `${verb} DTR ${saveProgressDone.value} out of ${saveProgressTotal.value}`
 })
 
 const saveProgressPercent = computed(() => {
@@ -420,6 +461,27 @@ function showAlert(type: AlertType, message: string) {
   alertVisible.value = true
 }
 
+function statusChipColor(status: Employee['current_period_status']): string {
+  return { not_saved: 'default', saved: 'success', overridden: 'warning' }[status]
+}
+
+function statusChipIcon(status: Employee['current_period_status']): string {
+  return {
+    not_saved: 'mdi-clock-outline',
+    saved: 'mdi-check-circle-outline',
+    overridden: 'mdi-restore-alert'
+  }[status]
+}
+
+function statusChipLabel(status: Employee['current_period_status']): string {
+  return { not_saved: 'Not Saved', saved: 'Saved', overridden: 'Overridden' }[status]
+}
+
+function formatLastSavedDate(dateStr: string | null): string {
+  if (!dateStr) return ''
+  return new Date(dateStr).toLocaleDateString(undefined, {year: 'numeric', month: 'short', day: 'numeric'})
+}
+
 const AVATAR_COLORS = ['primary', 'teal', 'orange', 'purple', 'pink', 'indigo'] as const
 
 function avatarColor(id: number): string {
@@ -454,6 +516,7 @@ async function fetchData() {
     const { data } = await axios.get('/api/dtr')
     employees.value    = data.data.employees     ?? []
     deviceStatus.value = data.data.device_status ?? []
+    currentPeriod.value = data.data.current_period ?? null
 
     // Re-sync the Save DTR period in case the dialog's selectors were
     // changed to a future/incomplete month and left that way
@@ -657,11 +720,7 @@ onUnmounted(() => {
         </div>
 
         <!-- ── Header action buttons ── -->
-        <div class="d-flex gap-2">
-          <VBtn variant="tonal" prepend-icon="mdi-refresh" :loading="loading" @click="fetchData">
-            Refresh
-          </VBtn>
-
+        <div class="d-flex align-center gap-2">
           <!-- Save DTR button — saves ALL JO employees' DTR for the preceding month -->
           <VTooltip location="bottom">
             <template #activator="{ props }">
@@ -698,10 +757,35 @@ onUnmounted(() => {
           >
             Set Flexi
           </VBtn>
+
+           <VTooltip location="bottom">
+            <template #activator="{ props }">
+              <VBtn
+                v-bind="props"
+                icon="mdi-refresh"
+                variant="text"
+                density="comfortable"
+                :loading="loading"
+                @click="fetchData"
+              />
+            </template>
+            <span>Refresh</span>
+          </VTooltip>
         </div>
       </div>
 
       <!-- ── Standing reminder: calendar setup must precede DTR save ── -->
+      <VAlert
+        v-if="saveDtrDisabledReason"
+        type="warning"
+        variant="tonal"
+        icon="mdi-clock-alert-outline"
+        density="comfortable"
+        class="mb-3 mt-4"
+      >
+        {{ saveDtrDisabledReason }}
+      </VAlert>
+      
       <VAlert type="info" variant="tonal" icon="mdi-calendar-alert-outline" density="comfortable" class="mb-3 mt-4" closable>
         <strong>Before saving DTR summaries:</strong> Ensure all <strong>holidays and suspensions</strong> for the
         period are set in the <strong>Calendar</strong> module. DTR summaries cannot be
@@ -791,7 +875,7 @@ onUnmounted(() => {
 
       <!-- ── Employee Table ── -->
       <BaseTable
-        title="JO Employees DTR"
+        :title="currentPeriod ? `JO Employees DTR — ${currentPeriod.label}` : 'JO Employees DTR'"
         :headers="TABLE_HEADERS"
         :items="employees"
         :loading="loading"
@@ -819,6 +903,26 @@ onUnmounted(() => {
         </template>
         <template #item.section="{ item }">
           <span :class="{ 'text-medium-emphasis': !item.section }">{{ item.section ?? '—' }}</span>
+        </template>
+        <template #item.current_period_status="{ item }">
+          <VTooltip location="top">
+            <template #activator="{ props }">
+              <VChip
+                v-bind="props"
+                :color="statusChipColor(item.current_period_status)"
+                size="small"
+                variant="tonal"
+                label
+              >
+                <VIcon start size="14" :icon="statusChipIcon(item.current_period_status)" />
+                {{ statusChipLabel(item.current_period_status) }}
+              </VChip>
+            </template>
+            <span v-if="item.last_saved">
+              Last saved: {{ item.last_saved.label }} on {{ formatLastSavedDate(item.last_saved.date) }}
+            </span>
+            <span v-else>Never saved</span>
+          </VTooltip>
         </template>
         <template #item.actions="{ item }">
           <VTooltip location="top">
@@ -1225,16 +1329,28 @@ onUnmounted(() => {
 
     <!-- ── Save DTR Confirmation Dialog ── -->
     <VDialog v-model="confirmSaveOpen" max-width="440" persistent>
-      <VCard rounded="lg">
-        <VCardText class="pa-6">
+      <VCard
+        rounded="lg"
+        :class="
+          !isMonthComplete
+            ? 'dtr-save-dialog--incomplete'
+            : isOverrideMode
+              ? 'dtr-save-dialog--override'
+              : 'dtr-save-dialog--save'
+        "
+      > 
+      <VCardText class="pa-6">
           <!-- ── Idle state: form ── -->
           <template v-if="!savingDtr">
             <div class="d-flex align-center gap-3 mb-4">
-              <VIcon icon="mdi-content-save-outline" color="success" size="28" />
-              <span class="text-h6 font-weight-bold">Save DTR</span>
+              <VIcon :icon="saveDialogIcon" :color="saveDialogColor" size="28" />
+              <span class="text-h6 font-weight-bold">{{ saveDialogTitle }}</span>
             </div>
             <p class="text-body-2 mb-3">
-              This will save DTR summary totals for <strong>all active JO employees</strong> for:
+              This will
+              <strong v-if="isOverrideMode">overwrite the previously saved</strong>
+              <template v-else>save</template>
+              DTR summary totals for <strong>all active JO employees</strong> for:
             </p>
 
             <!-- ── Period selectors ── -->
@@ -1265,7 +1381,10 @@ onUnmounted(() => {
               </VCol>
             </VRow>
 
-            <p class="text-body-1 font-weight-bold text-success mb-3">
+            <p
+              class="text-body-1 font-weight-bold mb-3"
+              :class="!isMonthComplete ? 'text-error' : isOverrideMode ? 'text-warning' : 'text-success'"
+            >
               {{ saveDtrLabel }}
             </p>
 
@@ -1305,7 +1424,7 @@ onUnmounted(() => {
 
             <VAlert
               v-if="!isMonthComplete"
-              type="warning"
+              type="error"
               variant="tonal"
               density="compact"
               class="mb-3"
@@ -1337,7 +1456,7 @@ onUnmounted(() => {
                 :model-value="saveProgressPercent"
                 size="72"
                 width="5"
-                color="success"
+                :color="saveDialogColor"
                 class="mb-4"
               >
                 <span class="text-caption font-weight-bold">{{ saveProgressPercent }}%</span>
@@ -1349,7 +1468,7 @@ onUnmounted(() => {
 
               <VProgressLinear
                 :model-value="saveProgressPercent"
-                color="success"
+                :color="saveDialogColor"
                 height="6"
                 rounded
                 class="mb-3"
@@ -1427,7 +1546,7 @@ onUnmounted(() => {
 <style scoped>
 /* ── DTR Table ─────────────────────────────────── */
 .dtr-table-wrapper {
-  max-height: 420px;
+  max-height: 600px;
   overflow-y: auto;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 8px;
@@ -1510,6 +1629,17 @@ onUnmounted(() => {
   padding: 10px 12px;
   text-align: left;
   white-space: normal;
+}
+
+/* ── Save/Override dialog mode accent ───────────── */
+.dtr-save-dialog--override {
+  border-top: 3px solid rgb(var(--v-theme-warning));
+}
+.dtr-save-dialog--save {
+  border-top: 3px solid rgb(var(--v-theme-success));
+}
+.dtr-save-dialog--incomplete {
+  border-top: 3px solid rgb(var(--v-theme-error));
 }
 
 /* ── Biometric device pills ─────────────────────── */
