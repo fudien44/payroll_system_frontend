@@ -12,21 +12,26 @@
       </div>
 
       <div class="cm-header-actions">
-        <VBtn
-          variant="outlined"
-          prepend-icon="mdi-calendar-star"
-          @click="openHolidayDialog()"
-        >
-          Add Holiday
-        </VBtn>
-        <VBtn
-          color="primary"
-          prepend-icon="mdi-calendar-remove"
-          @click="openSuspensionDialog()"
-        >
-          Add Suspension
-        </VBtn>
-      </div>
+  <VMenu>
+    <template #activator="{ props: menuProps }">
+      <VBtn
+        v-bind="menuProps"
+        color="primary"
+        prepend-icon="mdi-plus"
+        append-icon="mdi-menu-down"
+      >
+        Add
+      </VBtn>
+    </template>
+    <VList density="compact">
+      <VListItem prepend-icon="mdi-calendar-star" title="Holiday" @click="openHolidayDialog()" />
+      <VListItem prepend-icon="mdi-calendar-remove" title="Suspension Day" @click="openSuspensionDialog()" />
+      <VDivider class="my-1" />
+      <VListItem prepend-icon="mdi-calendar-remove-outline" title="Contract Break Batch" @click="openBatchDialog()" />
+      <VListItem prepend-icon="mdi-account-clock-outline" title="Individual Contract Break" @click="openCustomBreakDialog()" />
+    </VList>
+  </VMenu>
+</div>
     </div>
 
     <!-- ── Global Error ──────────────────────────────────────────────────── -->
@@ -234,13 +239,50 @@
           </div>
         </div>
 
+                <!-- Contract Breaks -->
+        <div class="cm-card">
+          <div class="cm-card-header">
+            <h3 class="cm-card-title">Contract Breaks</h3>
+          </div>
+
+          <div v-if="contractBreakBatchesForYear.length">
+          <div
+            v-for="batch in contractBreakBatchesForYear"
+            :key="batch.id"
+            class="cm-cb-item"
+            @click="openBatchDetail(batch)"
+          >
+            <div class="cm-cb-item-main">
+              <VChip size="x-small" color="grey-darken-1" variant="tonal" label>
+                {{ formatBatchRange(batch.start_date, batch.end_date) }}
+              </VChip>
+              <span class="cm-cb-item-label">{{ batch.label }}</span>
+            </div>
+            <div class="cm-cb-item-meta">
+              <span class="text-caption text-medium-emphasis">
+                Resumes {{ formatDisplayDate(batch.resumption_date) }}
+              </span>
+              <VChip size="x-small" color="primary" variant="tonal">
+                <VIcon start size="11">mdi-account-multiple</VIcon>
+                {{ batch.employee_breaks_count ?? 0 }}
+              </VChip>
+              <VBtn icon size="x-small" variant="text" color="primary" @click.stop="openBatchDialog(batch)">
+                <VIcon size="15">mdi-pencil-outline</VIcon>
+              </VBtn>
+              <VBtn icon size="x-small" variant="text" color="error" @click.stop="handleRemoveBatch(batch.id)">
+                <VIcon size="15">mdi-delete-outline</VIcon>
+              </VBtn>
+            </div>
+          </div>
+        </div>
+
+        <p v-else class="cm-empty-text">No contract break batches for {{ viewYear }}.</p>
+        </div>
+
         <!-- Holidays -->
         <div class="cm-card">
           <div class="cm-card-header">
             <h3 class="cm-card-title">Holidays</h3>
-            <VBtn size="small" variant="tonal" color="primary" prepend-icon="mdi-plus" @click="openHolidayDialog()">
-              Add
-            </VBtn>
           </div>
 
           <div v-if="summary.regularHolidays.length || summary.specialHolidays.length">
@@ -303,9 +345,6 @@
         <div class="cm-card">
           <div class="cm-card-header">
             <h3 class="cm-card-title">Suspension Days</h3>
-            <VBtn size="small" variant="tonal" color="primary" prepend-icon="mdi-plus" @click="openSuspensionDialog()">
-              Add
-            </VBtn>
           </div>
 
           <div v-if="summary.suspensions.length">
@@ -337,52 +376,7 @@
           <p v-else class="cm-empty-text">No suspension days this month.</p>
         </div>
 
-        <!-- Contract Breaks -->
-<div class="cm-card">
-  <div class="cm-card-header">
-    <h3 class="cm-card-title">Contract Breaks</h3>
-    <div class="d-flex gap-2">
-      <VBtn size="small" variant="text" color="primary" @click="openCustomBreakDialog()">
-        + Individual
-      </VBtn>
-      <VBtn size="small" variant="tonal" color="primary" prepend-icon="mdi-plus" @click="openBatchDialog()">
-        Add Batch
-      </VBtn>
-    </div>
-  </div>
 
-  <div v-if="contractBreakBatches.length">
-    <div
-      v-for="batch in contractBreakBatches"
-      :key="batch.id"
-      class="cm-list-item"
-      style="cursor: pointer;"
-      @click="openBatchDetail(batch)"
-    >
-      <div class="cm-list-item-info">
-        <VChip size="x-small" color="grey-darken-1" variant="tonal" label>
-          {{ formatDisplayDate(batch.start_date) }} – {{ formatDisplayDate(batch.end_date) }}
-        </VChip>
-        <span class="cm-list-item-label">
-          {{ batch.label }}
-          <VChip size="x-small" color="primary" variant="tonal" class="ml-1">
-            {{ batch.employee_breaks_count ?? 0 }}
-          </VChip>
-        </span>
-      </div>
-      <div class="cm-list-item-actions">
-        <VBtn icon size="x-small" variant="text" color="primary" @click.stop="openBatchDialog(batch)">
-          <VIcon size="15">mdi-pencil-outline</VIcon>
-        </VBtn>
-        <VBtn icon size="x-small" variant="text" color="error" @click.stop="handleRemoveBatch(batch.id)">
-          <VIcon size="15">mdi-delete-outline</VIcon>
-        </VBtn>
-      </div>
-    </div>
-  </div>
-
-  <p v-else class="cm-empty-text">No contract break batches yet.</p>
-</div>
 
       </div>
     </div>
@@ -844,26 +838,61 @@
 <VDialog v-model="employeePickerDialog.visible" max-width="480" scrollable>
   <VCard rounded="lg">
     <VCardText class="pa-6 pb-2">
-      <div class="text-body-1 font-weight-medium mb-1">Assign Employees</div>
-      <div class="text-caption text-medium-emphasis mb-3">Select employees to add to this batch</div>
+  <div class="text-body-1 font-weight-medium mb-1">Assign Employees</div>
+  <div class="text-caption text-medium-emphasis mb-3">Select employees to add to this batch</div>
 
-      <VTextField
-        v-model="employeePickerDialog.search"
-        placeholder="Search by name or position"
-        density="compact"
-        variant="outlined"
-        prepend-inner-icon="mdi-magnify"
-        hide-details
-        clearable
-      />
-    </VCardText>
+  <div class="d-flex gap-2 mb-2">
+    <VSelect
+      v-model="employeePickerDivisionFilter"
+      :items="employeePickerDivisionOptions"
+      label="Division"
+      density="compact"
+      variant="outlined"
+      clearable
+      hide-details
+    />
+    <VSelect
+      v-model="employeePickerSectionFilter"
+      :items="employeePickerSectionOptions"
+      label="Section"
+      density="compact"
+      variant="outlined"
+      clearable
+      hide-details
+    />
+  </div>
 
-    <VDivider />
+  <VTextField
+    v-model="employeePickerDialog.search"
+    placeholder="Search by name or position"
+    density="compact"
+    variant="outlined"
+    prepend-inner-icon="mdi-magnify"
+    hide-details
+    clearable
+  />
+</VCardText>
 
-    <VCardText class="pa-0" style="max-height: 400px; overflow-y: auto;">
-      <VSkeletonLoader v-if="employeePickerDialog.loading" type="list-item-two-line, list-item-two-line, list-item-two-line" />
+<VDivider />
 
-      <VList v-else select-strategy="classic">
+<VCardText class="pa-0" style="max-height: 400px; overflow-y: auto;">
+  <div v-if="filteredPickerEmployees.length > 0" class="d-flex align-center gap-2 pa-3 pb-0">
+    <VCheckboxBtn
+      :model-value="allFilteredChecked"
+      :indeterminate="someFilteredChecked"
+      density="compact"
+      color="primary"
+      hide-details
+      @update:model-value="toggleSelectAllFiltered"
+    />
+    <span class="text-caption text-medium-emphasis">
+      Select all shown ({{ filteredPickerEmployees.length }})
+    </span>
+  </div>
+
+  <VSkeletonLoader v-if="employeePickerDialog.loading" type="list-item-two-line, list-item-two-line, list-item-two-line" />
+
+  <VList v-else select-strategy="classic">
         <VListItem
           v-for="emp in filteredPickerEmployees"
           :key="emp.emp_id"
@@ -1200,9 +1229,17 @@ const {
   fetchContractBreakEmployeePicker,
 } = usePayrollCalendar()
 
+const contractBreakBatchesForYear = computed(() =>
+  contractBreakBatches.value.filter(b => new Date(b.start_date).getFullYear() === viewYear.value)
+)
 // ---------------------------------------------------------------------------
 // Week Schedules
 // ---------------------------------------------------------------------------
+
+function formatBatchRange(start: string, end: string): string {
+  return start === end ? formatDisplayDate(start) : `${formatDisplayDate(start)} – ${formatDisplayDate(end)}`
+}
+
 const weekScheduleMap         = ref<Record<string, { is_compressed: boolean; is_manual_override: boolean }>>({})
 const scheduleOverrideLoading = ref<string | null>(null)
 
@@ -1313,6 +1350,8 @@ watch([viewYear, viewMonth], async ([y, m]) => {
 onMounted(() => {
   fetchContractBreakBatches()
 })
+
+
 
 // ---------------------------------------------------------------------------
 // Snackbar
@@ -1683,22 +1722,70 @@ const employeePickerDialog = reactive({
   assigning: false,
 })
 
+const employeePickerDivisionFilter = ref<string | null>(null)
+const employeePickerSectionFilter  = ref<string | null>(null)
+
+  watch(employeePickerDivisionFilter, () => {
+  employeePickerSectionFilter.value = null
+})
+
 async function openEmployeePicker(batchId: number) {
   employeePickerDialog.batchId   = batchId
   employeePickerDialog.search    = ''
   employeePickerDialog.selected  = []
   employeePickerDialog.visible   = true
   employeePickerDialog.loading   = true
+  employeePickerDivisionFilter.value = null
+  employeePickerSectionFilter.value  = null
   employeePickerDialog.employees = await fetchContractBreakEmployeePicker(batchId)
   employeePickerDialog.loading   = false
 }
 
 const filteredPickerEmployees = computed(() => {
   const q = employeePickerDialog.search.trim().toLowerCase()
-  const base = employeePickerDialog.employees.filter(e => !e.already_assigned)
+  let base = employeePickerDialog.employees.filter(e => !e.already_assigned)
+
+  if (employeePickerDivisionFilter.value) {
+    base = base.filter(e => e.division_name === employeePickerDivisionFilter.value)
+  }
+  if (employeePickerSectionFilter.value) {
+    base = base.filter(e => e.section_name === employeePickerSectionFilter.value)
+  }
   if (!q) return base
   return base.filter(e => e.name.toLowerCase().includes(q) || e.position.toLowerCase().includes(q))
 })
+const employeePickerDivisionOptions = computed(() => {
+  const divisions = new Set(employeePickerDialog.employees.map(e => e.division_name).filter(Boolean))
+  return Array.from(divisions).sort() as string[]
+})
+
+const employeePickerSectionOptions = computed(() => {
+  const relevant = employeePickerDivisionFilter.value
+    ? employeePickerDialog.employees.filter(e => e.division_name === employeePickerDivisionFilter.value)
+    : employeePickerDialog.employees
+  const sections = new Set(relevant.map(e => e.section_name).filter(Boolean))
+  return Array.from(sections).sort() as string[]
+})
+
+const allFilteredChecked = computed(() =>
+  filteredPickerEmployees.value.length > 0 &&
+  filteredPickerEmployees.value.every(e => employeePickerDialog.selected.includes(e.emp_id))
+)
+const someFilteredChecked = computed(() =>
+  filteredPickerEmployees.value.some(e => employeePickerDialog.selected.includes(e.emp_id)) &&
+  !allFilteredChecked.value
+)
+
+function toggleSelectAllFiltered() {
+  const filteredIds = filteredPickerEmployees.value.map(e => e.emp_id)
+  if (allFilteredChecked.value) {
+    employeePickerDialog.selected = employeePickerDialog.selected.filter(id => !filteredIds.includes(id))
+  } else {
+    const merged = new Set(employeePickerDialog.selected)
+    filteredIds.forEach(id => merged.add(id))
+    employeePickerDialog.selected = Array.from(merged)
+  }
+}
 
 async function confirmAssignment() {
   if (!employeePickerDialog.batchId || employeePickerDialog.selected.length === 0) return
@@ -1716,6 +1803,8 @@ async function confirmAssignment() {
     showToast(result.message, 'error')
   }
 }
+
+
 
 // ---------------------------------------------------------------------------
 // Custom / Individual Contract Break dialog
@@ -2237,7 +2326,33 @@ async function executeDelete() {
   letter-spacing: 0.05em;
   margin-bottom: 0.25rem;
 }
+.cm-cb-item {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--surface-border);
+  cursor: pointer;
+}
+.cm-cb-item:last-child { border-bottom: none; }
+.cm-cb-item:hover { background: var(--surface-hover); border-radius: 6px; }
 
+.cm-cb-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.cm-cb-item-label {
+  font-size: 0.85rem;
+  color: var(--text-color);
+  font-weight: 500;
+}
+
+.cm-cb-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
 .cm-list-item {
   display: flex;
   justify-content: space-between;
