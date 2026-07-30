@@ -102,6 +102,15 @@ const alertVisible = ref(false)
 const alertMessage = ref('')
 const alertType    = ref<AlertType>('success')
 
+  const ewtBreakdown = ref<{
+  prior_cumulative_gross: number
+  taxable_gross_this_period: number
+  new_cumulative_gross: number
+  threshold: number
+  excess_this_period: number
+  ewt: number
+} | null>(null)
+
 // ── Add form ──
 interface BatchRow {
   _uid:           number
@@ -278,12 +287,14 @@ const fmt = (v: number) =>
 /* ─────────────────────────────────────────
    WATCHERS
 ───────────────────────────────────────── */
+
 watch(() => props.modelValue, (open) => {
   if (open && props.item) {
     fetchAdjustments()
     rows.value       = [BLANK_ROW()]
     rowErrors.value  = {}
     deleteTarget.value = null
+    ewtBreakdown.value = null   // NEW — fetchAdjustments() will repopulate it
   }
 })
 
@@ -297,10 +308,11 @@ async function fetchAdjustments() {
     const { data } = await axios.get(
       `/api/payroll-run/${props.runId}/items/${props.item.id}/adjustments`
     )
-    adjustments.value = data.data ?? []
+     adjustments.value = data.data ?? []
     if (data.item) {
       emit('updated', data.item)   // NEW — syncs parent table if an auto-import recomputed totals
     }
+    ewtBreakdown.value = data.ewt_breakdown ?? null
   } catch {
     showAlert('error', 'Failed to load adjustments.')
   } finally {
@@ -361,9 +373,10 @@ async function saveBatch() {
     )
     if (!data.success) throw new Error(data.message)
 
-    showAlert('success', `${data.data.adjustments.length} adjustment(s) added and deductions recomputed.`)
+     showAlert('success', `${data.data.adjustments.length} adjustment(s) added and deductions recomputed.`)
     adjustments.value = [...adjustments.value, ...data.data.adjustments]
     emit('updated', data.data.item)
+    ewtBreakdown.value = data.data.ewt_breakdown ?? null
     rows.value      = [BLANK_ROW()]
     rowErrors.value = {}
   } catch (err: any) {
@@ -393,6 +406,7 @@ async function confirmDelete() {
     adjustments.value = adjustments.value.filter(a => a.id !== deleteTarget.value!.id)
     showAlert('success', 'Adjustment removed and deductions recomputed.')
     emit('updated', data.data.item)
+    ewtBreakdown.value = data.data.ewt_breakdown ?? null
     deleteTarget.value = null
   } catch (err: any) {
     showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to delete adjustment.')
@@ -500,6 +514,29 @@ function showAlert(type: AlertType, message: string) {
                   <span class="text-medium-emphasis">Net Pay</span>
                   <strong class="text-success">{{ fmt(item?.net_pay ?? 0) }}</strong>
                 </div>
+                 <!-- NEW — EWT breakdown -->
+                <template v-if="ewtBreakdown">
+                  <VDivider class="my-2" />
+                  <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-1">
+                    Accumulated Earnings (EWT)
+                  </p>
+                  <div class="d-flex justify-space-between text-caption">
+                    <span class="text-medium-emphasis">Prior periods</span>
+                    <span>{{ fmt(ewtBreakdown.prior_cumulative_gross) }}</span>
+                  </div>
+                  <div class="d-flex justify-space-between text-caption">
+                    <span class="text-medium-emphasis">+ This period</span>
+                    <span>{{ fmt(ewtBreakdown.taxable_gross_this_period) }}</span>
+                  </div>
+                  <div class="d-flex justify-space-between text-caption font-weight-medium">
+                    <span class="text-medium-emphasis">= Cumulative total</span>
+                    <span>{{ fmt(ewtBreakdown.new_cumulative_gross) }}</span>
+                  </div>
+                  <div class="d-flex justify-space-between text-caption mt-1" :class="ewtBreakdown.excess_this_period > 0 ? 'text-error' : ''">
+                    <span :class="ewtBreakdown.excess_this_period > 0 ? '' : 'text-medium-emphasis'">EWT (5% of excess)</span>
+                    <strong>{{ fmt(ewtBreakdown.ewt) }}</strong>
+                  </div>
+                </template>
               </VCardText>
             </VCard>
           </VCol>

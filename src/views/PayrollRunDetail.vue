@@ -45,6 +45,7 @@ interface BatchItem {
   premium_percent:         number
   premium:                 number
   gross:                   number
+  gross_earned:            number
   regdays:                 number
   total_rendered_hours:    number
   total_absent_days:       number
@@ -116,6 +117,7 @@ type ActiveTab = 'employees' | 'meta'
 /* ─────────────────────────────────────────
    CONSTANTS
 ───────────────────────────────────────── */
+const ewtDirty = ref(false)
 const MONTH_NAMES = [
   'January','February','March','April','May','June',
   'July','August','September','October','November','December',
@@ -128,6 +130,14 @@ function markPhotoBroken(id: number | null) {
 const approvedByPool = ref<Signatory[]>([])
 const revertDialog = ref(false)
 const revertReason = ref('')
+const revertImpact        = ref<{
+  payroll_run_id: number
+  payroll_no:     string
+  period_month:   number
+  period_year:    number
+  employees:      { emp_id: number; emp_name: string; ewt: number }[]
+}[]>([])
+const revertImpactLoading = ref(false)
 const WAGE_SG_CUTOFF     = 16
 const WAGE_PAGIBIG_MIN   = 400
 const WAGE_SSS_MIN       = 750
@@ -220,6 +230,18 @@ const editDialog     = ref(false)
 // which stops it from being overwritten by the auto-generated text.
 const remarksDirty        = ref(false)
 const isAutoRemarksUpdate = ref(false)
+const isAutoEwtUpdate   = ref(false)
+const suggestedEwt      = ref<number | null>(null)
+const ewtBreakdown      = ref<{
+  prior_cumulative_gross: number
+  taxable_gross_this_period: number
+  new_cumulative_gross: number
+  threshold: number
+  excess_this_period: number
+  ewt: number
+} | null>(null)
+const ewtPreviewLoading = ref(false)
+let ewtPreviewTimer: ReturnType<typeof setTimeout> | null = null
 
 // ── Remove ──
 const removeTarget  = ref<BatchItem | null>(null)
@@ -278,7 +300,7 @@ const grandTotal = computed((): GroupTotals => {
   if (!run.value) return z()
   return run.value.groups.reduce((acc, div) => {
     div.sections.forEach(sec => sec.employees.forEach(emp => {
-      acc.gross            += Number(emp.gross)
+      acc.gross            += Number(emp.gross_earned)
       acc.philhealth       += Number(emp.philhealth)
       acc.pag_ibig         += Number(emp.pag_ibig)
       acc.sss              += Number(emp.sss)
@@ -559,6 +581,19 @@ async function fetchRun() {
   }
 }
 
+async function fetchRevertImpact() {
+  if (!run.value) return
+  revertImpactLoading.value = true
+  try {
+    const { data } = await axios.get(`/api/payroll-run/${run.value.id}/revert-impact`)
+    revertImpact.value = data.data ?? []
+  } catch {
+    revertImpact.value = []   // fail silent — this is advisory, not blocking
+  } finally {
+    revertImpactLoading.value = false
+  }
+}
+
 async function fetchSelectableEmployees() {
   selectableLoading.value = true
   try {
@@ -684,11 +719,19 @@ async function confirmRevert() {
     const { data } = await axios.post(`/api/payroll-run/revert/${run.value.id}`, {
       reason: revertReason.value.trim(),
     })
-    if (!data.success) throw new Error(data.message)
+     if (!data.success) throw new Error(data.message)
     run.value.status = 'draft'
     revertDialog.value = false
     revertReason.value = ''
-    showAlert('success', 'Reverted to Draft.')
+
+    const affected = data.affected_later_runs ?? []
+    showAlert(
+      'success',
+      affected.length
+        ? `Reverted to Draft. Note: ${affected.length} later finalized run(s) may need EWT recomputed once this is fixed.`
+        : 'Reverted to Draft.'
+    )
+    revertImpact.value = []
   } catch (err: any) {
     showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to revert.')
   } finally {
@@ -700,7 +743,7 @@ async function saveEditForm() {
   if (!editingItem.value || !run.value) return
   editSaving.value = true
   try {
-    const payload = editCarryOverActive.value
+   const payload = editCarryOverActive.value
       ? {
           days_absent_dec:     editForm.value.days_absent_dec,
           days_absent_jan:     editForm.value.days_absent_jan,
@@ -709,7 +752,7 @@ async function saveEditForm() {
           philhealth:          editForm.value.philhealth,
           pag_ibig:            editForm.value.pag_ibig,
           sss:                 editForm.value.sss,
-          ewt:                 editForm.value.ewt,
+          ...(ewtDirty.value ? { ewt: editForm.value.ewt } : {}),
           remarks:             editForm.value.remarks?.trim() || null,
         }
       : {
@@ -718,7 +761,7 @@ async function saveEditForm() {
           philhealth:      editForm.value.philhealth,
           pag_ibig:        editForm.value.pag_ibig,
           sss:             editForm.value.sss,
-          ewt:             editForm.value.ewt,
+          ...(ewtDirty.value ? { ewt: editForm.value.ewt } : {}),
           remarks:         editForm.value.remarks?.trim() || null,
         }
 
@@ -736,6 +779,43 @@ async function saveEditForm() {
     editSaving.value = false
   }
 }
+
+async function fetchEwtPreview() {
+  if (!editingItem.value || !run.value) return
+  ewtPreviewLoading.value = true
+  try {
+    const { data } = await axios.post(
+      `/api/payroll-run/${run.value.id}/items/${editingItem.value.id}/preview-ewt`,
+      {
+        absent_deduction:  editComputedAbsent.value,
+        late_ut_deduction: editComputedLateUt.value,
+      }
+    )
+    if (data.success) {
+      suggestedEwt.value = data.data.ewt
+      ewtBreakdown.value = data.data
+    }
+  } catch {
+    suggestedEwt.value = null
+    ewtBreakdown.value = null
+  } finally {
+    ewtPreviewLoading.value = false
+  }
+}
+
+function scheduleEwtPreview() {
+  if (ewtPreviewTimer) clearTimeout(ewtPreviewTimer)
+  ewtPreviewTimer = setTimeout(fetchEwtPreview, 500)
+}
+
+function useSuggestedEwt() {
+  if (suggestedEwt.value === null) return
+  isAutoEwtUpdate.value = true
+  editForm.value.ewt = suggestedEwt.value
+  ewtDirty.value = false   // this matches what auto-save would compute anyway
+  nextTick(() => { isAutoEwtUpdate.value = false })
+}
+
 async function confirmRemove() {
   if (!removeTarget.value || !run.value) return
   removeLoading.value = true
@@ -841,6 +921,9 @@ function resetRemarksToAuto() {
 
 function openEditDialog(item: BatchItem) {
   editingItem.value = item
+  ewtDirty.value = false
+  suggestedEwt.value = null 
+  ewtBreakdown.value = null
   const days = Number(item.total_absent_days)
   const mins = Number(item.total_late_minutes) + Number(item.total_undertime_minutes)
 
@@ -879,6 +962,7 @@ function openEditDialog(item: BatchItem) {
     }
   }
   editDialog.value = true
+  scheduleEwtPreview() 
 }
 
 watch(
@@ -899,6 +983,25 @@ watch(
         ) || null)
       : (buildAutoRemarks(Number(editForm.value.days_absent ?? 0), Number(editForm.value.minutes_late_ut ?? 0)) || null)
     nextTick(() => { isAutoRemarksUpdate.value = false })
+  }
+)
+
+watch(() => editForm.value.ewt, (val, oldVal) => {
+  if (isAutoEwtUpdate.value) return
+  if (!editDialog.value) return
+  if (oldVal === undefined) return
+  ewtDirty.value = true
+})
+
+watch(
+  [
+    () => editForm.value.days_absent, () => editForm.value.minutes_late_ut,
+    () => editForm.value.days_absent_dec, () => editForm.value.days_absent_jan,
+    () => editForm.value.minutes_late_ut_dec, () => editForm.value.minutes_late_ut_jan,
+  ],
+  () => {
+    if (!editDialog.value) return
+    scheduleEwtPreview()
   }
 )
 
@@ -1444,9 +1547,9 @@ onMounted(async () => {
         <!-- Status Actions -->
         <div v-if="run" class="d-flex gap-2 flex-wrap">
           <VBtn v-if="canRevert" variant="outlined" color="warning" size="small"
-            prepend-icon="mdi-undo" @click="revertDialog = true">
-            Revert to Draft
-          </VBtn>
+          prepend-icon="mdi-undo" @click="revertDialog = true; fetchRevertImpact()">
+          Revert to Draft
+        </VBtn>
           <VBtn v-if="canFinalize" color="success" size="small"
             prepend-icon="mdi-check-circle-outline" :loading="finalizeLoading" @click="finalizeRun">
             Finalize
@@ -1487,7 +1590,7 @@ onMounted(async () => {
                     <span class="text-body-2 font-weight-medium">{{ run.employee_count }}</span>
                   </div>
                   <div class="d-flex justify-space-between">
-                    <span class="text-body-2 text-medium-emphasis">Total Gross</span>
+                    <span class="text-body-2 text-medium-emphasis">Total Gross Earned</span>
                     <span class="text-body-2 font-weight-medium">{{ fmt(grandTotal.gross) }}</span>
                   </div>
                   <div class="d-flex justify-space-between">
@@ -1793,9 +1896,9 @@ onMounted(async () => {
                         <th class="text-left">ENGAS No.</th>
                         <th class="text-right">Wage</th>
                         <th class="text-right">Premium</th>
-                        <th class="text-right">Gross</th>
                         <th class="text-right">Absent Deduct</th>
                         <th class="text-right">Late/UT Deduct</th>
+                        <th class="text-right">Gross Earned</th>
                         <th class="text-right">PhilHealth</th>
                         <th class="text-right">Pag-IBIG</th>
                         <th class="text-right">SSS</th>
@@ -1872,9 +1975,9 @@ onMounted(async () => {
                         </td>
                         <td class="text-right text-caption">{{ fmt(emp.wage) }}</td>
                         <td class="text-right text-caption">{{ fmt(emp.premium) }}</td>
-                        <td class="text-right text-caption font-weight-medium">{{ fmt(emp.gross) }}</td>
                         <td class="text-right text-caption text-error">{{ fmt(emp.absent_deduction) }}</td>
                         <td class="text-right text-caption text-error">{{ fmt(emp.late_ut_deduction) }}</td>
+                        <td class="text-right text-caption font-weight-medium">{{ fmt(emp.gross_earned) }}</td>
                         <td class="text-right text-caption text-error">{{ fmt(emp.philhealth) }}</td>
                         <td class="text-right text-caption text-error">{{ fmt(emp.pag_ibig) }}</td>
                         <td class="text-right text-caption text-error">{{ emp.sss > 0 ? fmt(emp.sss) : '—' }}</td>
@@ -2040,8 +2143,56 @@ onMounted(async () => {
             <VCol cols="12" sm="6">
               <VTextField v-model.number="editForm.sss" label="SSS" type="number" prefix="₱" variant="outlined" density="compact" min="0" />
             </VCol>
-            <VCol cols="12" sm="6">
-              <VTextField v-model.number="editForm.ewt" label="EWT" type="number" prefix="₱" variant="outlined" density="compact" min="0" />
+           <VCol cols="12" sm="6">
+              <VTextField
+                v-model.number="editForm.ewt" label="EWT" type="number" prefix="₱"
+                variant="outlined" density="compact" min="0"
+                :hint="ewtDirty ? 'Manually set — will not auto-recompute on save' : 'Auto-computed from cumulative earnings on save'"
+                persistent-hint
+              >
+                <template #append-inner>
+                  <VProgressCircular v-if="ewtPreviewLoading" size="14" width="2" indeterminate color="primary" />
+                </template>
+              </VTextField>
+               <div v-if="ewtBreakdown && !ewtPreviewLoading" class="mt-1">
+                <div class="d-flex align-center gap-2 px-1">
+                  <span class="text-caption text-medium-emphasis">
+                    Suggested: <strong>{{ fmt(suggestedEwt ?? 0) }}</strong>
+                  </span>
+                  <VBtn
+                    v-if="Number(editForm.ewt ?? 0) !== suggestedEwt"
+                    size="x-small" variant="text" color="primary" density="compact"
+                    @click="useSuggestedEwt"
+                  >
+                    Use this
+                  </VBtn>
+                </div>
+                <VCard variant="tonal" color="grey" rounded="lg" flat class="mt-1">
+                  <VCardText class="py-2 px-3">
+                    <div class="d-flex justify-space-between text-caption">
+                      <span class="text-medium-emphasis">Accumulated earnings (prior finalized periods)</span>
+                      <span class="font-weight-medium">{{ fmt(ewtBreakdown.prior_cumulative_gross) }}</span>
+                    </div>
+                    <div class="d-flex justify-space-between text-caption">
+                      <span class="text-medium-emphasis">+ This period's earnings</span>
+                      <span class="font-weight-medium">{{ fmt(ewtBreakdown.taxable_gross_this_period) }}</span>
+                    </div>
+                    <VDivider class="my-1" />
+                    <div class="d-flex justify-space-between text-caption">
+                      <span class="text-medium-emphasis">= New cumulative total</span>
+                      <span class="font-weight-medium">{{ fmt(ewtBreakdown.new_cumulative_gross) }}</span>
+                    </div>
+                    <div class="d-flex justify-space-between text-caption">
+                      <span class="text-medium-emphasis">Threshold</span>
+                      <span class="font-weight-medium">{{ fmt(ewtBreakdown.threshold) }}</span>
+                    </div>
+                    <div class="d-flex justify-space-between text-caption" :class="ewtBreakdown.excess_this_period > 0 ? 'text-error' : ''">
+                      <span :class="ewtBreakdown.excess_this_period > 0 ? '' : 'text-medium-emphasis'">Taxable excess this period</span>
+                      <span class="font-weight-bold">{{ fmt(ewtBreakdown.excess_this_period) }}</span>
+                    </div>
+                  </VCardText>
+                </VCard>
+              </div>
             </VCol>
             <VCol cols="12">
               <VTextField
@@ -2099,6 +2250,30 @@ onMounted(async () => {
         This run was finalized — documents may already have been generated or submitted.
         Reverting unlocks editing and recomputation. A reason is required and will be recorded.
       </VAlert>
+
+       <VSkeletonLoader v-if="revertImpactLoading" type="list-item-two-line" class="mb-4" />
+      <VAlert
+        v-else-if="revertImpact.length"
+        type="error" variant="tonal" density="compact" icon="mdi-cash-sync"
+        class="mb-4 text-body-2"
+      >
+        <div class="font-weight-medium mb-1">
+          Changing this run may affect Withholding Tax (EWT) in later finalized runs:
+        </div>
+        <div v-for="lr in revertImpact" :key="lr.payroll_run_id" class="mb-2">
+          <div class="font-weight-medium">
+            {{ MONTH_NAMES[lr.period_month - 1] }} {{ lr.period_year }} — {{ lr.payroll_no }}
+          </div>
+          <div v-for="e in lr.employees" :key="e.emp_id" class="text-caption ml-3">
+            {{ e.emp_name }} — current EWT: {{ fmt(e.ewt) }}
+          </div>
+        </div>
+        <div class="text-caption text-medium-emphasis mt-1">
+          These runs won't update automatically. After fixing this run, open each one above and use
+          <strong>Recompute</strong> for the affected employee(s) to refresh their EWT.
+        </div>
+      </VAlert>
+
       <VTextarea
         v-model="revertReason"
         label="Reason for reverting"
@@ -2112,7 +2287,7 @@ onMounted(async () => {
     </VCardText>
     <VDivider />
     <VCardActions class="justify-end pa-4 gap-2">
-      <VBtn variant="text" :disabled="revertLoading" @click="revertDialog = false; revertReason = ''">Cancel</VBtn>
+      <VBtn variant="text" :disabled="revertLoading" @click="revertDialog = false; revertReason = ''; revertImpact = []">Cancel</VBtn>
       <VBtn color="warning" variant="tonal" :loading="revertLoading" :disabled="!revertReason.trim()" @click="confirmRevert">
         <VIcon start size="16">mdi-undo</VIcon>Yes, Revert
       </VBtn>
