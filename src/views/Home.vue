@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import BaseAlert from '@/components/base/BaseAlert.vue'
 import { useTour } from '@/composable/useTour'
 import axios from '@axios'
 import type { DriveStep } from 'driver.js'
-import { useRoute, useRouter } from 'vue-router'
+import { onMounted } from 'vue'
 import VueApexCharts from 'vue3-apexcharts'
 /* ─────────────────────────────────────────
    TYPES
@@ -99,22 +98,12 @@ interface PeriodOption {
   year:     number
 }
 
-type AlertType = 'success' | 'error' | 'warning' | 'info'
-const alertVisible = ref(false)
-const alertMessage = ref('')
-const alertType    = ref<AlertType>('success')
 
-const route  = useRoute()
-const router = useRouter()
 
-function showAlert(type: AlertType, message: string) {
-  alertType.value    = type
-  alertMessage.value = message
-  alertVisible.value = true
-}
 /* ─────────────────────────────────────────
    STATE
 ───────────────────────────────────────── */
+const abortController = new AbortController()
 const now          = new Date()
 const currentYear  = now.getFullYear()
 const currentMonth = now.getMonth() + 1
@@ -139,6 +128,8 @@ const divisionLoading   = ref(true)
 
 const dtrStats   = ref<DtrStats | null>(null)
 const dtrLoading = ref(true)
+
+
 
 // NEW: period selector — drives Summary / Division Breakdown / DTR Overview together
 const payrollRuns      = ref<PayrollRunLite[]>([])
@@ -396,15 +387,16 @@ async function fetchDashboard() {
   loading.value = true
   try {
     const [empRes, wageRes] = await Promise.all([
-      axios.get('/api/employee/getemployees'),
-      axios.get('/api/wage'),
+      axios.get('/api/employee/getemployees', { signal: abortController.signal }),
+      axios.get('/api/wage', { signal: abortController.signal }),
     ])
 
     totalEmployees.value   = empRes.data?.data?.length ?? 0
     const wages            = wageRes.data?.data ?? []
     deductionsSet.value    = wages.filter((e: any) =>  e.has_deductions).length
     deductionsNotSet.value = wages.filter((e: any) => !e.has_deductions).length
-  } catch {
+   } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return 
     // fail silently
   } finally {
     loading.value = false
@@ -415,19 +407,21 @@ async function fetchCalendar() {
   calLoading.value = true
   try {
     const { data } = await axios.get('/api/calendar/summary', {
-      params: { year: currentYear, month: currentMonth },
+      params: { year: currentYear, month: currentMonth }, signal: abortController.signal,
     })
     holidays.value    = [
       ...(data.data?.regular_holidays ?? []),
       ...(data.data?.special_holidays ?? []),
     ]
     suspensions.value = data.data?.suspensions ?? []
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return
+    // fail silently
   } finally {
     calLoading.value = false
   }
 }
+
 
 /* ─────────────────────────────────────────
    API — NEW: payroll dashboard analytics
@@ -435,10 +429,10 @@ async function fetchCalendar() {
 async function fetchPayrollRuns() {
   periodsLoading.value = true
   try {
-    const { data } = await axios.get('/api/payroll-run')
+    const { data } = await axios.get('/api/payroll-run' , { signal: abortController.signal })
     payrollRuns.value = data.data ?? data ?? []
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return  // navigated away — ignore
   } finally {
     periodsLoading.value = false
   }
@@ -449,11 +443,12 @@ async function fetchSummary() {
   summaryLoading.value = true
   try {
     const { data } = await axios.get<DashboardSummary>('/api/dashboard/summary', {
-      params: { month: selectedPeriod.value.month, year: selectedPeriod.value.year },
+      params: { month: selectedPeriod.value.month, year: selectedPeriod.value.year }, signal: abortController.signal ,
     })
     summary.value = data
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return
+    // fail silently
   } finally {
     summaryLoading.value = false
   }
@@ -463,11 +458,12 @@ async function fetchTrends() {
   trendsLoading.value = true
   try {
     const { data } = await axios.get<TrendPoint[]>('/api/dashboard/trends', {
-      params: { months: trendMonths.value },
+      params: { months: trendMonths.value }, signal: abortController.signal,
     })
     trends.value = data
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return
+    // fail silently
   } finally {
     trendsLoading.value = false
   }
@@ -479,10 +475,12 @@ async function fetchDivisionBreakdown() {
   try {
     const { data } = await axios.get<DivisionBreakdown[]>('/api/dashboard/division-breakdown', {
       params: { month: selectedPeriod.value.month, year: selectedPeriod.value.year },
+      signal: abortController.signal,
     })
     divisionBreakdown.value = data
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return
+    // fail silently
   } finally {
     divisionLoading.value = false
   }
@@ -494,10 +492,12 @@ async function fetchDtrStats() {
   try {
     const { data } = await axios.get<DtrStats>('/api/dashboard/dtr-stats', {
       params: { month: selectedPeriod.value.month, year: selectedPeriod.value.year },
+      signal: abortController.signal,
     })
     dtrStats.value = data
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return
+    // fail silently
   } finally {
     dtrLoading.value = false
   }
@@ -513,7 +513,9 @@ function changeTrendRange(months: number) {
   trendMonths.value = months
   fetchTrends()
 }
-
+onBeforeUnmount(() => {
+  abortController.abort()
+})
 /* ─────────────────────────────────────────
    HELPERS
 ───────────────────────────────────────── */
@@ -1156,12 +1158,6 @@ onMounted(async () => {
     </VRow>
   </VContainer>
 
-    <BaseAlert
-    v-model="alertVisible"
-    :message="alertMessage"
-    :type="alertType"
-    :timeout="3500"
-  />
 </template>
 
 <style scoped>
