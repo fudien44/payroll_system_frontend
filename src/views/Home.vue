@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import BaseAlert from '@/components/base/BaseAlert.vue'
 import { useTour } from '@/composable/useTour'
 import axios from '@axios'
 import type { DriveStep } from 'driver.js'
+import { useRoute, useRouter } from 'vue-router'
 import VueApexCharts from 'vue3-apexcharts'
 /* ─────────────────────────────────────────
    TYPES
@@ -97,6 +99,19 @@ interface PeriodOption {
   year:     number
 }
 
+type AlertType = 'success' | 'error' | 'warning' | 'info'
+const alertVisible = ref(false)
+const alertMessage = ref('')
+const alertType    = ref<AlertType>('success')
+
+const route  = useRoute()
+const router = useRouter()
+
+function showAlert(type: AlertType, message: string) {
+  alertType.value    = type
+  alertMessage.value = message
+  alertVisible.value = true
+}
 /* ─────────────────────────────────────────
    STATE
 ───────────────────────────────────────── */
@@ -550,15 +565,24 @@ function formatEventDate(dateStr: string) {
    INIT
 ───────────────────────────────────────── */
 onMounted(async () => {
-  fetchDashboard()
-  fetchCalendar()
-  fetchTrends()
+  // Priority 1 — cheapest, most visually important (stat cards)
+  await fetchDashboard()
 
+  // Priority 2 — period selector must resolve before period-dependent calls
   await fetchPayrollRuns()
   if (periodOptions.value.length) {
-    selectedPeriodKey.value = periodOptions.value[0].value // most recent period with data
-    onPeriodChange()
+    selectedPeriodKey.value = periodOptions.value[0].value
   }
+
+  // Priority 3 — everything else, now safe to run in parallel since
+  // priority 1/2 already painted and the request queue has room
+  await Promise.all([
+    fetchCalendar(),
+    fetchTrends(),
+    selectedPeriodKey.value ? fetchSummary() : Promise.resolve(),
+    selectedPeriodKey.value ? fetchDivisionBreakdown() : Promise.resolve(),
+    selectedPeriodKey.value ? fetchDtrStats() : Promise.resolve(),
+  ])
 })
 </script>
 
@@ -1131,6 +1155,13 @@ onMounted(async () => {
 
     </VRow>
   </VContainer>
+
+    <BaseAlert
+    v-model="alertVisible"
+    :message="alertMessage"
+    :type="alertType"
+    :timeout="3500"
+  />
 </template>
 
 <style scoped>

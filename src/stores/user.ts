@@ -53,11 +53,11 @@ interface User {
   updated_at: string
   void: number
   is_committee: number
-  is_division_head: string
-  is_hr_admin: string
+  is_division_head: number
+  is_hr_admin: number        
   is_pdoho_head: number
-  is_section_head: string
-  is_superadmin: string
+  is_section_head: number    
+  is_superadmin: number    
   info: EmpInfo | null
 }
 
@@ -97,10 +97,10 @@ export const useUserStore = defineStore('user', () => {
   const section = computed(() => user.value?.info?.hrinfo?.sec?.station || '')
   const division = computed(() => user.value?.info?.hrinfo?.div?.description || '')
 
-  const isSuperAdmin = computed(() => user.value?.is_superadmin === '1')
-  const isHrAdmin = computed(() => user.value?.is_hr_admin === '1')
-  const isSectionHead = computed(() => user.value?.is_section_head === '1')
-  const isDivisionHead = computed(() => user.value?.is_division_head === '1')
+ const isSuperAdmin = computed(() => Number(user.value?.is_superadmin) === 1)
+const isHrAdmin = computed(() => Number(user.value?.is_hr_admin) === 1)
+const isSectionHead = computed(() => Number(user.value?.is_section_head) === 1)
+const isDivisionHead = computed(() => Number(user.value?.is_division_head) === 1)
   const isCommittee = computed(() => user.value?.is_committee === 1)
   const isPdohoHead = computed(() => user.value?.is_pdoho_head === 1)
 

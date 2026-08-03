@@ -42,6 +42,7 @@ interface BatchItem {
   dtr_carried_over_absent_days:       number
   dtr_carried_over_late_minutes:      number
   dtr_carried_over_undertime_minutes: number
+  manual_override_at: string | null
 }
 
 interface Adjustment {
@@ -222,32 +223,49 @@ const passSlipMinutesTotal = computed(() =>
 )
 
 /* ── Split baselines ────────────────────────────────────────────── */
+// const carriedAbsentBaseline = computed(() => Number(props.item?.dtr_carried_over_absent_days ?? 0))
+// const currentAbsentBaseline = computed(() =>
+//   Math.max(0, Number(props.item?.dtr_absent_days ?? 0) - carriedAbsentBaseline.value)
+// )
+// const carriedLateBaseline = computed(() => Number(props.item?.dtr_carried_over_late_minutes ?? 0))
+// const currentLateBaseline = computed(() =>
+//   Math.max(0, Number(props.item?.dtr_late_minutes ?? 0) - carriedLateBaseline.value)
+// )
+
+/* ── Split previews ─────────────────────────────────────────────── */
+// const previewCurrentAbsentDays = computed(() =>
+//   Math.max(0, currentAbsentBaseline.value - currentWholeDayCount.value)
+// )
+// const previewCarriedAbsentDays = computed(() =>
+//   Math.max(0, carriedAbsentBaseline.value - carriedWholeDayCount.value)
+// )
+// const previewCurrentLateMinutes = computed(() =>
+//   Math.max(0, currentLateBaseline.value - currentCompressedMinuteOffset.value + currentPassSlipMinutes.value)
+// )
+// const previewCarriedLateMinutes = computed(() =>
+//   Math.max(0, carriedLateBaseline.value + carriedPassSlipMinutes.value)
+// )
+/* ── Split previews — now sourced from stored totals, not re-derived ── */
+const previewAbsentDays = computed(() => Number(props.item?.total_absent_days ?? 0))
+const previewLateMinutes = computed(() => Number(props.item?.total_late_minutes ?? 0))
+
+// Dec/Jan split for display only — still useful context, not the source of truth
 const carriedAbsentBaseline = computed(() => Number(props.item?.dtr_carried_over_absent_days ?? 0))
 const currentAbsentBaseline = computed(() =>
-  Math.max(0, Number(props.item?.dtr_absent_days ?? 0) - carriedAbsentBaseline.value)
+  Math.max(0, previewAbsentDays.value - carriedAbsentBaseline.value)
 )
 const carriedLateBaseline = computed(() => Number(props.item?.dtr_carried_over_late_minutes ?? 0))
 const currentLateBaseline = computed(() =>
-  Math.max(0, Number(props.item?.dtr_late_minutes ?? 0) - carriedLateBaseline.value)
+  Math.max(0, previewLateMinutes.value - carriedLateBaseline.value)
 )
-
-/* ── Split previews ─────────────────────────────────────────────── */
-const previewCurrentAbsentDays = computed(() =>
-  Math.max(0, currentAbsentBaseline.value - currentWholeDayCount.value)
-)
-const previewCarriedAbsentDays = computed(() =>
-  Math.max(0, carriedAbsentBaseline.value - carriedWholeDayCount.value)
-)
-const previewCurrentLateMinutes = computed(() =>
-  Math.max(0, currentLateBaseline.value - currentCompressedMinuteOffset.value + currentPassSlipMinutes.value)
-)
-const previewCarriedLateMinutes = computed(() =>
-  Math.max(0, carriedLateBaseline.value + carriedPassSlipMinutes.value)
-)
+const previewCurrentAbsentDays = currentAbsentBaseline
+const previewCarriedAbsentDays = carriedAbsentBaseline
+const previewCurrentLateMinutes = currentLateBaseline
+const previewCarriedLateMinutes = carriedLateBaseline
 
 /* ── Combined totals (what previously rendered) ─────────────────── */
-const previewAbsentDays = computed(() => previewCurrentAbsentDays.value + previewCarriedAbsentDays.value)
-const previewLateMinutes = computed(() => previewCurrentLateMinutes.value + previewCarriedLateMinutes.value)
+// const previewAbsentDays = computed(() => previewCurrentAbsentDays.value + previewCarriedAbsentDays.value)
+// const previewLateMinutes = computed(() => previewCurrentLateMinutes.value + previewCarriedLateMinutes.value)
 
 // Kept for existing badge displays
 const wholeDayCount = computed(() => currentWholeDayCount.value + carriedWholeDayCount.value)
@@ -447,6 +465,16 @@ function showAlert(type: AlertType, message: string) {
 
       <VDivider class="mt-4" />
 
+      <VAlert
+  v-if="item?.manual_override_at"
+  type="warning" variant="tonal" density="compact"
+  icon="mdi-lock-alert-outline"
+  class="mx-6 mt-4 mb-0 text-body-2"
+>
+  This row was manually overridden — adjustments are disabled. Use <strong>Recompute from DTR</strong>
+  on the employee row if you want to switch back to adjustment-based calculation.
+</VAlert>
+
       <VCardText class="pa-6">
 
         <!-- ── DTR Baseline + Preview ── -->
@@ -614,12 +642,12 @@ function showAlert(type: AlertType, message: string) {
                   {{ adj.notes || '—' }}
                 </td>
                 <td class="text-center">
-                  <VBtn icon size="x-small" variant="text" color="error"
-                    :loading="deleting && deleteTarget?.id === adj.id"
-                    @click="deleteTarget = adj">
-                    <VIcon size="14">mdi-delete-outline</VIcon>
-                    <VTooltip activator="parent" location="top">Remove</VTooltip>
-                  </VBtn>
+                  <VBtn v-if="!item?.manual_override_at" icon size="x-small" variant="text" color="error"
+                  :loading="deleting && deleteTarget?.id === adj.id"
+                  @click="deleteTarget = adj">
+                  <VIcon size="14">mdi-delete-outline</VIcon>
+                  <VTooltip activator="parent" location="top">Remove</VTooltip>
+                </VBtn>
                 </td>
               </tr>
             </tbody>
@@ -650,7 +678,7 @@ function showAlert(type: AlertType, message: string) {
 <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
   Add Adjustments
 </p>
-
+<template v-if="!item?.manual_override_at">
 <div
   v-for="(row, idx) in rows"
   :key="row._uid"
@@ -821,6 +849,7 @@ function showAlert(type: AlertType, message: string) {
     Save All ({{ rows.length }})
   </VBtn>
 </div>
+</template>
 
       </VCardText>
 

@@ -11,11 +11,7 @@ export default [
     icon: 'mdi-cash-multiple',
     to: { name: 'payroll-runs' },
   },
-  // {
-  //   name: 'Payroll Runs',
-  //   icon: 'mdi-file-document-multiple-outline',
-  //   to: { name: 'payroll-runs' },
-  // },
+  
   { heading: 'Management' },
   {
     name: 'DTR',
@@ -42,6 +38,12 @@ export default [
     name: 'Signatories',
     icon: 'mdi-file-sign',
     to: { name: 'Signatories' },
+  },
+  {
+    name: 'Audit Trail',
+    icon: 'mdi-shield-search',
+    to: { name: 'AuditLogs' },
+    superAdminOnly: true,  
   },
   { heading: 'References' },
   {

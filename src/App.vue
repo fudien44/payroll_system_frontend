@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import BaseAlert from '@/components/base/BaseAlert.vue'; // NEW
 import { useAppConfig } from '@/composable/useAppConfig'
 import Blank from '@/layouts/blank.vue'
 import Default from '@/layouts/default.vue'
+import { useSnackbarStore } from '@/stores/snackbar'; // NEW
 import { appConfig } from '@appConfig'
+import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 
 const route = useRouter()
@@ -18,7 +21,6 @@ const resolveLayoutVariant = computed(() => {
   return false
 })
 
-// set rtl through @appConfig.ts
 const setAppRtl = computed(() => {
   if (appConfig.isRtl.value)
     return { rtl: true }
@@ -27,6 +29,11 @@ const setAppRtl = computed(() => {
 })
 
 const classes = rootClasses()
+
+// NEW — global snackbar, fed by the router guard (and anything else that
+// wants app-wide notifications outside a specific view's local BaseAlert)
+const snackbarStore = useSnackbarStore()
+const { visible: snackbarVisible, message: snackbarMessage, type: snackbarType } = storeToRefs(snackbarStore)
 
 initLoadingTheme()
 </script>
@@ -37,6 +44,13 @@ initLoadingTheme()
       <Component
         :is="resolveLayoutVariant"
         v-if="resolveLayoutVariant"
+      />
+
+      <BaseAlert
+        v-model="snackbarVisible"
+        :message="snackbarMessage"
+        :type="snackbarType"
+        :timeout="3500"
       />
     </VApp>
   </VLocaleProvider>

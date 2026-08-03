@@ -71,6 +71,7 @@ interface BatchItem {
   dtr_carried_over_undertime_minutes: number
   current_carried_over_absent_days:  number
 current_carried_over_late_minutes: number
+  manual_override_at: string | null
 }
 
 interface SectionGroup {
@@ -1931,9 +1932,12 @@ onMounted(async () => {
                               <div class="text-caption text-medium-emphasis">{{ emp.position }}</div>
                               <div class="d-flex gap-1 mt-1">
                                 <VChip v-if="emp.nip" color="orange" size="x-small" variant="tonal" label>NIP</VChip>
-                                <VChip v-if="emp.is_overridden" color="amber" size="x-small" variant="tonal" label>
-                                  <VIcon start size="10">mdi-pencil</VIcon>Overridden
-                                </VChip>
+                                <VChip v-if="emp.manual_override_at" color="error" size="x-small" variant="tonal" label>
+                                <VIcon start size="10">mdi-lock</VIcon>Manual Override
+                              </VChip>
+                              <VChip v-else-if="emp.is_overridden" color="amber" size="x-small" variant="tonal" label>
+                                <VIcon start size="10">mdi-pencil</VIcon>Adjusted
+                              </VChip>
                               </div>
                             </div>
                           </div>
