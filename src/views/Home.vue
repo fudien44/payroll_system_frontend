@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { useTour } from '@/composable/useTour'
 import axios from '@axios'
+import type { DriveStep } from 'driver.js'
+import { onMounted } from 'vue'
 import VueApexCharts from 'vue3-apexcharts'
-
 /* ─────────────────────────────────────────
    TYPES
 ───────────────────────────────────────── */
@@ -96,9 +98,12 @@ interface PeriodOption {
   year:     number
 }
 
+
+
 /* ─────────────────────────────────────────
    STATE
 ───────────────────────────────────────── */
+const abortController = new AbortController()
 const now          = new Date()
 const currentYear  = now.getFullYear()
 const currentMonth = now.getMonth() + 1
@@ -124,6 +129,8 @@ const divisionLoading   = ref(true)
 const dtrStats   = ref<DtrStats | null>(null)
 const dtrLoading = ref(true)
 
+
+
 // NEW: period selector — drives Summary / Division Breakdown / DTR Overview together
 const payrollRuns      = ref<PayrollRunLite[]>([])
 const periodsLoading   = ref(true)
@@ -139,6 +146,92 @@ const MONTH_NAMES = [
   'July','August','September','October','November','December',
 ]
 const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+
+const dashboardTourSteps: DriveStep[] = [
+  {
+    element: '[data-tour="period-selector"]',
+    popover: {
+      title: 'Payroll Period',
+      description: 'Pick a period here — it drives the Net Pay card, Division Breakdown, and DTR Overview below.',
+      side: 'bottom',
+      align: 'end',
+    },
+  },
+  {
+    element: '[data-tour="stat-cards"]',
+    popover: {
+      title: 'Quick Stats',
+      description: 'A snapshot of total JO employees, net pay for the selected period, pending runs, and unset deductions.',
+      side: 'bottom',
+      align: 'start',
+    },
+  },
+  {
+    element: '[data-tour="trends-chart"]',
+    popover: {
+      title: 'Payroll Trends',
+      description: 'Gross, deductions, and net pay over time. Switch between 3, 6, or 12 months using the buttons above the chart.',
+      side: 'top',
+      align: 'start',
+    },
+  },
+  {
+    element: '[data-tour="division-breakdown"]',
+    popover: {
+      title: 'Headcount by Division',
+      description: 'See how employees are distributed across divisions for the selected period.',
+      side: 'top',
+      align: 'start',
+    },
+  },
+  {
+    element: '[data-tour="division-cost"]',
+    popover: {
+      title: 'Payroll Cost by Division',
+      description: 'Net pay totals broken down per division.',
+      side: 'top',
+      align: 'start',
+    },
+  },
+  {
+    element: '[data-tour="dtr-overview"]',
+    popover: {
+      title: 'DTR Overview',
+      description: 'Attendance issues for the selected period — total absences, lates, undertime, and the most tardy employees.',
+      side: 'top',
+      align: 'start',
+    },
+  },
+  {
+    element: '[data-tour="deductions-progress"]',
+    popover: {
+      title: 'Deductions Setup Progress',
+      description: 'Tracks how many employees still need their deductions configured.',
+      side: 'top',
+      align: 'start',
+    },
+  },
+  {
+    element: '[data-tour="upcoming-events"]',
+    popover: {
+      title: 'Upcoming Events',
+      description: 'Holidays and suspensions coming up this month.',
+      side: 'top',
+      align: 'start',
+    },
+  },
+  {
+    element: '[data-tour="calendar-preview"]',
+    popover: {
+      title: 'Calendar Preview',
+      description: 'A quick look at this month\u2019s holidays and suspensions. Click "Manage Calendar" to edit them.',
+      side: 'top',
+      align: 'start',
+    },
+  },
+]
+
+const { hasSeenTour, startTour } = useTour('dashboard', dashboardTourSteps)
 
 /* ─────────────────────────────────────────
    COMPUTED — existing calendar logic
@@ -294,15 +387,16 @@ async function fetchDashboard() {
   loading.value = true
   try {
     const [empRes, wageRes] = await Promise.all([
-      axios.get('/api/employee/getemployees'),
-      axios.get('/api/wage'),
+      axios.get('/api/employee/getemployees', { signal: abortController.signal }),
+      axios.get('/api/wage', { signal: abortController.signal }),
     ])
 
     totalEmployees.value   = empRes.data?.data?.length ?? 0
     const wages            = wageRes.data?.data ?? []
     deductionsSet.value    = wages.filter((e: any) =>  e.has_deductions).length
     deductionsNotSet.value = wages.filter((e: any) => !e.has_deductions).length
-  } catch {
+   } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return 
     // fail silently
   } finally {
     loading.value = false
@@ -313,19 +407,21 @@ async function fetchCalendar() {
   calLoading.value = true
   try {
     const { data } = await axios.get('/api/calendar/summary', {
-      params: { year: currentYear, month: currentMonth },
+      params: { year: currentYear, month: currentMonth }, signal: abortController.signal,
     })
     holidays.value    = [
       ...(data.data?.regular_holidays ?? []),
       ...(data.data?.special_holidays ?? []),
     ]
     suspensions.value = data.data?.suspensions ?? []
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return
+    // fail silently
   } finally {
     calLoading.value = false
   }
 }
+
 
 /* ─────────────────────────────────────────
    API — NEW: payroll dashboard analytics
@@ -333,10 +429,10 @@ async function fetchCalendar() {
 async function fetchPayrollRuns() {
   periodsLoading.value = true
   try {
-    const { data } = await axios.get('/api/payroll-run')
+    const { data } = await axios.get('/api/payroll-run' , { signal: abortController.signal })
     payrollRuns.value = data.data ?? data ?? []
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return  // navigated away — ignore
   } finally {
     periodsLoading.value = false
   }
@@ -347,11 +443,12 @@ async function fetchSummary() {
   summaryLoading.value = true
   try {
     const { data } = await axios.get<DashboardSummary>('/api/dashboard/summary', {
-      params: { month: selectedPeriod.value.month, year: selectedPeriod.value.year },
+      params: { month: selectedPeriod.value.month, year: selectedPeriod.value.year }, signal: abortController.signal ,
     })
     summary.value = data
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return
+    // fail silently
   } finally {
     summaryLoading.value = false
   }
@@ -361,11 +458,12 @@ async function fetchTrends() {
   trendsLoading.value = true
   try {
     const { data } = await axios.get<TrendPoint[]>('/api/dashboard/trends', {
-      params: { months: trendMonths.value },
+      params: { months: trendMonths.value }, signal: abortController.signal,
     })
     trends.value = data
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return
+    // fail silently
   } finally {
     trendsLoading.value = false
   }
@@ -377,10 +475,12 @@ async function fetchDivisionBreakdown() {
   try {
     const { data } = await axios.get<DivisionBreakdown[]>('/api/dashboard/division-breakdown', {
       params: { month: selectedPeriod.value.month, year: selectedPeriod.value.year },
+      signal: abortController.signal,
     })
     divisionBreakdown.value = data
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return
+    // fail silently
   } finally {
     divisionLoading.value = false
   }
@@ -392,10 +492,12 @@ async function fetchDtrStats() {
   try {
     const { data } = await axios.get<DtrStats>('/api/dashboard/dtr-stats', {
       params: { month: selectedPeriod.value.month, year: selectedPeriod.value.year },
+      signal: abortController.signal,
     })
     dtrStats.value = data
-  } catch {
-    //
+  } catch (err: any) {
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return
+    // fail silently
   } finally {
     dtrLoading.value = false
   }
@@ -411,7 +513,9 @@ function changeTrendRange(months: number) {
   trendMonths.value = months
   fetchTrends()
 }
-
+onBeforeUnmount(() => {
+  abortController.abort()
+})
 /* ─────────────────────────────────────────
    HELPERS
 ───────────────────────────────────────── */
@@ -463,23 +567,31 @@ function formatEventDate(dateStr: string) {
    INIT
 ───────────────────────────────────────── */
 onMounted(async () => {
-  fetchDashboard()
-  fetchCalendar()
-  fetchTrends()
+  // Priority 1 — cheapest, most visually important (stat cards)
+  await fetchDashboard()
 
+  // Priority 2 — period selector must resolve before period-dependent calls
   await fetchPayrollRuns()
   if (periodOptions.value.length) {
-    selectedPeriodKey.value = periodOptions.value[0].value // most recent period with data
-    onPeriodChange()
+    selectedPeriodKey.value = periodOptions.value[0].value
   }
+
+  // Priority 3 — everything else, now safe to run in parallel since
+  // priority 1/2 already painted and the request queue has room
+  await Promise.all([
+    fetchCalendar(),
+    fetchTrends(),
+    selectedPeriodKey.value ? fetchSummary() : Promise.resolve(),
+    selectedPeriodKey.value ? fetchDivisionBreakdown() : Promise.resolve(),
+    selectedPeriodKey.value ? fetchDtrStats() : Promise.resolve(),
+  ])
 })
 </script>
 
 <template>
   <VContainer fluid class="pa-6">
 
-    <!-- ── Page Header ── -->
-    <div class="d-flex align-center justify-space-between flex-wrap gap-4 mb-6">
+     <div class="d-flex align-center justify-space-between flex-wrap gap-4 mb-6">
       <div>
         <h4 class="text-h5 font-weight-bold mb-1">Dashboard</h4>
         <p class="text-body-2 text-medium-emphasis mb-0">
@@ -487,37 +599,53 @@ onMounted(async () => {
         </p>
       </div>
 
-      <!-- NEW: Payroll Period Selector — drives Summary / Division Breakdown / DTR Overview -->
-      <VSelect
-        v-model="selectedPeriodKey"
-        label="Payroll Period"
-        :items="periodOptions"
-        item-title="title"
-        item-value="value"
-        variant="outlined"
-        density="compact"
-        prepend-inner-icon="mdi-calendar-month-outline"
-        :loading="periodsLoading"
-        hide-details
-        style="min-width: 260px; max-width: 320px;"
-        :no-data-text="periodsLoading ? 'Loading...' : 'No payroll periods found'"
-        @update:model-value="onPeriodChange"
-      >
-        <template #item="{ props, item }">
-          <VListItem v-bind="props" :title="item.raw.title">
-            <template #title>
-              <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
-            </template>
-            <template #subtitle>
-              <span class="text-caption text-medium-emphasis">{{ item.raw.subtitle }}</span>
-            </template>
-          </VListItem>
-        </template>
-        <template #selection="{ item }">
-          <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
-        </template>
-      </VSelect>
+      <div class="d-flex align-center gap-3">
+        <!-- <VBadge :model-value="!hasSeenTour" color="error" dot location="top end">
+          <VBtn
+            variant="tonal"
+            color="primary"
+            size="small"
+            prepend-icon="mdi-compass-outline"
+            @click="startTour"
+          >
+            Take a Tour
+          </VBtn>
+        </VBadge> -->
+
+        <!-- NEW: Payroll Period Selector — drives Summary / Division Breakdown / DTR Overview -->
+        <VSelect
+          v-model="selectedPeriodKey"
+          data-tour="period-selector"
+          label="Payroll Period"
+          :items="periodOptions"
+          item-title="title"
+          item-value="value"
+          variant="outlined"
+          density="compact"
+          prepend-inner-icon="mdi-calendar-month-outline"
+          :loading="periodsLoading"
+          hide-details
+          style="min-width: 260px; max-width: 320px;"
+          :no-data-text="periodsLoading ? 'Loading...' : 'No payroll periods found'"
+          @update:model-value="onPeriodChange"
+        >
+          <template #item="{ props, item }">
+            <VListItem v-bind="props" :title="item.raw.title">
+              <template #title>
+                <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
+              </template>
+              <template #subtitle>
+                <span class="text-caption text-medium-emphasis">{{ item.raw.subtitle }}</span>
+              </template>
+            </VListItem>
+          </template>
+          <template #selection="{ item }">
+            <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
+          </template>
+        </VSelect>
+      </div>
     </div>
+    
 
     <!-- NEW: empty state — no payroll data exists for any period yet -->
     <VAlert
@@ -534,6 +662,7 @@ onMounted(async () => {
     <VRow>
 
       <!-- ── Stat Cards ── -->
+       <div data-tour="stat-cards" class="d-flex flex-wrap" style="width: 100%;">
       <VCol cols="12" sm="6" lg="3">
         <VCard variant="tonal" color="primary" rounded="lg" flat>
           <VCardText class="d-flex align-center gap-3 py-4">
@@ -605,10 +734,11 @@ onMounted(async () => {
           </VCardText>
         </VCard>
       </VCol>
+      </div>
 
       <!-- ── NEW: Payroll Trends ── -->
       <VCol cols="12">
-        <VCard rounded="lg" border flat>
+        <VCard data-tour="trends-chart" rounded="lg" border flat>
           <VCardText class="pa-5">
             <div class="d-flex align-center justify-space-between mb-4 flex-wrap gap-3">
               <div>
@@ -647,7 +777,7 @@ onMounted(async () => {
 
       <!-- ── NEW: Division Breakdown ── -->
       <VCol cols="12" md="5">
-        <VCard rounded="lg" border flat style="height: 100%;">
+        <VCard data-tour="division-breakdown" rounded="lg" border flat style="height: 100%;">
           <VCardText class="pa-5">
             <div class="d-flex align-center justify-space-between mb-4">
               <div>
@@ -679,7 +809,7 @@ onMounted(async () => {
       </VCol>
 
       <VCol cols="12" md="7">
-        <VCard rounded="lg" border flat style="height: 100%;">
+        <VCard data-tour="division-cost" rounded="lg" border flat style="height: 100%;">
           <VCardText class="pa-5">
             <div class="d-flex align-center justify-space-between mb-4">
               <div>
@@ -721,7 +851,7 @@ onMounted(async () => {
 
       <!-- ── NEW: DTR Overview ── -->
       <VCol cols="12">
-        <VCard rounded="lg" border flat>
+        <VCard data-tour="dtr-overview" rounded="lg" border flat>
           <VCardText class="pa-5">
             <div class="d-flex align-center justify-space-between mb-4">
               <div>
@@ -799,7 +929,7 @@ onMounted(async () => {
 
       <!-- ── Deductions Progress ── -->
       <VCol cols="12" md="6">
-        <VCard rounded="lg" border flat style="height: 100%;">
+        <VCard data-tour="deductions-progress" rounded="lg" border flat style="height: 100%;">
           <VCardText class="pa-5">
             <div class="d-flex align-center justify-space-between mb-4">
               <div>
@@ -859,7 +989,7 @@ onMounted(async () => {
 
       <!-- ── Upcoming Events ── -->
       <VCol cols="12" md="6">
-        <VCard rounded="lg" border flat style="height: 100%;">
+        <VCard data-tour="upcoming-events" rounded="lg" border flat style="height: 100%;">
           <VCardText class="pa-5">
             <div class="d-flex align-center justify-space-between mb-4">
               <div>
@@ -937,7 +1067,7 @@ onMounted(async () => {
 
       <!-- ── Calendar Preview ── -->
       <VCol cols="12">
-        <VCard rounded="lg" border flat>
+        <VCard data-tour="calendar-preview" rounded="lg" border flat>
           <VCardText class="pa-5">
             <div class="d-flex align-center justify-space-between mb-4">
               <div>
@@ -1027,6 +1157,7 @@ onMounted(async () => {
 
     </VRow>
   </VContainer>
+
 </template>
 
 <style scoped>

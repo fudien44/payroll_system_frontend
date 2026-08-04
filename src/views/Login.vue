@@ -26,9 +26,9 @@ const authBgThemeVariant = computed(() => {
   return theme.current.value.dark ? authBgDark : authBgLight
 })
 
-// Right panel — hero/brand side (stays dark for now, structured for future light swap)
+// Right panel — DOH Deep Navy / Soft Navy Blue brand gradient
 const rightPanelStyle = computed(() => ({
-  background: 'linear-gradient(145deg, #1a3d33 0%, #285c4d 50%, #32725f 100%)',
+  background: 'linear-gradient(145deg, #1F2A45 0%, #263A5C 50%, #365175 100%)',
   blockSize: '38rem',
 }))
 
@@ -77,23 +77,24 @@ const features = [
       max-width="900"
       :width="$vuetify.display.smAndDown ? '500' : 'auto'"
     >
-      <VRow no-gutters>
+      <VRow no-gutters class="position-relative">
         <!-- 👈 Left side — login form -->
-        <VCol
+          <VCol
           cols="12"
           md="6"
+          theme="light"
           class="d-flex flex-column justify-center pa-10 position-relative"
-          style="block-size: 38rem;"
+          style="block-size: 38rem; background-color: #EEFAF6;"
         >
           <!-- Logo + System name -->
-          <div class="d-flex align-center gap-3 mb-8">
+           <div class="d-flex align-center gap-3 mb-8">
             <div
               class="d-flex align-center justify-center"
               style="
                 width: 44px;
                 height: 44px;
                 border-radius: 12px;
-                background: linear-gradient(135deg, #285c4d, #1a3d33);
+                background: linear-gradient(135deg, #0B4BAA, #1F2A45);
                 flex-shrink: 0;
               "
             >
@@ -101,12 +102,12 @@ const features = [
             </div>
             <div>
               <h5
-                class="mb-0 font-weight-bold text-high-emphasis"
-                style="font-size: 1rem; line-height: 1.2;"
+                class="mb-0 font-weight-bold"
+                style="font-size: 25px; line-height: 1.2; color: #333333;"
               >
                 JO Payroll System
               </h5>
-              <span class="text-medium-emphasis" style="font-size: 0.7rem; letter-spacing: 0.4px;">
+              <span style="font-size: 0.7rem; letter-spacing: 0.4px; color: rgba(51, 51, 51, 0.6);">
                 HRMIS PORTAL
               </span>
             </div>
@@ -115,16 +116,16 @@ const features = [
           <!-- Heading -->
           <div class="mb-6">
             <h3
-              class="font-weight-bold mb-1 text-high-emphasis"
-              style="font-size: 1.5rem;"
+              class="font-weight-bold mb-1"
+              style="font-size: 1.5rem; color: #333333;"
             >
               Welcome... 👋
             </h3>
             <p
-              class="mb-0 text-medium-emphasis"
-              style="font-size: 0.82rem;"
+              class="mb-0"
+              style="font-size: 0.82rem; color: rgba(51, 51, 51, 0.65);"
             >
-              Please sign in with your HRMIS account to continue.
+              Please sign in with your Employee Portal account to continue.
             </p>
           </div>
 
@@ -144,12 +145,13 @@ const features = [
           <!-- Form -->
           <VForm
             ref="loginForm"
+            class="doh-login-form"
             @submit.prevent="handleLogin"
           >
             <div class="mb-4">
-              <label
-                class="d-block mb-1 text-medium-emphasis"
-                style="font-size: 0.75rem; letter-spacing: 0.4px;"
+               <label
+                class="d-block mb-1"
+                style="font-size: 0.75rem; letter-spacing: 0.4px; color: rgba(51, 51, 51, 0.65);"
               >
                 USERNAME
               </label>
@@ -161,16 +163,17 @@ const features = [
                 :rules="[v => !!v || 'Username is required']"
                 variant="outlined"
                 density="comfortable"
-                color="#285c4d"
+                color="#0B4BAA"
+                base-color="rgba(51, 51, 51, 0.65)"
                 hide-details="auto"
                 style="border-radius: 10px;"
               />
             </div>
 
             <div class="mb-2">
-              <label
-                class="d-block mb-1 text-medium-emphasis"
-                style="font-size: 0.75rem; letter-spacing: 0.4px;"
+               <label
+                class="d-block mb-1"
+                style="font-size: 0.75rem; letter-spacing: 0.4px; color: rgba(51, 51, 51, 0.65);"
               >
                 PASSWORD
               </label>
@@ -183,7 +186,8 @@ const features = [
                 :rules="[v => !!v || 'Password is required']"
                 variant="outlined"
                 density="comfortable"
-                color="#285c4d"
+                color="#0B4BAA"
+                base-color="rgba(51, 51, 51, 0.65)"
                 hide-details="auto"
                 style="border-radius: 10px;"
                 @click:append-inner="isPasswordVisible = !isPasswordVisible"
@@ -192,12 +196,12 @@ const features = [
 
             <!-- Forgot password -->
             <div class="text-end mb-6">
-              <RouterLink
+              <!-- <RouterLink
                 to="/forgot-password"
-                style="color: #285c4d; font-size: 0.78rem; text-decoration: none;"
+                style="color: #0B4BAA; font-size: 0.78rem; text-decoration: none;"
               >
                 Forgot Password?
-              </RouterLink>
+              </RouterLink> -->
             </div>
 
             <!-- Submit -->
@@ -208,18 +212,39 @@ const features = [
               :loading="isLoading"
               :disabled="isLoading"
               style="
-                background: linear-gradient(135deg, #285c4d, #1a3d33);
+                background: linear-gradient(135deg, #0B4BAA, #1F2A45);
                 color: white;
                 border-radius: 10px;
                 font-weight: 600;
                 letter-spacing: 0.5px;
-                box-shadow: 0 4px 20px rgba(40, 92, 77, 0.5);
+                box-shadow: 0 4px 14px rgba(31, 42, 69, 0.35);
               "
             >
               Sign In
             </VBtn>
           </VForm>
         </VCol>
+
+        <!-- Seam blend between the two panels -->
+        <div
+          class="d-none d-md-block"
+          style="
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 50%;
+            width: 32px;
+            transform: translateX(-50%);
+            background: linear-gradient(
+              to right,
+              rgba(31, 42, 69, 0) 0%,
+              rgba(31, 42, 69, 0.22) 50%,
+              rgba(31, 42, 69, 0) 100%
+            );
+            pointer-events: none;
+            z-index: 2;
+          "
+        />
 
         <!-- 👉 Right side — branded hero panel -->
         <VCol
@@ -309,4 +334,23 @@ const features = [
 
 <style lang="scss">
 @use "@styles/pages/auth.scss";
+
+.doh-login-form {
+  .v-field__prepend-inner .v-icon,
+  .v-field__append-inner .v-icon {
+    opacity: 1;
+    color: rgba(51, 51, 51, 0.65) !important;
+  }
+
+  .v-field__input,
+  .v-field__input input {
+    color: #333333 !important;
+    caret-color: #333333 !important;
+  }
+
+  .v-field__input input::placeholder {
+    color: rgba(51, 51, 51, 0.45) !important;
+    opacity: 1 !important;
+  }
+}
 </style>

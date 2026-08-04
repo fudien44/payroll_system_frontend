@@ -13,6 +13,7 @@ export interface HorizontalMenuItem {
 
 type VerticalMenuHeading = {
   heading: string;
+  superAdminOnly?: boolean;   // NEW — so a heading itself could theoretically be gated too
 };
 
 type VerticalMenuLink = {
@@ -25,6 +26,7 @@ type VerticalMenuLink = {
   target?: string;
   href?: string;
   children?: VerticalMenuItem[];
+  superAdminOnly?: boolean;   // NEW
 };
 
 export type VerticalMenuItem = VerticalMenuHeading | VerticalMenuLink;
