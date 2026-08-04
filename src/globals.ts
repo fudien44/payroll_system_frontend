@@ -17,8 +17,8 @@ export const globals: Globals = {
   // api: 'http://10.10.120.96:8000',
 
   reverb: {
-    host: 'https://dbms.doh12.com',
-    port: 8080,
+    host: 'dbms.doh12.com',
+    port: 443,
     key: 'hu882a2okihcyczisf6y',
     scheme: 'https',
   },
