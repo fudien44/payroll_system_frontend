@@ -1,78 +1,108 @@
 <script setup lang="ts">
-import BaseModal from '@/components/base/BaseModal.vue'
-import axios from '@axios'
+import BaseModal from "@/components/base/BaseModal.vue";
+import axios from "@axios";
+import AssignFlexiEmployeesModal from "./AssignFlexiEmployeesModal.vue";
 
 interface Employee {
-  id:          number
-  full_name:   string
-  position:    string | null
-  division:    string | null
-  section:     string | null
-  emp_type:    string | null
-  emp_status:  number | null
-  is_flexi:    boolean
+  id: number;
+  full_name: string;
+  position: string | null;
+  division: string | null;
+  section: string | null;
+  emp_type: string | null;
+  emp_status: number | null;
+  is_flexi: boolean;
+  current_period_status: "not_saved" | "saved" | "overridden";
+  last_saved: {
+    month: number;
+    year: number;
+    label: string;
+    date: string | null;
+  } | null;
 }
 
 const props = defineProps<{
-  modelValue: boolean
-  employees:  Employee[]
-}>()
+  modelValue: boolean;
+  employees: Employee[];
+}>();
 
 const emit = defineEmits<{
-  'update:modelValue': [value: boolean]
-  'saved': [employees: Employee[], message: string, isError?: boolean]
-}>()
+  "update:modelValue": [value: boolean];
+  saved: [employees: Employee[], message: string, isError?: boolean];
+}>();
 
-const search    = ref('')
-const saving    = ref(false)
-const selectedIds = ref<Set<number>>(new Set())
+const saving = ref(false);
+const assignedIds = ref<Set<number>>(new Set());
+const showAssignModal = ref(false);
 
-watch(() => props.modelValue, (open) => {
-  if (!open) return
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (!open) return;
+    assignedIds.value = new Set(
+      props.employees.filter((e) => e.is_flexi).map((e) => e.id),
+    );
+  },
+);
 
-  selectedIds.value = new Set(props.employees.filter(e => e.is_flexi).map(e => e.id))
-  search.value = ''
-})
+const assignedEmployees = computed(() =>
+  props.employees.filter((e) => assignedIds.value.has(e.id)),
+);
 
-const filteredEmployees = computed(() => {
-  const q = search.value.trim().toLowerCase()
-  if (!q) return props.employees
-  return props.employees.filter(e => e.full_name.toLowerCase().includes(q))
-})
+function removeEmployee(id: number) {
+  const next = new Set(assignedIds.value);
+  next.delete(id);
+  assignedIds.value = next;
+}
 
-// Whether the divider between "selected" and "unselected" groups should
-// show. Cheap array filter — no DOM reordering involved, so this is safe
-// to recompute on every toggle even with 300+ employees.
-const hasMixedSelection = computed(() => {
-  const total = filteredEmployees.value.length
-  if (!total) return false
-  const selectedCount = filteredEmployees.value.filter(e => selectedIds.value.has(e.id)).length
-  return selectedCount > 0 && selectedCount < total
-})
-
-function toggle(id: number) {
-  const next = new Set(selectedIds.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  selectedIds.value = next
+function handleAssign(ids: number[]) {
+  const next = new Set(assignedIds.value);
+  for (const id of ids) next.add(id);
+  assignedIds.value = next;
 }
 
 async function save() {
-  saving.value = true
+  saving.value = true;
   try {
-    const ids = Array.from(selectedIds.value)
-    const { data } = await axios.post('/api/dtr/flexi', { employee_ids: ids })
+    const ids = Array.from(assignedIds.value);
+    const { data } = await axios.post("/api/dtr/flexi", { employee_ids: ids });
 
-    const selectedSet = selectedIds.value
-    const updated = props.employees.map(e => ({ ...e, is_flexi: selectedSet.has(e.id) }))
+    const assignedSet = assignedIds.value;
+    const updated = props.employees.map((e) => ({
+      ...e,
+      is_flexi: assignedSet.has(e.id),
+    }));
 
-    emit('saved', updated, data.message ?? 'Flexi schedule updated.')
-    emit('update:modelValue', false)
+    emit("saved", updated, data.message ?? "Flexi schedule updated.");
+    emit("update:modelValue", false);
   } catch (e: any) {
-    emit('saved', props.employees, e?.response?.data?.message ?? 'Failed to update flexi schedule.', true)
+    emit(
+      "saved",
+      props.employees,
+      e?.response?.data?.message ?? "Failed to update flexi schedule.",
+      true,
+    );
   } finally {
-    saving.value = false
+    saving.value = false;
   }
+}
+const AVATAR_COLORS = [
+  "primary",
+  "teal",
+  "orange",
+  "purple",
+  "pink",
+  "indigo",
+] as const;
+
+function avatarColor(id: number): string {
+  return AVATAR_COLORS[id % AVATAR_COLORS.length];
+}
+
+function initials(fullName: string): string {
+  const [surname, rest] = fullName.split(", ");
+  const first = rest?.trim().charAt(0) ?? "";
+  return `${surname?.charAt(0) ?? ""}${first}`.toUpperCase();
 }
 </script>
 
@@ -86,57 +116,97 @@ async function save() {
     @update:model-value="$emit('update:modelValue', $event)"
     @confirm="save"
   >
-    <p class="text-caption text-medium-emphasis mb-3">
-      Flexi schedule: Mon–Thu 8:00AM–5:30PM, Fri 8:00AM–3:00PM. Select employees below.
+    <p class="text-caption text-medium-emphasis mb-4">
+      Flexi schedule: Mon–Thu 8:00AM–5:30PM, Fri 8:00AM–3:00PM.
     </p>
-    <p class="text-caption font-weight-medium mb-2">
-      {{ selectedIds.size }} selected
-    </p>
-    <VTextField
-      v-model="search"
-      placeholder="Search employee..."
-      prepend-inner-icon="mdi-magnify"
-      variant="outlined"
-      density="compact"
-      clearable
-      hide-details
-      class="mb-3"
-      @click:clear="search = ''"
-    />
-    <div style="max-height: 360px; overflow-y: auto;">
-      <div class="d-flex flex-column">
-        <div
-          v-for="emp in filteredEmployees"
-          :key="emp.id"
-          class="d-flex align-center py-1 px-2 rounded flexi-row"
-          :class="{ 'bg-info-lighten-5': selectedIds.has(emp.id) }"
-          :style="{ order: selectedIds.has(emp.id) ? 0 : 2, cursor: 'pointer' }"
-          @click="toggle(emp.id)"
+
+    <div class="d-flex align-center justify-space-between mb-3">
+      <div class="d-flex align-center">
+        <span
+          class="text-overline text-medium-emphasis"
+          style="letter-spacing: 0.08em"
         >
-          <VCheckbox
-            :model-value="selectedIds.has(emp.id)"
-            density="compact"
-            hide-details
-            readonly
-          />
-          <span class="text-body-2">{{ emp.full_name }}</span>
-          <span class="text-caption text-medium-emphasis ms-2">{{ emp.position ?? '' }}</span>
-        </div>
-        <VDivider v-if="hasMixedSelection" class="my-2" style="order: 1;" />
+          ASSIGNED EMPLOYEES
+        </span>
+        <VChip
+          size="small"
+          color="info"
+          variant="tonal"
+          class="ms-2 font-weight-medium"
+        >
+          {{ assignedIds.size }}
+        </VChip>
       </div>
-      <p v-if="!filteredEmployees.length" class="text-caption text-medium-emphasis text-center py-4">
-        No employees match your search.
+      <VBtn
+        prepend-icon="mdi-account-plus"
+        size="small"
+        color="info"
+        variant="tonal"
+        @click="showAssignModal = true"
+      >
+        Assign Employees
+      </VBtn>
+    </div>
+
+    <div style="max-height: 360px; overflow-y: auto" class="flexi-list">
+      <div
+        v-for="emp in assignedEmployees"
+        :key="emp.id"
+        class="d-flex align-center py-2 px-1 flexi-row"
+      >
+        <VAvatar
+          size="32"
+          :color="avatarColor(emp.id)"
+          variant="tonal"
+          class="me-3"
+        >
+          <span class="text-caption font-weight-bold">{{
+            initials(emp.full_name)
+          }}</span>
+        </VAvatar>
+        <div class="flex-grow-1 text-truncate">
+          <span class="text-body-2">{{ emp.full_name }}</span>
+          <span class="text-caption text-medium-emphasis ms-1">
+            · {{ emp.position ?? "" }}
+          </span>
+        </div>
+        <VBtn
+          icon="mdi-close"
+          size="small"
+          variant="text"
+          color="error"
+          @click="removeEmployee(emp.id)"
+        />
+      </div>
+
+      <p
+        v-if="!assignedEmployees.length"
+        class="text-caption text-medium-emphasis text-center py-6"
+      >
+        No employees assigned yet. Click "Assign Employees" to add some.
       </p>
     </div>
   </BaseModal>
+
+  <AssignFlexiEmployeesModal
+    v-model="showAssignModal"
+    :employees="employees"
+    :assigned-ids="assignedIds"
+    @assign="handleAssign"
+  />
 </template>
 
 <style scoped>
 .flexi-row {
+  border-radius: 8px;
   transition: background-color 0.15s ease;
 }
 
 .flexi-row:hover {
-  background-color: rgba(var(--v-theme-on-surface), 0.06);
+  background-color: rgba(var(--v-theme-on-surface), 0.04);
+}
+
+.flexi-list {
+  scrollbar-gutter: stable;
 }
 </style>

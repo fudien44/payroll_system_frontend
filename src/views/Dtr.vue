@@ -1,413 +1,460 @@
 <script setup lang="ts">
-import BaseAlert from '@/components/base/BaseAlert.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
-import BaseTable from '@/components/base/BaseTable.vue'
-import SetFlexiModal from '@/components/dtr/SetFlexiModal.vue'
-import realtime from '@/plugins/realtime'
-import { useUserStore } from '@/stores/user'
-import axios from '@axios'
-import { onUnmounted } from 'vue'
-import { useTheme } from 'vuetify'
+import BaseAlert from "@/components/base/BaseAlert.vue";
+import BaseModal from "@/components/base/BaseModal.vue";
+import BaseTable from "@/components/base/BaseTable.vue";
+import SetFlexiModal from "@/components/dtr/SetFlexiModal.vue";
+import { useDtrTour } from "@/composable/useDtrTour";
+import realtime from "@/plugins/realtime";
+import { useUserStore } from "@/stores/user";
+import axios from "@axios";
+import { onUnmounted } from "vue";
+import { useTheme } from "vuetify";
 
 /* ─────────────────────────────────────────
    TYPES
 ───────────────────────────────────────── */
 interface DeviceStatus {
-  floor:   string
-  ip:      string
-  port:    number
-  status:  'connected' | 'disconnected' | 'error'
-  message: string
+  floor: string;
+  ip: string;
+  port: number;
+  status: "connected" | "disconnected" | "error";
+  message: string;
 }
 
 interface Employee {
-  id:          number
-  full_name:   string
-  position:    string | null
-  division:    string | null
-  section:     string | null
-  emp_type:    string | null
-  emp_status:  number | null
-  is_flexi:    boolean
-  current_period_status: 'not_saved' | 'saved' | 'overridden'
+  id: number;
+  full_name: string;
+  position: string | null;
+  division: string | null;
+  section: string | null;
+  emp_type: string | null;
+  emp_status: number | null;
+  is_flexi: boolean;
+  current_period_status: "not_saved" | "saved" | "overridden";
   last_saved: {
-    month: number
-    year:  number
-    label: string
-    date:  string | null
-  } | null
+    month: number;
+    year: number;
+    label: string;
+    date: string | null;
+  } | null;
 }
 
 interface CurrentPeriod {
-  month: number
-  year: number
-  label: string
+  month: number;
+  year: number;
+  label: string;
 }
 
 interface AttendanceDay {
-  date:                    number
-  full_date:               string
-  id_in_am:                string | number
-  in_am:                   string
-  id_out_am:               string | number
-  out_am:                  string
-  id_in_pm:                string | number
-  in_pm:                   string
-  id_out_pm:               string | number
-  out_pm:                  string
-  total_hours:             number
-  is_late_am:              boolean
-  late_minutes_am:         number
-  is_late_pm:              boolean
-  late_minutes_pm:         number
-  total_late_minutes:      number
-  is_absent_penalty:       boolean
-  is_absent:               boolean
-  entry_count:             number
-  is_half_day_absent:      boolean
-  undertime_minutes_am:    number
-  undertime_minutes_pm:    number
-  total_undertime_minutes: number
+  date: number;
+  full_date: string;
+  id_in_am: string | number;
+  in_am: string;
+  id_out_am: string | number;
+  out_am: string;
+  id_in_pm: string | number;
+  in_pm: string;
+  id_out_pm: string | number;
+  out_pm: string;
+  total_hours: number;
+  is_late_am: boolean;
+  late_minutes_am: number;
+  is_late_pm: boolean;
+  late_minutes_pm: number;
+  total_late_minutes: number;
+  is_absent_penalty: boolean;
+  is_absent: boolean;
+  entry_count: number;
+  is_half_day_absent: boolean;
+  undertime_minutes_am: number;
+  undertime_minutes_pm: number;
+  total_undertime_minutes: number;
   // Calendar flags
-  is_holiday:              boolean
-  holiday_type:            'regular' | 'special' | null
-  holiday_label:           string | null
-  is_suspension:           boolean
-  suspension_label:        string | null
+  is_holiday: boolean;
+  holiday_type: "regular" | "special" | null;
+  holiday_label: string | null;
+  is_suspension: boolean;
+  suspension_label: string | null;
   // Schedule fields returned by the backend
-  is_rest_day:             boolean
-  schedule_type:           'compressed' | 'standard' | null
-  am_official_time:        string | null
-  pm_official_time:        string | null
-  has_pass_slip:           boolean
-  pass_slips:              PassSlipEntry[]
+  is_rest_day: boolean;
+  is_contract_break: boolean;
+  contract_break_label: string | null;
+  contract_break_resumption: string | null;
+  contract_break_is_custom: boolean | null;
+  schedule_type: "compressed" | "standard" | null;
+  am_official_time: string | null;
+  pm_official_time: string | null;
+  has_pass_slip: boolean;
+  pass_slips: PassSlipEntry[];
 }
 
 interface PassSlipEntry {
-  id:                 number
-  request_time_out:   string
-  actual_time:         string | null
-  estimated_arrival:   string | null
-  reason:              string | null
-  label:               string
-  nature_business:     string | null
-  minutes:             number
+  id: number;
+  request_time_out: string;
+  actual_time: string | null;
+  estimated_arrival: string | null;
+  reason: string | null;
+  label: string;
+  nature_business: string | null;
+  minutes: number;
 }
 
 interface WeeklyAttendanceDay {
-  date:           string
-  schedule_type:  'compressed' | 'standard'
-  required_hours: number
-  rendered_hours: number
-  credited_hours: number
-  is_complete:    boolean
+  date: string;
+  schedule_type: "compressed" | "standard";
+  required_hours: number;
+  rendered_hours: number;
+  credited_hours: number;
+  is_complete: boolean;
 }
 
 interface WeeklyAttendance {
-  week:                   number
-  week_start:             string
-  week_end:               string
-  schedule_type:          'compressed' | 'standard'
-  required_weekly_hours:  number
-  rendered_weekly_hours:  number
-  is_complete_week:       boolean
-  days:                   WeeklyAttendanceDay[]
+  week: number;
+  week_start: string;
+  week_end: string;
+  schedule_type: "compressed" | "standard";
+  required_weekly_hours: number;
+  rendered_weekly_hours: number;
+  is_complete_week: boolean;
+  days: WeeklyAttendanceDay[];
 }
 
 interface DtrData {
-  attendance:              Record<string, AttendanceDay>
-  total_rendered_hours:    number
-  total_late_minutes:      number
-  total_late_hours:        number
-  total_absent_days:       number
-  total_undertime_minutes: number
-  total_undertime_hours:   number
-  regdays:                 number
-  weekends:                number
-  total_holidays:          number
-  total_suspensions:       number
-  monthno:                 number
-  month:                   string
-  year:                    number
-  period_start:            string
-  period_end:              string
-  period_type:              'full_month' | 'dec_first_half' | 'dec_second_half_merged'
-  period_label:            string
-  carried_over_absent_days:         number
-  carried_over_late_minutes:        number
-  carried_over_undertime_minutes:   number
-  current_period_absent_days:       number
-  current_period_late_minutes:      number
-  current_period_undertime_minutes: number
-  weekly_attendance:       WeeklyAttendance[]
+  attendance: Record<string, AttendanceDay>;
+  total_rendered_hours: number;
+  total_late_minutes: number;
+  total_late_hours: number;
+  total_absent_days: number;
+  total_undertime_minutes: number;
+  total_undertime_hours: number;
+  regdays: number;
+  weekends: number;
+  total_holidays: number;
+  total_suspensions: number;
+  monthno: number;
+  month: string;
+  year: number;
+  period_start: string;
+  period_end: string;
+  period_type: "full_month" | "dec_first_half" | "dec_second_half_merged";
+  period_label: string;
+  carried_over_absent_days: number;
+  carried_over_late_minutes: number;
+  carried_over_undertime_minutes: number;
+  current_period_absent_days: number;
+  current_period_late_minutes: number;
+  current_period_undertime_minutes: number;
+  weekly_attendance: WeeklyAttendance[];
 }
 
 // Enriched row with display-only computed fields
 interface AttendanceRow extends AttendanceDay {
-  day:          number
-  fullDate:     string
-  monthShort:   string
-  dayName:      string
-  isWeekend:    boolean
-  isSaturday:   boolean
-  isSunday:     boolean
-  isFriday:     boolean
+  day: number;
+  fullDate: string;
+  monthShort: string;
+  dayName: string;
+  isWeekend: boolean;
+  isSaturday: boolean;
+  isSunday: boolean;
+  isFriday: boolean;
 }
 
 // Calendar-only preview shown in the Save DTR confirmation dialog
 interface PeriodSummary {
-  regdays:           number
-  total_holidays:    number
-  total_suspensions: number
-  already_saved:     boolean
+  regdays: number;
+  total_holidays: number;
+  total_suspensions: number;
+  already_saved: boolean;
 }
 
-type AlertType = 'success' | 'error' | 'warning' | 'info'
+type AlertType = "success" | "error" | "warning" | "info";
 
 /* ─────────────────────────────────────────
    CONSTANTS
 ───────────────────────────────────────── */
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const MONTH_SHORT_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTH_SHORT_NAMES = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 
 const TABLE_HEADERS = [
-  { title: 'Employee', key: 'full_name', sortable: true                            },
-  { title: 'Position', key: 'position',  sortable: true                            },
-  { title: 'Division', key: 'division',  sortable: true                            },
-  { title: 'Section',  key: 'section',   sortable: true                            },
-  { title: 'DTR Status',  key: 'current_period_status',   sortable: true           },
-  { title: 'Actions',  key: 'actions',   sortable: false, align: 'center' as const },
-]
+  { title: "Employee", key: "full_name", sortable: true },
+  { title: "Position", key: "position", sortable: true },
+  { title: "Division", key: "division", sortable: true },
+  { title: "Section", key: "section", sortable: true },
+  { title: "DTR Status", key: "current_period_status", sortable: true },
+  {
+    title: "Actions",
+    key: "actions",
+    sortable: false,
+    align: "center" as const,
+  },
+];
 
 const MONTH_ITEMS = [
-  { title: 'January',   value: 1  }, { title: 'February',  value: 2  },
-  { title: 'March',     value: 3  }, { title: 'April',     value: 4  },
-  { title: 'May',       value: 5  }, { title: 'June',      value: 6  },
-  { title: 'July',      value: 7  }, { title: 'August',    value: 8  },
-  { title: 'September', value: 9  }, { title: 'October',   value: 10 },
-  { title: 'November',  value: 11 }, { title: 'December',  value: 12 },
-]
+  { title: "January", value: 1 },
+  { title: "February", value: 2 },
+  { title: "March", value: 3 },
+  { title: "April", value: 4 },
+  { title: "May", value: 5 },
+  { title: "June", value: 6 },
+  { title: "July", value: 7 },
+  { title: "August", value: 8 },
+  { title: "September", value: 9 },
+  { title: "October", value: 10 },
+  { title: "November", value: 11 },
+  { title: "December", value: 12 },
+];
 
-const currentYear = new Date().getFullYear()
-const YEAR_ITEMS  = Array.from({ length: 5 }, (_, i) => currentYear - i)
+const currentYear = new Date().getFullYear();
+const YEAR_ITEMS = Array.from({ length: 5 }, (_, i) => currentYear - i);
 
 /* ─────────────────────────────────────────
    STATE
 ───────────────────────────────────────── */
-const employees    = ref<Employee[]>([])
-const deviceStatus = ref<DeviceStatus[]>([])
-const loading      = ref(false)
-const currentPeriod = ref<CurrentPeriod | null>(null)
+const employees = ref<Employee[]>([]);
+const deviceStatus = ref<DeviceStatus[]>([]);
+const loading = ref(false);
+const currentPeriod = ref<CurrentPeriod | null>(null);
 
-const modalOpen     = ref(false)
-const modalLoading  = ref(false)
-const selectedEmp   = ref<Employee | null>(null)
-const selectedMonth = ref<number>(new Date().getMonth() + 1)
-const selectedYear  = ref<number>(currentYear)
-const dtrData       = ref<DtrData | null>(null)
+const modalOpen = ref(false);
+const modalLoading = ref(false);
+const selectedEmp = ref<Employee | null>(null);
+const selectedMonth = ref<number>(new Date().getMonth() + 1);
+const selectedYear = ref<number>(currentYear);
+const dtrData = ref<DtrData | null>(null);
 
 // ── Save DTR state ──────────────────────────────────────────────────
-const savingDtr        = ref(false)
-const confirmSaveOpen  = ref(false)
-const confirmOverrideOpen = ref(false)
-const savingElapsedSecs = ref(0)
-let   savingTimer: ReturnType<typeof setInterval> | null = null
+const savingDtr = ref(false);
+const confirmSaveOpen = ref(false);
+const confirmOverrideOpen = ref(false);
+const savingElapsedSecs = ref(0);
+let savingTimer: ReturnType<typeof setInterval> | null = null;
 
 // ── Cooldown after a successful save/override ───────────────────────
-const DTR_COOLDOWN_MS = 3 * 60_000 //3 minutes
-const DTR_COOLDOWN_STORAGE_KEY = 'dtr_save_cooldown_until'
+const DTR_COOLDOWN_MS = 3 * 60_000; //3 minutes
+const DTR_COOLDOWN_STORAGE_KEY = "dtr_save_cooldown_until";
 
-const cooldownActive = ref(false)
-const cooldownRemainingSecs = ref(0)
-let cooldownTimer: ReturnType<typeof setInterval> | null = null
+const cooldownActive = ref(false);
+const cooldownRemainingSecs = ref(0);
+let cooldownTimer: ReturnType<typeof setInterval> | null = null;
 
 function tickCooldown() {
-  const until = Number(localStorage.getItem(DTR_COOLDOWN_STORAGE_KEY) || 0)
-  const remaining = until - Date.now()
+  const until = Number(localStorage.getItem(DTR_COOLDOWN_STORAGE_KEY) || 0);
+  const remaining = until - Date.now();
 
   if (remaining <= 0) {
-    cooldownActive.value = false
-    cooldownRemainingSecs.value = 0
-    if (cooldownTimer) clearInterval(cooldownTimer)
-    cooldownTimer = null
-    localStorage.removeItem(DTR_COOLDOWN_STORAGE_KEY)
-    return
+    cooldownActive.value = false;
+    cooldownRemainingSecs.value = 0;
+    if (cooldownTimer) clearInterval(cooldownTimer);
+    cooldownTimer = null;
+    localStorage.removeItem(DTR_COOLDOWN_STORAGE_KEY);
+    return;
   }
 
-  cooldownActive.value = true
-  cooldownRemainingSecs.value = Math.ceil(remaining / 1000)
+  cooldownActive.value = true;
+  cooldownRemainingSecs.value = Math.ceil(remaining / 1000);
 }
 
 function startCooldown() {
-  localStorage.setItem(DTR_COOLDOWN_STORAGE_KEY, String(Date.now() + DTR_COOLDOWN_MS))
-  if (cooldownTimer) clearInterval(cooldownTimer)
-  tickCooldown()
-  cooldownTimer = setInterval(tickCooldown, 1000)
+  localStorage.setItem(
+    DTR_COOLDOWN_STORAGE_KEY,
+    String(Date.now() + DTR_COOLDOWN_MS),
+  );
+  if (cooldownTimer) clearInterval(cooldownTimer);
+  tickCooldown();
+  cooldownTimer = setInterval(tickCooldown, 1000);
 }
 
 function resumeCooldownIfAny() {
-  const until = Number(localStorage.getItem(DTR_COOLDOWN_STORAGE_KEY) || 0)
+  const until = Number(localStorage.getItem(DTR_COOLDOWN_STORAGE_KEY) || 0);
   if (until > Date.now()) {
-    tickCooldown()
-    cooldownTimer = setInterval(tickCooldown, 1000)
+    tickCooldown();
+    cooldownTimer = setInterval(tickCooldown, 1000);
   }
 }
 
 // ── Set Flexi state ─────────────────────────────────────────────────
-const flexiModalOpen   = ref(false)
+const flexiModalOpen = ref(false);
 
-function handleFlexiSaved(updated: Employee[], message: string, isError = false) {
-  employees.value = updated
-  alertType.value = isError ? 'error' : 'success'
-  alertMessage.value = message
-  alertVisible.value = true
+function handleFlexiSaved(
+  updated: Employee[],
+  message: string,
+  isError = false,
+) {
+  employees.value = updated;
+  alertType.value = isError ? "error" : "success";
+  alertMessage.value = message;
+  alertVisible.value = true;
 }
 
 // ── Save DTR progress (live via Reverb broadcast) ────────────────────
-const saveProgressDone  = ref(0)
-const saveProgressTotal = ref(0)
+const saveProgressDone = ref(0);
+const saveProgressTotal = ref(0);
 
 // ── Timeout fallback - Reverb can silently die ────────────────────
-const STALE_TIMEOUT_MS    = 30_000       // 30s of silence = assume stalled
-const HARD_CAP_TIMEOUT_MS = 5 * 60_000  // 5 min absolute ceiling
-let staleTimer: ReturnType<typeof setTimeout> | null = null
-let hardCapTimer: ReturnType<typeof setTimeout> | null = null
-const savingTimedOut = ref(false)
+const STALE_TIMEOUT_MS = 30_000; // 30s of silence = assume stalled
+const HARD_CAP_TIMEOUT_MS = 5 * 60_000; // 5 min absolute ceiling
+let staleTimer: ReturnType<typeof setTimeout> | null = null;
+let hardCapTimer: ReturnType<typeof setTimeout> | null = null;
+const savingTimedOut = ref(false);
 
 function clearSavingTimers() {
-  if (staleTimer)   clearTimeout(staleTimer)
-  if (hardCapTimer) clearTimeout(hardCapTimer)
-  staleTimer = null
-  hardCapTimer = null
+  if (staleTimer) clearTimeout(staleTimer);
+  if (hardCapTimer) clearTimeout(hardCapTimer);
+  staleTimer = null;
+  hardCapTimer = null;
 }
 
 function armStaleTimer() {
-  if (staleTimer) clearTimeout(staleTimer)
+  if (staleTimer) clearTimeout(staleTimer);
   staleTimer = setTimeout(() => {
-    savingTimedOut.value = true
+    savingTimedOut.value = true;
     showAlert(
-      'warning',
-      'Lost contact with the DTR job — it may still be running in the background. ' +
-      'Refresh in a bit to confirm, or try again.',
-    )
-    finishSavingDtr()
-  }, STALE_TIMEOUT_MS)
+      "warning",
+      "Lost contact with the DTR job — it may still be running in the background. " +
+        "Refresh in a bit to confirm, or try again.",
+    );
+    finishSavingDtr();
+  }, STALE_TIMEOUT_MS);
 }
 
 // Period selector inside Save DTR dialog — defaults to preceding month
 function getDefaultSaveDtrPeriod() {
-  const now = new Date()
+  const now = new Date();
   return {
     month: now.getMonth() === 0 ? 12 : now.getMonth(),
-    year:  now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear(),
-  }
+    year: now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear(),
+  };
 }
 
-const defaultSaveDtrPeriod = getDefaultSaveDtrPeriod()
-const saveDtrMonth = ref<number>(defaultSaveDtrPeriod.month)
-const saveDtrYear  = ref<number>(defaultSaveDtrPeriod.year)
+const defaultSaveDtrPeriod = getDefaultSaveDtrPeriod();
+const saveDtrMonth = ref<number>(defaultSaveDtrPeriod.month);
+const saveDtrYear = ref<number>(defaultSaveDtrPeriod.year);
 
 // ── Period calendar preview (working days / holidays / suspensions) ──
-const periodSummary        = ref<PeriodSummary | null>(null)
-const periodSummaryLoading = ref(false)
+const periodSummary = ref<PeriodSummary | null>(null);
+const periodSummaryLoading = ref(false);
 
 // Fetch the working days / holidays / suspensions preview whenever the
 // Save DTR dialog is opened, and again whenever the month/year selectors
 // inside the dialog change while it's open.
 watch(confirmSaveOpen, (open) => {
-  if (open) fetchPeriodSummary()
-})
+  if (open) fetchPeriodSummary();
+});
 
 watch([saveDtrMonth, saveDtrYear], () => {
-  if (confirmSaveOpen.value) fetchPeriodSummary()
-})
+  if (confirmSaveOpen.value) fetchPeriodSummary();
+});
 
-const isOverrideMode = computed(() => periodSummary.value?.already_saved === true)
+const isOverrideMode = computed(
+  () => periodSummary.value?.already_saved === true,
+);
 const saveDialogIcon = computed(() => {
-  if (!isMonthComplete.value) return 'mdi-calendar-alert'
-  return isOverrideMode.value ? 'mdi-restore-alert' : 'mdi-content-save-outline'
-})
+  if (!isMonthComplete.value) return "mdi-calendar-alert";
+  return isOverrideMode.value
+    ? "mdi-restore-alert"
+    : "mdi-content-save-outline";
+});
 const saveDialogColor = computed(() => {
-  if (!isMonthComplete.value) return 'error'
-  return isOverrideMode.value ? 'warning' : 'success'
-})
+  if (!isMonthComplete.value) return "error";
+  return isOverrideMode.value ? "warning" : "success";
+});
 const saveDialogTitle = computed(() => {
-  if (!isMonthComplete.value) return 'Period Not Complete'
-  return isOverrideMode.value ? 'Override DTR' : 'Save DTR'
-})
+  if (!isMonthComplete.value) return "Period Not Complete";
+  return isOverrideMode.value ? "Override DTR" : "Save DTR";
+});
 
-const alertVisible = ref(false)
-const alertMessage = ref('')
-const alertType    = ref<AlertType>('success')
-const userStore    = useUserStore()
-const realtimeConnectionError = ref(false)
+const alertVisible = ref(false);
+const alertMessage = ref("");
+const alertType = ref<AlertType>("success");
+const userStore = useUserStore();
+const realtimeConnectionError = ref(false);
+const { startTour, maybeAutoStartTour } = useDtrTour();
 
 /* ─────────────────────────────────────────
    COMPUTED
 ───────────────────────────────────────── */
-const connectedDevices    = computed(() => deviceStatus.value.filter(d => d.status === 'connected').length)
-const disconnectedDevices = computed(() => deviceStatus.value.filter(d => d.status !== 'connected').length)
+const connectedDevices = computed(
+  () => deviceStatus.value.filter((d) => d.status === "connected").length,
+);
+const disconnectedDevices = computed(
+  () => deviceStatus.value.filter((d) => d.status !== "connected").length,
+);
 
-const modalWidth = computed(() => dtrData.value ? '1150' : '520')
+const modalWidth = computed(() => (dtrData.value ? "1150" : "520"));
 
 const modalTitle = computed(() => {
-  if (!selectedEmp.value) return 'DTR'
-  if (!dtrData.value)     return `DTR — ${selectedEmp.value.full_name}`
-  return `DTR — ${selectedEmp.value.full_name} — ${dtrData.value.period_label}`
-})
+  if (!selectedEmp.value) return "DTR";
+  if (!dtrData.value) return `DTR — ${selectedEmp.value.full_name}`;
+  return `DTR — ${selectedEmp.value.full_name} — ${dtrData.value.period_label}`;
+});
 
 const isMonthComplete = computed(() => {
-  const lastDay = new Date(saveDtrYear.value, saveDtrMonth.value, 0) // day 0 = last day of prev month
-  const today   = new Date()
-  today.setHours(0, 0, 0, 0)
-  return lastDay < today
-})
+  const lastDay = new Date(saveDtrYear.value, saveDtrMonth.value, 0); // day 0 = last day of prev month
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return lastDay < today;
+});
 
-const canSaveDtr = computed(() => !savingDtr.value && !cooldownActive.value && isMonthComplete.value)
+const canSaveDtr = computed(
+  () => !savingDtr.value && !cooldownActive.value && isMonthComplete.value,
+);
 
 const cooldownLabel = computed(() => {
-  const m = Math.floor(cooldownRemainingSecs.value / 60)
-  const s = cooldownRemainingSecs.value % 60
- return `Available again in ${m}:${String(s).padStart(2, '0')}`
-})
+  const m = Math.floor(cooldownRemainingSecs.value / 60);
+  const s = cooldownRemainingSecs.value % 60;
+  return `Available again in ${m}:${String(s).padStart(2, "0")}`;
+});
 
 const saveDtrDisabledReason = computed(() => {
-  if (savingDtr.value) return null
+  if (savingDtr.value) return null;
   if (!isMonthComplete.value) {
-    return `${saveDtrLabel.value} is not yet complete — DTR can only be saved after the month ends.`
+    return `${saveDtrLabel.value} is not yet complete — DTR can only be saved after the month ends.`;
   }
   if (cooldownActive.value) {
-    return `Save DTR is on cooldown. ${cooldownLabel.value}.`
+    return `Save DTR is on cooldown. ${cooldownLabel.value}.`;
   }
-  return null
-})
+  return null;
+});
 
 const saveDtrLabel = computed(() => {
-  const m = MONTH_ITEMS.find(x => x.value === saveDtrMonth.value)
-  return `${m?.title ?? ''} ${saveDtrYear.value}`
-})
+  const m = MONTH_ITEMS.find((x) => x.value === saveDtrMonth.value);
+  return `${m?.title ?? ""} ${saveDtrYear.value}`;
+});
 
 const savingElapsedLabel = computed(() => {
-  const s = savingElapsedSecs.value
-  if (s < 60) return `${s}s elapsed`
-  const m = Math.floor(s / 60)
-  const r = s % 60
-  return `${m}m ${r}s elapsed`
-})
+  const s = savingElapsedSecs.value;
+  if (s < 60) return `${s}s elapsed`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m ${r}s elapsed`;
+});
 
 const saveProgressLabel = computed(() => {
-  const verb = isOverrideMode.value ? 'Overriding' : 'Saving'
-  if (saveProgressTotal.value === 0) return `${verb}...`
-  return `${verb} DTR ${saveProgressDone.value} out of ${saveProgressTotal.value}`
-})
+  const verb = isOverrideMode.value ? "Overriding" : "Saving";
+  if (saveProgressTotal.value === 0) return `${verb}...`;
+  return `${verb} DTR ${saveProgressDone.value} out of ${saveProgressTotal.value}`;
+});
 
 const saveProgressPercent = computed(() => {
-  if (saveProgressTotal.value === 0) return 0
-  return Math.round((saveProgressDone.value / saveProgressTotal.value) * 100)
-})
+  if (saveProgressTotal.value === 0) return 0;
+  return Math.round((saveProgressDone.value / saveProgressTotal.value) * 100);
+});
 
 const attendanceRows = computed<AttendanceRow[]>(() => {
-  if (!dtrData.value) return []
+  if (!dtrData.value) return [];
 
   return Object.entries(dtrData.value.attendance)
     .map(([dateKey, data]) => {
@@ -415,303 +462,410 @@ const attendanceRows = computed<AttendanceRow[]>(() => {
       // number — the backend keys attendance this way so a period spanning
       // two months/years (the December merged period) can't collide two
       // different days that happen to share the same day-of-month.
-      const [y, m, d] = dateKey.split('-').map(Number)
-      const date      = new Date(y, m - 1, d)
-      const dayOfWeek = date.getDay()
+      const [y, m, d] = dateKey.split("-").map(Number);
+      const date = new Date(y, m - 1, d);
+      const dayOfWeek = date.getDay();
 
       return {
         ...data,
-        day:        data.date,   // day-of-month, for display
-        fullDate:   dateKey,     // real date — sort key / row key / grouping
+        day: data.date, // day-of-month, for display
+        fullDate: dateKey, // real date — sort key / row key / grouping
         monthShort: MONTH_SHORT_NAMES[m - 1],
-        dayName:    DAY_NAMES[dayOfWeek],
-        isWeekend:  dayOfWeek === 0 || dayOfWeek === 6,
+        dayName: DAY_NAMES[dayOfWeek],
+        isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
         isSaturday: dayOfWeek === 6,
-        isSunday:   dayOfWeek === 0,
-        isFriday:   dayOfWeek === 5,
-      }
+        isSunday: dayOfWeek === 0,
+        isFriday: dayOfWeek === 5,
+      };
     })
-    .sort((a, b) => a.fullDate.localeCompare(b.fullDate)) // ISO format sorts chronologically as a plain string
-})
+    .sort((a, b) => a.fullDate.localeCompare(b.fullDate)); // ISO format sorts chronologically as a plain string
+});
 
-const deviceChipColor = (status: DeviceStatus['status']) => ({
-  connected:    'success',
-  disconnected: 'warning',
-  error:        'error',
-}[status] ?? 'default')
+interface ContractBreakGroup {
+  type: "contract-break";
+  key: string;
+  startDate: string;
+  endDate: string;
+  dayCount: number;
+  label: string | null;
+  resumption: string | null;
+  isCustom: boolean | null;
+}
+type RowItem = { type: "day"; row: AttendanceRow } | ContractBreakGroup;
 
-const deviceChipIcon = (status: DeviceStatus['status']) => ({
-  connected:    'mdi-check-circle-outline',
-  disconnected: 'mdi-alert-circle-outline',
-  error:        'mdi-close-circle-outline',
-}[status] ?? 'mdi-help-circle-outline')
+const groupedRows = computed<RowItem[]>(() => {
+  const rows = attendanceRows.value;
+  const result: RowItem[] = [];
+  let i = 0;
 
-const theme = useTheme()
+  while (i < rows.length) {
+    const row = rows[i];
+
+    if (row.is_contract_break) {
+      const groupRows: AttendanceRow[] = [row];
+      let j = i + 1;
+      while (
+        j < rows.length &&
+        rows[j].is_contract_break &&
+        rows[j].contract_break_resumption === row.contract_break_resumption &&
+        rows[j].contract_break_label === row.contract_break_label
+      ) {
+        groupRows.push(rows[j]);
+        j++;
+      }
+
+      const first = groupRows[0];
+      const last = groupRows[groupRows.length - 1];
+      const weekdayCount = groupRows.filter(
+        (r) => !r.isSaturday && !r.isSunday,
+      ).length;
+      result.push({
+        type: "contract-break",
+        key: `cb-${first.fullDate}`,
+        startDate: first.fullDate,
+        endDate: last.fullDate,
+        dayCount: weekdayCount,
+        label: first.contract_break_label,
+        resumption: first.contract_break_resumption,
+        isCustom: first.contract_break_is_custom,
+      });
+      i = j;
+    } else {
+      result.push({ type: "day", row });
+      i++;
+    }
+  }
+
+  return result;
+});
+
+function formatDateRange(startKey: string, endKey: string): string {
+  const [sy, sm, sd] = startKey.split("-").map(Number);
+  const [ey, em, ed] = endKey.split("-").map(Number);
+  const startLabel = `${MONTH_SHORT_NAMES[sm - 1]} ${sd}`;
+
+  if (startKey === endKey) return `${startLabel}, ${sy}`;
+
+  const sameMonthYear = sm === em && sy === ey;
+  const endLabel = sameMonthYear
+    ? `${ed}`
+    : `${MONTH_SHORT_NAMES[em - 1]} ${ed}`;
+  return `${startLabel}–${endLabel}, ${ey}`;
+}
+
+const deviceChipColor = (status: DeviceStatus["status"]) =>
+  ({
+    connected: "success",
+    disconnected: "warning",
+    error: "error",
+  })[status] ?? "default";
+
+const deviceChipIcon = (status: DeviceStatus["status"]) =>
+  ({
+    connected: "mdi-check-circle-outline",
+    disconnected: "mdi-alert-circle-outline",
+    error: "mdi-close-circle-outline",
+  })[status] ?? "mdi-help-circle-outline";
+
+const theme = useTheme();
 
 const chipColor = computed(() =>
-  theme.global.current.value.dark ? 'cyan-accent-2' : 'cyan-darken-3'
-)
+  theme.global.current.value.dark ? "cyan-accent-2" : "cyan-darken-3",
+);
 
 /* ─────────────────────────────────────────
    HELPERS
 ───────────────────────────────────────── */
 function showAlert(type: AlertType, message: string) {
-  alertType.value    = type
-  alertMessage.value = message
-  alertVisible.value = true
+  alertType.value = type;
+  alertMessage.value = message;
+  alertVisible.value = true;
 }
 
-function statusChipColor(status: Employee['current_period_status']): string {
-  return { not_saved: 'default', saved: 'success', overridden: 'warning' }[status]
+function statusChipColor(status: Employee["current_period_status"]): string {
+  return { not_saved: "default", saved: "success", overridden: "warning" }[
+    status
+  ];
 }
 
-function statusChipIcon(status: Employee['current_period_status']): string {
+function statusChipIcon(status: Employee["current_period_status"]): string {
   return {
-    not_saved: 'mdi-clock-outline',
-    saved: 'mdi-check-circle-outline',
-    overridden: 'mdi-restore-alert'
-  }[status]
+    not_saved: "mdi-clock-outline",
+    saved: "mdi-check-circle-outline",
+    overridden: "mdi-restore-alert",
+  }[status];
 }
 
-function statusChipLabel(status: Employee['current_period_status']): string {
-  return { not_saved: 'Not Saved', saved: 'Saved', overridden: 'Overridden' }[status]
+function statusChipLabel(status: Employee["current_period_status"]): string {
+  return { not_saved: "Not Saved", saved: "Saved", overridden: "Overridden" }[
+    status
+  ];
 }
 
 function formatLastSavedDate(dateStr: string | null): string {
-  if (!dateStr) return ''
-  return new Date(dateStr).toLocaleDateString(undefined, {year: 'numeric', month: 'short', day: 'numeric'})
+  if (!dateStr) return "";
+  return new Date(dateStr).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 
-const AVATAR_COLORS = ['primary', 'teal', 'orange', 'purple', 'pink', 'indigo'] as const
+const AVATAR_COLORS = [
+  "primary",
+  "teal",
+  "orange",
+  "purple",
+  "pink",
+  "indigo",
+] as const;
 
 function avatarColor(id: number): string {
-  return AVATAR_COLORS[id % AVATAR_COLORS.length]
+  return AVATAR_COLORS[id % AVATAR_COLORS.length];
 }
 
 function initials(fullName: string): string {
-  const [surname, rest] = fullName.split(', ')
-  const first = rest?.trim().charAt(0) ?? ''
-  return `${surname?.charAt(0) ?? ''}${first}`.toUpperCase()
+  const [surname, rest] = fullName.split(", ");
+  const first = rest?.trim().charAt(0) ?? "";
+  return `${surname?.charAt(0) ?? ""}${first}`.toUpperCase();
 }
 
 function getRowClass(row: AttendanceRow): string {
-  if (row.is_holiday)                   return 'dtr-row--holiday'
-  if (row.is_suspension)                return 'dtr-row--suspension'
-  if (row.is_rest_day)                  return 'dtr-row--fri-cmp'
-  if (row.isSunday)                     return 'dtr-row--sunday'
-  if (row.isSaturday)                   return 'dtr-row--saturday'
-  if (row.is_absent)                    return 'dtr-row--absent'
-  if (row.is_half_day_absent)           return 'dtr-row--halfday'
-  if (row.is_late_am || row.is_late_pm) return 'dtr-row--late'
-  if (row.total_undertime_minutes > 0)  return 'dtr-row--undertime'
-  return ''
+  if (row.is_contract_break) return "dtr-row--contract-break";
+  if (row.is_holiday) return "dtr-row--holiday";
+  if (row.is_suspension) return "dtr-row--suspension";
+  if (row.is_rest_day) return "dtr-row--fri-cmp";
+  if (row.isSunday) return "dtr-row--sunday";
+  if (row.isSaturday) return "dtr-row--saturday";
+  if (row.is_absent) return "dtr-row--absent";
+  if (row.is_half_day_absent) return "dtr-row--halfday";
+  if (row.is_late_am || row.is_late_pm) return "dtr-row--late";
+  if (row.total_undertime_minutes > 0) return "dtr-row--undertime";
+  return "";
 }
 
 /* ─────────────────────────────────────────
    API
 ───────────────────────────────────────── */
 async function fetchData() {
-  loading.value = true
+  loading.value = true;
   try {
-    const { data } = await axios.get('/api/dtr')
-    employees.value    = data.data.employees     ?? []
-    deviceStatus.value = data.data.device_status ?? []
-    currentPeriod.value = data.data.current_period ?? null
+    const { data } = await axios.get("/api/dtr");
+    employees.value = data.data.employees ?? [];
+    deviceStatus.value = data.data.device_status ?? [];
+    currentPeriod.value = data.data.current_period ?? null;
 
     // Re-sync the Save DTR period in case the dialog's selectors were
     // changed to a future/incomplete month and left that way
-    const defaultPeriod = getDefaultSaveDtrPeriod()
-    saveDtrMonth.value = defaultPeriod.month
-    saveDtrYear.value  = defaultPeriod.year
+    const defaultPeriod = getDefaultSaveDtrPeriod();
+    saveDtrMonth.value = defaultPeriod.month;
+    saveDtrYear.value = defaultPeriod.year;
   } catch {
-    showAlert('error', 'Failed to load DTR data.')
+    showAlert("error", "Failed to load DTR data.");
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function fetchDtr() {
-  if (!selectedEmp.value) return
-  modalLoading.value = true
-  dtrData.value      = null
+  if (!selectedEmp.value) return;
+  modalLoading.value = true;
+  dtrData.value = null;
 
   try {
     const { data } = await axios.get(
       `/api/dtr/${selectedEmp.value.id}/${selectedMonth.value}/${selectedYear.value}`,
-    )
-    dtrData.value = data
+    );
+    dtrData.value = data;
   } catch {
-    showAlert('error', 'Failed to load DTR records.')
+    showAlert("error", "Failed to load DTR records.");
   } finally {
-    modalLoading.value = false
+    modalLoading.value = false;
   }
 }
 
 async function fetchPeriodSummary() {
-  periodSummaryLoading.value = true
-  periodSummary.value        = null
+  periodSummaryLoading.value = true;
+  periodSummary.value = null;
 
   try {
     const { data } = await axios.get(
       `/api/dtr/period-summary/${saveDtrMonth.value}/${saveDtrYear.value}`,
-    )
+    );
     periodSummary.value = {
       ...data.data,
       already_saved: data.already_saved,
-    }
+    };
   } catch {
     // Non-critical preview — fail silently, dialog still works without it
-    periodSummary.value = null
+    periodSummary.value = null;
   } finally {
-    periodSummaryLoading.value = false
+    periodSummaryLoading.value = false;
   }
 }
 
 // ── Save DTR for all JO employees (preceding month) ────────────────
 function finishSavingDtr() {
-  clearSavingTimers()
-  if (savingTimer) clearInterval(savingTimer)
-  savingTimer              = null
-  savingDtr.value          = false
-  confirmSaveOpen.value    = false
-  savingElapsedSecs.value  = 0
-  saveProgressDone.value   = 0
-  saveProgressTotal.value  = 0
-  periodSummary.value      = null
+  clearSavingTimers();
+  if (savingTimer) clearInterval(savingTimer);
+  savingTimer = null;
+  savingDtr.value = false;
+  confirmSaveOpen.value = false;
+  savingElapsedSecs.value = 0;
+  saveProgressDone.value = 0;
+  saveProgressTotal.value = 0;
+  periodSummary.value = null;
 }
 
 // Shared by saveDtr() and overrideDtr() — both queue a job for the same
 // month/year payload and drive the same progress UI; only the target
 // endpoint and the 422 fallback message differ.
 async function runDtrJob(endpoint: string, incompleteMonthMessage: string) {
-  if (savingDtr.value) return
-  savingDtr.value         = true
-  savingTimedOut.value    = false
-  savingElapsedSecs.value = 0
-  savingTimer = setInterval(() => { savingElapsedSecs.value++ }, 1000)
+  if (savingDtr.value) return;
+  savingDtr.value = true;
+  savingTimedOut.value = false;
+  savingElapsedSecs.value = 0;
+  savingTimer = setInterval(() => {
+    savingElapsedSecs.value++;
+  }, 1000);
 
-  saveProgressDone.value  = 0
-  saveProgressTotal.value = 0
-  
-  armStaleTimer()
+  saveProgressDone.value = 0;
+  saveProgressTotal.value = 0;
+
+  armStaleTimer();
   hardCapTimer = setTimeout(() => {
-    savingTimedOut.value = true
+    savingTimedOut.value = true;
     showAlert(
-      'warning',
-      'DTR job is taking much longer than expected. It may still finish in the ' +
-      'background — check back shortly.',
-    )
-    finishSavingDtr()
-  }, HARD_CAP_TIMEOUT_MS)
+      "warning",
+      "DTR job is taking much longer than expected. It may still finish in the " +
+        "background — check back shortly.",
+    );
+    finishSavingDtr();
+  }, HARD_CAP_TIMEOUT_MS);
 
   try {
     await axios.post(endpoint, {
       month: saveDtrMonth.value,
-      year:  saveDtrYear.value,
-    })
+      year: saveDtrYear.value,
+    });
   } catch (err: any) {
-    const status  = err?.response?.status
-    const message = err?.response?.data?.message
+    const status = err?.response?.status;
+    const message = err?.response?.data?.message;
 
     if (status === 409) {
-      showAlert('warning', message ?? `DTR for ${saveDtrLabel.value} has already been saved.`)
+      showAlert(
+        "warning",
+        message ?? `DTR for ${saveDtrLabel.value} has already been saved.`,
+      );
     } else if (status === 422) {
-      showAlert('warning', message ?? incompleteMonthMessage)
+      showAlert("warning", message ?? incompleteMonthMessage);
     } else {
-      showAlert('error', message ?? 'Failed to process DTR. Please try again.')
+      showAlert("error", message ?? "Failed to process DTR. Please try again.");
     }
-    finishSavingDtr()
+    finishSavingDtr();
   }
 }
 
 async function saveDtr() {
-  await runDtrJob('/api/dtr/save', `DTR for ${saveDtrLabel.value} is not yet complete.`)
+  await runDtrJob(
+    "/api/dtr/save",
+    `DTR for ${saveDtrLabel.value} is not yet complete.`,
+  );
 }
 
 async function overrideDtr() {
-  confirmOverrideOpen.value = false
-  await runDtrJob('/api/dtr/override', `DTR for ${saveDtrLabel.value} is not yet complete.`)
+  confirmOverrideOpen.value = false;
+  await runDtrJob(
+    "/api/dtr/override",
+    `DTR for ${saveDtrLabel.value} is not yet complete.`,
+  );
 }
 
 /* ─────────────────────────────────────────
    HANDLERS
 ───────────────────────────────────────── */
 function openDtrModal(item: Employee) {
-  selectedEmp.value   = item
-  selectedMonth.value = new Date().getMonth() + 1
-  selectedYear.value  = currentYear
-  dtrData.value       = null
-  modalOpen.value     = true
+  selectedEmp.value = item;
+  selectedMonth.value = new Date().getMonth() + 1;
+  selectedYear.value = currentYear;
+  dtrData.value = null;
+  modalOpen.value = true;
 }
 
 function closeModal() {
-  modalOpen.value = false
-  dtrData.value   = null
+  modalOpen.value = false;
+  dtrData.value = null;
 }
 
 function cancelSaveDtr() {
-  confirmSaveOpen.value = false
-  const defaultPeriod = getDefaultSaveDtrPeriod()
-  saveDtrMonth.value = defaultPeriod.month
-  saveDtrYear.value  = defaultPeriod.year
-  periodSummary.value = null
+  confirmSaveOpen.value = false;
+  const defaultPeriod = getDefaultSaveDtrPeriod();
+  saveDtrMonth.value = defaultPeriod.month;
+  saveDtrYear.value = defaultPeriod.year;
+  periodSummary.value = null;
 }
 
 /* ─────────────────────────────────────────
    INIT
 ───────────────────────────────────────── */
 onMounted(() => {
-  fetchData()
-  resumeCooldownIfAny()
+  fetchData();
+  resumeCooldownIfAny();
+  maybeAutoStartTour();
 
-  const userId = userStore.user?.id
-  if (!userId) return
+  const userId = userStore.user?.id;
+  if (!userId) return;
 
   realtime.subscribeToDtrProgress(
     userId,
-    payload => {
-      realtimeConnectionError.value = false
-      armStaleTimer() // any event, including 'running', proves the channel is alive
+    (payload) => {
+      realtimeConnectionError.value = false;
+      armStaleTimer(); // any event, including 'running', proves the channel is alive
 
-      if (payload.status === 'completed') {
-        showAlert('success', payload.message)
-        finishSavingDtr()
-        startCooldown()
-        return
+      if (payload.status === "completed") {
+        showAlert("success", payload.message);
+        finishSavingDtr();
+        startCooldown();
+        return;
       }
 
-      if (payload.status === 'failed') {
-        showAlert('error', payload.message || 'DTR save failed. Please try again.')
-        finishSavingDtr()
-        return
+      if (payload.status === "failed") {
+        showAlert(
+          "error",
+          payload.message || "DTR save failed. Please try again.",
+        );
+        finishSavingDtr();
+        return;
       }
 
       // status === 'running'
-      saveProgressDone.value  = payload.current
-      saveProgressTotal.value = payload.total
+      saveProgressDone.value = payload.current;
+      saveProgressTotal.value = payload.total;
     },
     () => {
-      realtimeConnectionError.value = true
+      realtimeConnectionError.value = true;
     },
-  )
-})
+  );
+});
 
 onUnmounted(() => {
-  if (cooldownTimer) clearInterval(cooldownTimer)
+  if (cooldownTimer) clearInterval(cooldownTimer);
 
-  const userId = userStore.user?.id
-  if (!userId) return
+  const userId = userStore.user?.id;
+  if (!userId) return;
 
-  realtime.leaveDtrProgress(userId)
-})
+  realtime.leaveDtrProgress(userId);
+});
 </script>
 
 <template>
   <div>
     <VContainer fluid class="pa-6">
-
       <!-- ── Page Header ── -->
-      <div class="d-flex align-center justify-space-between flex-wrap gap-4 mb-2">
+      <div
+        class="d-flex align-center justify-space-between flex-wrap gap-4 mb-2"
+        data-tour="dtr-header"
+      >
         <div>
           <h4 class="text-h5 font-weight-bold mb-1">Daily Time Record</h4>
           <p class="text-body-2 text-medium-emphasis mb-0">
@@ -724,14 +878,20 @@ onUnmounted(() => {
           <!-- Save DTR button — saves ALL JO employees' DTR for the preceding month -->
           <VTooltip location="bottom">
             <template #activator="{ props }">
-              <span v-bind="props" style="display: inline-block;">
+              <span v-bind="props" style="display: inline-block">
                 <VBtn
                   color="success"
                   variant="tonal"
                   prepend-icon="mdi-content-save-outline"
                   :loading="savingDtr"
                   :disabled="!canSaveDtr"
-                  @click="{ savingElapsedSecs = 0; confirmSaveOpen = true }"
+                  data-tour="save-dtr"
+                  @click="
+                    {
+                      savingElapsedSecs = 0;
+                      confirmSaveOpen = true;
+                    }
+                  "
                 >
                   Save DTR
                 </VBtn>
@@ -742,8 +902,8 @@ onUnmounted(() => {
                 !isMonthComplete
                   ? `${saveDtrLabel} is not yet complete — DTR can only be saved after the month ends`
                   : cooldownActive
-                  ? cooldownLabel
-                  : 'Save DTR summaries — select period in dialog'
+                    ? cooldownLabel
+                    : "Save DTR summaries — select period in dialog"
               }}
             </span>
           </VTooltip>
@@ -753,12 +913,13 @@ onUnmounted(() => {
             variant="tonal"
             color="primary"
             prepend-icon="mdi-account-clock-outline"
+            data-tour="set-flexi"
             @click="flexiModalOpen = true"
           >
             Set Flexi
           </VBtn>
 
-           <VTooltip location="bottom">
+          <VTooltip location="bottom">
             <template #activator="{ props }">
               <VBtn
                 v-bind="props"
@@ -771,6 +932,19 @@ onUnmounted(() => {
             </template>
             <span>Refresh</span>
           </VTooltip>
+          <!-- <VTooltip location="bottom">
+            <template #activator="{ props }">
+              <VBtn
+                v-bind="props"
+                icon="mdi-help-circle-outline"
+                variant="text"
+                density="comfortable"
+                @click="startTour"
+              >
+              </VBtn>
+            </template>
+            <span>Take a tour</span>
+          </VTooltip> -->
         </div>
       </div>
 
@@ -785,22 +959,34 @@ onUnmounted(() => {
       >
         {{ saveDtrDisabledReason }}
       </VAlert>
-      
-      <VAlert type="info" variant="tonal" icon="mdi-calendar-alert-outline" density="comfortable" class="mb-3 mt-4" closable>
-        <strong>Before saving DTR summaries:</strong> Ensure all <strong>holidays and suspensions</strong> for the
-        period are set in the <strong>Calendar</strong> module. DTR summaries cannot be
-        re-saved without going through Override, so missing calendar entries will require
-        an override to correct. A <strong>3-minute cooldown</strong> applies before another save can be performed.
+
+      <VAlert
+        type="info"
+        variant="tonal"
+        icon="mdi-calendar-alert-outline"
+        density="comfortable"
+        class="mb-3 mt-4"
+        closable
+        data-tour="calendar-reminder"
+      >
+        <strong>Before saving DTR summaries:</strong> Ensure all
+        <strong>holidays and suspensions</strong> for the period are set in the
+        <strong>Calendar</strong> module. DTR summaries cannot be re-saved
+        without going through Override, so missing calendar entries will require
+        an override to correct. A <strong>3-minute cooldown</strong> applies
+        before another save can be performed.
       </VAlert>
 
       <!-- ── Summary Cards ── -->
-      <VRow class="mb-5 mt-2">
+      <VRow class="mb-5 mt-2" data-tour="stats-cards">
         <VCol cols="12" sm="4">
           <VCard variant="tonal" color="primary" rounded="lg">
             <VCardText class="d-flex align-center gap-4">
               <VIcon icon="mdi-account-group-outline" size="36" />
               <div>
-                <div class="text-h5 font-weight-bold">{{ employees.length }}</div>
+                <div class="text-h5 font-weight-bold">
+                  {{ employees.length }}
+                </div>
                 <div class="text-body-2">Total Employees</div>
               </div>
             </VCardText>
@@ -811,7 +997,9 @@ onUnmounted(() => {
             <VCardText class="d-flex align-center gap-4">
               <VIcon icon="mdi-lan-check" size="36" />
               <div>
-                <div class="text-h5 font-weight-bold">{{ connectedDevices }}</div>
+                <div class="text-h5 font-weight-bold">
+                  {{ connectedDevices }}
+                </div>
                 <div class="text-body-2">Devices Online</div>
               </div>
             </VCardText>
@@ -822,7 +1010,9 @@ onUnmounted(() => {
             <VCardText class="d-flex align-center gap-4">
               <VIcon icon="mdi-lan-disconnect" size="36" />
               <div>
-                <div class="text-h5 font-weight-bold">{{ disconnectedDevices }}</div>
+                <div class="text-h5 font-weight-bold">
+                  {{ disconnectedDevices }}
+                </div>
                 <div class="text-body-2">Devices Offline</div>
               </div>
             </VCardText>
@@ -831,10 +1021,12 @@ onUnmounted(() => {
       </VRow>
 
       <!-- ── Device Status ── -->
-      <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
+      <p
+        class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3"
+      >
         Biometric Devices
       </p>
-      <div class="d-flex flex-wrap gap-2 mb-6">
+      <div class="d-flex flex-wrap gap-2 mb-6" data-tour="biometric-devices">
         <VTooltip
           v-for="device in deviceStatus"
           :key="device.ip"
@@ -842,32 +1034,32 @@ onUnmounted(() => {
           content-class="device-pill-tooltip"
         >
           <template #activator="{ props }">
-          <!-- Connected: quiet/neutral pill with a small status dot -->
-          <VChip
-            v-if="device.status === 'connected'"
-            v-bind="props"
-            color="default"
-            variant="outlined"
-            label
-            class="device-pill"
-          >
-            <span class="device-dot device-dot--success" />
-            {{ device.floor }}
-          </VChip>
+            <!-- Connected: quiet/neutral pill with a small status dot -->
+            <VChip
+              v-if="device.status === 'connected'"
+              v-bind="props"
+              color="default"
+              variant="outlined"
+              label
+              class="device-pill"
+            >
+              <span class="device-dot device-dot--success" />
+              {{ device.floor }}
+            </VChip>
 
-          <!-- Disconnected/error: bold, colored, icon — meant to stand out -->
-          <VChip
-            v-else
-            v-bind="props"
-            :color="deviceChipColor(device.status)"
-            variant="tonal"
-            label
-            class="device-pill device-pill--problem"
-          >
-            <VIcon start :icon="deviceChipIcon(device.status)" size="16" />
-            {{ device.floor }}
-          </VChip>
-        </template>
+            <!-- Disconnected/error: bold, colored, icon — meant to stand out -->
+            <VChip
+              v-else
+              v-bind="props"
+              :color="deviceChipColor(device.status)"
+              variant="tonal"
+              label
+              class="device-pill device-pill--problem"
+            >
+              <VIcon start :icon="deviceChipIcon(device.status)" size="16" />
+              {{ device.floor }}
+            </VChip>
+          </template>
           <div class="font-weight-medium">{{ device.floor }}</div>
           <div>{{ device.message }}</div>
         </VTooltip>
@@ -875,7 +1067,12 @@ onUnmounted(() => {
 
       <!-- ── Employee Table ── -->
       <BaseTable
-        :title="currentPeriod ? `JO Employees DTR — ${currentPeriod.label}` : 'JO Employees DTR'"
+        search-data-tour="employee-search"
+        :title="
+          currentPeriod
+            ? `JO Employees DTR — ${currentPeriod.label}`
+            : 'JO Employees DTR'
+        "
         :headers="TABLE_HEADERS"
         :items="employees"
         :loading="loading"
@@ -890,19 +1087,31 @@ onUnmounted(() => {
               </span>
             </VAvatar>
             <span>{{ item.full_name }}</span>
-            <VChip v-if="item.is_flexi" size="x-small" color="info" variant="tonal" label>
+            <VChip
+              v-if="item.is_flexi"
+              size="x-small"
+              color="info"
+              variant="tonal"
+              label
+            >
               Flexi
             </VChip>
           </div>
         </template>
         <template #item.position="{ item }">
-          <span :class="{ 'text-medium-emphasis': !item.position }">{{ item.position ?? '—' }}</span>
+          <span :class="{ 'text-medium-emphasis': !item.position }">{{
+            item.position ?? "—"
+          }}</span>
         </template>
         <template #item.division="{ item }">
-          <span :class="{ 'text-medium-emphasis': !item.division }">{{ item.division ?? '—' }}</span>
+          <span :class="{ 'text-medium-emphasis': !item.division }">{{
+            item.division ?? "—"
+          }}</span>
         </template>
         <template #item.section="{ item }">
-          <span :class="{ 'text-medium-emphasis': !item.section }">{{ item.section ?? '—' }}</span>
+          <span :class="{ 'text-medium-emphasis': !item.section }">{{
+            item.section ?? "—"
+          }}</span>
         </template>
         <template #item.current_period_status="{ item }">
           <VTooltip location="top">
@@ -913,13 +1122,21 @@ onUnmounted(() => {
                 size="small"
                 variant="tonal"
                 label
+                :data-tour="
+                  item.id === employees[0]?.id ? 'dtr-status-column' : undefined
+                "
               >
-                <VIcon start size="14" :icon="statusChipIcon(item.current_period_status)" />
+                <VIcon
+                  start
+                  size="14"
+                  :icon="statusChipIcon(item.current_period_status)"
+                />
                 {{ statusChipLabel(item.current_period_status) }}
               </VChip>
             </template>
             <span v-if="item.last_saved">
-              Last saved: {{ item.last_saved.label }} on {{ formatLastSavedDate(item.last_saved.date) }}
+              Last saved: {{ item.last_saved.label }} on
+              {{ formatLastSavedDate(item.last_saved.date) }}
             </span>
             <span v-else>Never saved</span>
           </VTooltip>
@@ -933,6 +1150,9 @@ onUnmounted(() => {
                 size="small"
                 variant="text"
                 color="primary"
+                :data-tour="
+                  item.id === employees[0]?.id ? 'dtr-actions' : undefined
+                "
                 @click="openDtrModal(item)"
               />
             </template>
@@ -940,7 +1160,6 @@ onUnmounted(() => {
           </VTooltip>
         </template>
       </BaseTable>
-
     </VContainer>
 
     <!-- ── DTR Modal ── -->
@@ -955,22 +1174,27 @@ onUnmounted(() => {
       @cancel="closeModal"
     >
       <VRow dense>
-
         <!-- ── Employee info strip ── -->
         <VCol cols="12">
           <VCard variant="tonal" color="default" rounded="lg">
             <VCardText class="d-flex flex-wrap gap-6 py-3">
               <div>
                 <div class="text-caption text-medium-emphasis">Position</div>
-                <div class="text-body-2 font-weight-medium">{{ selectedEmp?.position ?? '—' }}</div>
+                <div class="text-body-2 font-weight-medium">
+                  {{ selectedEmp?.position ?? "—" }}
+                </div>
               </div>
               <div>
                 <div class="text-caption text-medium-emphasis">Division</div>
-                <div class="text-body-2 font-weight-medium">{{ selectedEmp?.division ?? '—' }}</div>
+                <div class="text-body-2 font-weight-medium">
+                  {{ selectedEmp?.division ?? "—" }}
+                </div>
               </div>
               <div>
                 <div class="text-caption text-medium-emphasis">Section</div>
-                <div class="text-body-2 font-weight-medium">{{ selectedEmp?.section ?? '—' }}</div>
+                <div class="text-body-2 font-weight-medium">
+                  {{ selectedEmp?.section ?? "—" }}
+                </div>
               </div>
             </VCardText>
           </VCard>
@@ -978,7 +1202,9 @@ onUnmounted(() => {
 
         <!-- ── Period selectors ── -->
         <VCol cols="12" class="mt-3">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
+          <p
+            class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
+          >
             Select Period
           </p>
           <VDivider class="mt-1 mb-3" />
@@ -1010,10 +1236,11 @@ onUnmounted(() => {
 
         <!-- ── DTR results ── -->
         <template v-if="dtrData">
-
           <!-- ── Monthly Summary ── -->
           <VCol cols="12" class="mt-4">
-            <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
+            <p
+              class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
+            >
               Period Summary — {{ dtrData.period_label }}
             </p>
             <VDivider class="mt-1 mb-3" />
@@ -1022,7 +1249,9 @@ onUnmounted(() => {
           <VCol cols="6" sm="3">
             <VCard variant="tonal" color="primary" rounded="lg">
               <VCardText class="pa-3 text-center">
-                <div class="text-h6 font-weight-bold">{{ dtrData.total_rendered_hours }}h</div>
+                <div class="text-h6 font-weight-bold">
+                  {{ dtrData.total_rendered_hours }}h
+                </div>
                 <div class="text-caption">Hours Rendered</div>
               </VCardText>
             </VCard>
@@ -1030,7 +1259,9 @@ onUnmounted(() => {
           <VCol cols="6" sm="3">
             <VCard variant="tonal" color="error" rounded="lg">
               <VCardText class="pa-3 text-center">
-                <div class="text-h6 font-weight-bold">{{ dtrData.total_absent_days }}</div>
+                <div class="text-h6 font-weight-bold">
+                  {{ dtrData.total_absent_days }}
+                </div>
                 <div class="text-caption">Absent Days</div>
               </VCardText>
             </VCard>
@@ -1038,7 +1269,9 @@ onUnmounted(() => {
           <VCol cols="6" sm="3">
             <VCard variant="tonal" color="warning" rounded="lg">
               <VCardText class="pa-3 text-center">
-                <div class="text-h6 font-weight-bold">{{ dtrData.total_late_minutes }}m</div>
+                <div class="text-h6 font-weight-bold">
+                  {{ dtrData.total_late_minutes }}m
+                </div>
                 <div class="text-caption">Total Late Minutes</div>
               </VCardText>
             </VCard>
@@ -1046,7 +1279,9 @@ onUnmounted(() => {
           <VCol cols="6" sm="3">
             <VCard variant="tonal" color="info" rounded="lg">
               <VCardText class="pa-3 text-center">
-                <div class="text-h6 font-weight-bold">{{ dtrData.total_undertime_minutes }}m</div>
+                <div class="text-h6 font-weight-bold">
+                  {{ dtrData.total_undertime_minutes }}m
+                </div>
                 <div class="text-caption">Total Undertime Minutes</div>
               </VCardText>
             </VCard>
@@ -1056,22 +1291,40 @@ onUnmounted(() => {
           <VCol cols="12">
             <div class="d-flex gap-4 flex-wrap">
               <div class="text-caption text-medium-emphasis">
-                Working Days: <strong class="text-high-emphasis">{{ dtrData.regdays }}</strong>
+                Working Days:
+                <strong class="text-high-emphasis">{{
+                  dtrData.regdays
+                }}</strong>
               </div>
               <div class="text-caption text-medium-emphasis">
-                Weekends: <strong class="text-high-emphasis">{{ dtrData.weekends }}</strong>
+                Weekends:
+                <strong class="text-high-emphasis">{{
+                  dtrData.weekends
+                }}</strong>
               </div>
               <div class="text-caption text-medium-emphasis">
-                Holidays: <strong class="text-purple">{{ dtrData.total_holidays }}</strong>
+                Holidays:
+                <strong class="text-purple">{{
+                  dtrData.total_holidays
+                }}</strong>
               </div>
               <div class="text-caption text-medium-emphasis">
-                Suspensions: <strong class="text-teal">{{ dtrData.total_suspensions }}</strong>
+                Suspensions:
+                <strong class="text-teal">{{
+                  dtrData.total_suspensions
+                }}</strong>
               </div>
               <div class="text-caption text-medium-emphasis">
-                Late Hours: <strong class="text-warning">{{ dtrData.total_late_hours }}h</strong>
+                Late Hours:
+                <strong class="text-warning"
+                  >{{ dtrData.total_late_hours }}h</strong
+                >
               </div>
               <div class="text-caption text-medium-emphasis">
-                Undertime Hours: <strong class="text-info">{{ dtrData.total_undertime_hours }}h</strong>
+                Undertime Hours:
+                <strong class="text-info"
+                  >{{ dtrData.total_undertime_hours }}h</strong
+                >
               </div>
             </div>
           </VCol>
@@ -1080,27 +1333,48 @@ onUnmounted(() => {
           <!-- Only meaningful for a merged January period — the combined
                totals above are unaffected either way; this just shows
                how much of them came from each calendar month. -->
-          <VCol v-if="dtrData.period_type === 'dec_second_half_merged'" cols="12">
+          <VCol
+            v-if="dtrData.period_type === 'dec_second_half_merged'"
+            cols="12"
+          >
             <VCard variant="tonal" color="default" rounded="lg" class="mt-2">
               <VCardText class="pa-3">
-                <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-2">
+                <p
+                  class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-2"
+                >
                   December / January Breakdown
                 </p>
                 <VRow dense>
                   <VCol cols="6">
-                    <div class="text-caption text-medium-emphasis mb-1">December (carried over)</div>
+                    <div class="text-caption text-medium-emphasis mb-1">
+                      December (carried over)
+                    </div>
                     <div class="text-body-2">
-                      Absent: <strong>{{ dtrData.carried_over_absent_days }}</strong> ·
-                      Late: <strong>{{ dtrData.carried_over_late_minutes }}m</strong> ·
-                      Undertime: <strong>{{ dtrData.carried_over_undertime_minutes }}m</strong>
+                      Absent:
+                      <strong>{{ dtrData.carried_over_absent_days }}</strong> ·
+                      Late:
+                      <strong>{{ dtrData.carried_over_late_minutes }}m</strong>
+                      · Undertime:
+                      <strong
+                        >{{ dtrData.carried_over_undertime_minutes }}m</strong
+                      >
                     </div>
                   </VCol>
                   <VCol cols="6">
-                    <div class="text-caption text-medium-emphasis mb-1">January</div>
+                    <div class="text-caption text-medium-emphasis mb-1">
+                      January
+                    </div>
                     <div class="text-body-2">
-                      Absent: <strong>{{ dtrData.current_period_absent_days }}</strong> ·
-                      Late: <strong>{{ dtrData.current_period_late_minutes }}m</strong> ·
-                      Undertime: <strong>{{ dtrData.current_period_undertime_minutes }}m</strong>
+                      Absent:
+                      <strong>{{ dtrData.current_period_absent_days }}</strong>
+                      · Late:
+                      <strong
+                        >{{ dtrData.current_period_late_minutes }}m</strong
+                      >
+                      · Undertime:
+                      <strong
+                        >{{ dtrData.current_period_undertime_minutes }}m</strong
+                      >
                     </div>
                   </VCol>
                 </VRow>
@@ -1110,7 +1384,9 @@ onUnmounted(() => {
 
           <!-- ── Attendance Table ── -->
           <VCol cols="12" class="mt-2">
-            <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
+            <p
+              class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
+            >
               Attendance Record
             </p>
             <VDivider class="mt-1 mb-2" />
@@ -1150,6 +1426,10 @@ onUnmounted(() => {
                 <span class="text-caption">Compressed Rest (Fri)</span>
               </div>
               <div class="d-flex align-center gap-1">
+                <div class="dtr-legend dtr-legend--contract-break" />
+                <span class="text-caption">Contract Break</span>
+              </div>
+              <div class="d-flex align-center gap-1">
                 <div class="dtr-legend dtr-legend--weekend" />
                 <span class="text-caption">Weekend</span>
               </div>
@@ -1158,7 +1438,8 @@ onUnmounted(() => {
             <div class="d-flex align-center gap-1 mt-1">
               <VIcon size="14" color="info">mdi-information-outline</VIcon>
               <span class="text-caption text-medium-emphasis">
-                <strong>Compressed Week Absence:</strong> 1 absent day + 120 mins added to late
+                <strong>Compressed Week Absence:</strong> 1 absent day + 120
+                mins added to late
               </span>
             </div>
 
@@ -1177,153 +1458,354 @@ onUnmounted(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr
-                    v-for="row in attendanceRows"
-                    :key="row.fullDate"
-                    :class="getRowClass(row)"
+                  <template
+                    v-for="item in groupedRows"
+                    :key="item.type === 'day' ? item.row.fullDate : item.key"
                   >
-                    <!-- Day + weekday name -->
-                    <td class="col-day">
-                      <span class="font-weight-medium">{{ row.day }}</span>
-                      <span v-if="dtrData?.period_type === 'dec_second_half_merged'" class="text-caption text-medium-emphasis">
-                        {{ row.monthShort }}
-                      </span>
-                      <span class="text-caption text-medium-emphasis ms-1">{{ row.dayName }}</span>
-                    </td>
-
-                    <!-- ── Holiday ── -->
-                    <template v-if="row.is_holiday">
-                      <td class="col-time text-caption">{{ row.in_am  || '—' }}</td>
-                      <td class="col-time text-caption">{{ row.out_am || '—' }}</td>
-                      <td class="col-time text-caption">{{ row.in_pm  || '—' }}</td>
-                      <td class="col-time text-caption">{{ row.out_pm || '—' }}</td>
-                      <td class="col-hours text-caption">{{ row.total_hours ? `${row.total_hours}h` : '—' }}</td>
+                    <!-- ── Merged Contract Break block ── -->
+                    <tr
+                      v-if="item.type === 'contract-break'"
+                      class="dtr-row--contract-break"
+                    >
+                      <td class="col-day">
+                        <span class="font-weight-medium">{{
+                          formatDateRange(item.startDate, item.endDate)
+                        }}</span>
+                      </td>
+                      <td
+                        colspan="5"
+                        class="text-center text-caption text-disabled"
+                      >
+                        Contract Break
+                        <span v-if="item.label" class="d-block text-caption">{{
+                          item.label
+                        }}</span>
+                        <span
+                          v-if="item.resumption"
+                          class="d-block text-caption text-medium-emphasis"
+                        >
+                          {{ item.dayCount }} day{{
+                            item.dayCount === 1 ? "" : "s"
+                          }}
+                          · Resumes {{ item.resumption }}
+                        </span>
+                      </td>
                       <td class="col-status">
                         <VChip
-                          :color="row.holiday_type === 'regular' ? 'purple' : 'deep-purple'"
+                          color="brown"
                           size="x-small"
                           variant="tonal"
                           label
                         >
-                          {{ row.holiday_type === 'regular' ? 'Regular Holiday' : 'Special Holiday' }}
-                          <span v-if="row.holiday_label" class="ms-1">— {{ row.holiday_label }}</span>
+                          {{
+                            item.isCustom ? "Custom Break" : "Contract Break"
+                          }}
                         </VChip>
                       </td>
-                    </template>
+                    </tr>
 
-                    <!-- ── Suspension ── -->
-                    <template v-else-if="row.is_suspension">
-                      <td class="col-time text-caption">{{ row.in_am  || '—' }}</td>
-                      <td class="col-time text-caption">{{ row.out_am || '—' }}</td>
-                      <td class="col-time text-caption">{{ row.in_pm  || '—' }}</td>
-                      <td class="col-time text-caption">{{ row.out_pm || '—' }}</td>
-                      <td class="col-hours text-caption">{{ row.total_hours ? `${row.total_hours}h` : '—' }}</td>
-                      <td class="col-status">
-                        <VChip color="teal" size="x-small" variant="tonal" label>
-                          Suspension
-                          <span v-if="row.suspension_label" class="ms-1">— {{ row.suspension_label }}</span>
-                        </VChip>
+                    <!-- ── Regular day row ── -->
+                    <tr v-else :class="getRowClass(item.row)">
+                      <!-- Day + weekday name -->
+                      <td class="col-day">
+                        <span class="font-weight-medium">{{
+                          item.row.day
+                        }}</span>
+                        <span
+                          v-if="
+                            dtrData?.period_type === 'dec_second_half_merged'
+                          "
+                          class="text-caption text-medium-emphasis"
+                        >
+                          {{ item.row.monthShort }}
+                        </span>
+                        <span class="text-caption text-medium-emphasis ms-1">{{
+                          item.row.dayName
+                        }}</span>
                       </td>
-                    </template>
 
-                    <!-- ── Sunday ── -->
-                    <template v-else-if="row.isSunday">
-                      <td colspan="5" class="text-center text-caption text-disabled">Happy Weekend 🎉</td>
-                      <td />
-                    </template>
-
-                    <!-- ── Saturday ── -->
-                    <template v-else-if="row.isSaturday">
-                      <td colspan="5" class="text-center text-caption text-disabled">Happy Weekend 🎉</td>
-                      <td />
-                    </template>
-
-                    <!-- ── Compressed Friday (Rest Day) ── -->
-                    <template v-else-if="row.is_rest_day">
-                      <td colspan="5" class="text-center text-caption text-disabled">
-                        Rest Day
-                        <span class="text-caption">(Compressed Week)</span>
-                      </td>
-                      <td class="col-status">
-                        <VChip color="purple" size="x-small" variant="tonal" label>
-                          Compressed Rest
-                        </VChip>
-                      </td>
-                    </template>
-
-                    <!-- ── Regular weekday ── -->
-                    <template v-else>
-                      <td class="col-time text-caption" :class="{ 'text-warning': row.is_late_am }">
-                        {{ row.in_am  || '—' }}
-                      </td>
-                      <td class="col-time text-caption">{{ row.out_am || '—' }}</td>
-                      <td class="col-time text-caption" :class="{ 'text-warning': row.is_late_pm }">
-                        {{ row.in_pm  || '—' }}
-                      </td>
-                      <td class="col-time text-caption">{{ row.out_pm || '—' }}</td>
-                      <td class="col-hours text-caption font-weight-medium">
-                        {{ row.total_hours ? `${row.total_hours}h` : '—' }}
-                      </td>
-                      <td class="col-status">
-                        <div class="d-flex flex-wrap gap-1">
-                          <VChip v-if="row.is_absent" color="error" size="x-small" variant="tonal" label>
-                            Absent
-                          </VChip>
-                          <VChip v-if="row.is_half_day_absent" color="warning" size="x-small" variant="tonal" label>
-                            ½ Day
-                          </VChip>
-                          <VChip v-if="row.total_late_minutes > 0" color="warning" size="x-small" variant="tonal" label>
-                            {{ row.is_absent_penalty ? '+ ' : '' }}Late {{ row.total_late_minutes }}m
-                          </VChip>
-                          <VChip v-if="row.total_undertime_minutes > 0" color="info" size="x-small" variant="tonal" label>
-                            UT {{ row.total_undertime_minutes }}m
-                          </VChip>
+                      <!-- ── Holiday ── -->
+                      <template v-if="item.row.is_holiday">
+                        <td class="col-time text-caption">
+                          {{ item.row.in_am || "—" }}
+                        </td>
+                        <td class="col-time text-caption">
+                          {{ item.row.out_am || "—" }}
+                        </td>
+                        <td class="col-time text-caption">
+                          {{ item.row.in_pm || "—" }}
+                        </td>
+                        <td class="col-time text-caption">
+                          {{ item.row.out_pm || "—" }}
+                        </td>
+                        <td class="col-hours text-caption">
+                          {{
+                            item.row.total_hours
+                              ? `${item.row.total_hours}h`
+                              : "—"
+                          }}
+                        </td>
+                        <td class="col-status">
                           <VChip
-                            v-if="!row.is_absent && !row.is_half_day_absent && row.entry_count >= 4"
-                            color="success"
+                            :color="
+                              item.row.holiday_type === 'regular'
+                                ? 'purple'
+                                : 'deep-purple'
+                            "
                             size="x-small"
                             variant="tonal"
                             label
                           >
-                            Present
+                            {{
+                              item.row.holiday_type === "regular"
+                                ? "Regular Holiday"
+                                : "Special Holiday"
+                            }}
+                            <span v-if="item.row.holiday_label" class="ms-1"
+                              >— {{ item.row.holiday_label }}</span
+                            >
                           </VChip>
+                        </td>
+                      </template>
 
-                          <VTooltip v-if="row.has_pass_slip" location="top" max-width="280" content-class="pass-slip-tooltip">
-                            <template #activator="{ props }">
-                              <VChip v-bind="props" :color="chipColor" size="x-small" variant="tonal" label>
-                                <VIcon start size="12">mdi-badge-account-horizontal-outline</VIcon>
-                                Pass Slip
-                              </VChip>
-                            </template>
-                            <div v-for="ps in row.pass_slips" :key="ps.id" class="mb-1">
-                              <div class="font-weight-medium">{{ ps.label }}</div>
-                              <div>Request Out: {{ ps.request_time_out }} → Actual In: {{ ps.actual_time ?? '—' }}</div>
-                              <div v-if="ps.minutes > 0">Minutes: {{ ps.minutes }}m</div>
-                              <div v-if="ps.nature_business">{{ ps.nature_business }}</div>
-                            </div>
-                          </VTooltip>
-
+                      <!-- ── Suspension ── -->
+                      <template v-else-if="item.row.is_suspension">
+                        <td class="col-time text-caption">
+                          {{ item.row.in_am || "—" }}
+                        </td>
+                        <td class="col-time text-caption">
+                          {{ item.row.out_am || "—" }}
+                        </td>
+                        <td class="col-time text-caption">
+                          {{ item.row.in_pm || "—" }}
+                        </td>
+                        <td class="col-time text-caption">
+                          {{ item.row.out_pm || "—" }}
+                        </td>
+                        <td class="col-hours text-caption">
+                          {{
+                            item.row.total_hours
+                              ? `${item.row.total_hours}h`
+                              : "—"
+                          }}
+                        </td>
+                        <td class="col-status">
                           <VChip
-                            v-if="row.schedule_type"
-                            :color="row.schedule_type === 'compressed' ? 'purple' : 'primary'"
+                            color="teal"
                             size="x-small"
                             variant="tonal"
                             label
                           >
-                            {{ row.schedule_type === 'compressed' ? 'CMP' : 'STD' }}
+                            Suspension
+                            <span v-if="item.row.suspension_label" class="ms-1"
+                              >— {{ item.row.suspension_label }}</span
+                            >
                           </VChip>
-                        </div>
-                      </td>
-                    </template>
-                  </tr>
+                        </td>
+                      </template>
+
+                      <!-- ── Sunday ── -->
+                      <template v-else-if="item.row.isSunday">
+                        <td
+                          colspan="5"
+                          class="text-center text-caption text-disabled"
+                        >
+                          Happy Weekend 🎉
+                        </td>
+                        <td />
+                      </template>
+
+                      <!-- ── Saturday ── -->
+                      <template v-else-if="item.row.isSaturday">
+                        <td
+                          colspan="5"
+                          class="text-center text-caption text-disabled"
+                        >
+                          Happy Weekend 🎉
+                        </td>
+                        <td />
+                      </template>
+
+                      <!-- ── Compressed Friday (Rest Day) ── -->
+                      <template v-else-if="item.row.is_rest_day">
+                        <td
+                          colspan="5"
+                          class="text-center text-caption text-disabled"
+                        >
+                          Rest Day
+                          <span class="text-caption">(Compressed Week)</span>
+                        </td>
+                        <td class="col-status">
+                          <VChip
+                            color="purple"
+                            size="x-small"
+                            variant="tonal"
+                            label
+                          >
+                            Compressed Rest
+                          </VChip>
+                        </td>
+                      </template>
+
+                      <!-- ── Regular weekday ── -->
+                      <template v-else>
+                        <template v-if="item.row.is_absent">
+                          <td
+                            colspan="5"
+                            class="text-center text-caption text-disabled"
+                          >
+                            No Data Entry
+                          </td>
+                        </template>
+                        <template v-else>
+                          <td
+                            class="col-time text-caption"
+                            :class="{ 'text-warning': item.row.is_late_am }"
+                          >
+                            {{ item.row.in_am || "—" }}
+                          </td>
+                          <td class="col-time text-caption">
+                            {{ item.row.out_am || "—" }}
+                          </td>
+                          <td
+                            class="col-time text-caption"
+                            :class="{ 'text-warning': item.row.is_late_pm }"
+                          >
+                            {{ item.row.in_pm || "—" }}
+                          </td>
+                          <td class="col-time text-caption">
+                            {{ item.row.out_pm || "—" }}
+                          </td>
+                          <td class="col-hours text-caption font-weight-medium">
+                            {{
+                              item.row.total_hours
+                                ? `${item.row.total_hours}h`
+                                : "—"
+                            }}
+                          </td>
+                        </template>
+                        <td class="col-status">
+                          <div class="d-flex flex-wrap gap-1">
+                            <VChip
+                              v-if="item.row.is_absent"
+                              color="error"
+                              size="x-small"
+                              variant="tonal"
+                              label
+                            >
+                              Absent
+                            </VChip>
+                            <VChip
+                              v-if="item.row.is_half_day_absent"
+                              color="warning"
+                              size="x-small"
+                              variant="tonal"
+                              label
+                            >
+                              ½ Day
+                            </VChip>
+                            <VChip
+                              v-if="item.row.total_late_minutes > 0"
+                              color="warning"
+                              size="x-small"
+                              variant="tonal"
+                              label
+                            >
+                              {{ item.row.is_absent_penalty ? "+ " : "" }}Late
+                              {{ item.row.total_late_minutes }}m
+                            </VChip>
+                            <VChip
+                              v-if="item.row.total_undertime_minutes > 0"
+                              color="info"
+                              size="x-small"
+                              variant="tonal"
+                              label
+                            >
+                              UT {{ item.row.total_undertime_minutes }}m
+                            </VChip>
+                            <VChip
+                              v-if="
+                                !item.row.is_absent &&
+                                !item.row.is_half_day_absent &&
+                                item.row.entry_count >= 4
+                              "
+                              color="success"
+                              size="x-small"
+                              variant="tonal"
+                              label
+                            >
+                              Present
+                            </VChip>
+
+                            <VTooltip
+                              v-if="item.row.has_pass_slip"
+                              location="top"
+                              max-width="280"
+                              content-class="pass-slip-tooltip"
+                            >
+                              <template #activator="{ props }">
+                                <VChip
+                                  v-bind="props"
+                                  :color="chipColor"
+                                  size="x-small"
+                                  variant="tonal"
+                                  label
+                                >
+                                  <VIcon start size="12"
+                                    >mdi-badge-account-horizontal-outline</VIcon
+                                  >
+                                  Pass Slip
+                                </VChip>
+                              </template>
+                              <div
+                                v-for="ps in item.row.pass_slips"
+                                :key="ps.id"
+                                class="mb-1"
+                              >
+                                <div class="font-weight-medium">
+                                  {{ ps.label }}
+                                </div>
+                                <div>
+                                  Request Out: {{ ps.request_time_out }} →
+                                  Actual In: {{ ps.actual_time ?? "—" }}
+                                </div>
+                                <div v-if="ps.minutes > 0">
+                                  Minutes: {{ ps.minutes }}m
+                                </div>
+                                <div v-if="ps.nature_business">
+                                  {{ ps.nature_business }}
+                                </div>
+                              </div>
+                            </VTooltip>
+
+                            <VChip
+                              v-if="item.row.schedule_type"
+                              :color="
+                                item.row.schedule_type === 'compressed'
+                                  ? 'purple'
+                                  : 'primary'
+                              "
+                              size="x-small"
+                              variant="tonal"
+                              label
+                            >
+                              {{
+                                item.row.schedule_type === "compressed"
+                                  ? "CMP"
+                                  : "STD"
+                              }}
+                            </VChip>
+                          </div>
+                        </td>
+                      </template>
+                    </tr>
+                  </template>
                 </tbody>
               </table>
             </div>
           </VCol>
-
         </template>
         <!-- ── End DTR results ── -->
-
       </VRow>
     </BaseModal>
 
@@ -1338,19 +1820,28 @@ onUnmounted(() => {
               ? 'dtr-save-dialog--override'
               : 'dtr-save-dialog--save'
         "
-      > 
-      <VCardText class="pa-6">
+      >
+        <VCardText class="pa-6">
           <!-- ── Idle state: form ── -->
           <template v-if="!savingDtr">
             <div class="d-flex align-center gap-3 mb-4">
-              <VIcon :icon="saveDialogIcon" :color="saveDialogColor" size="28" />
-              <span class="text-h6 font-weight-bold">{{ saveDialogTitle }}</span>
+              <VIcon
+                :icon="saveDialogIcon"
+                :color="saveDialogColor"
+                size="28"
+              />
+              <span class="text-h6 font-weight-bold">{{
+                saveDialogTitle
+              }}</span>
             </div>
             <p class="text-body-2 mb-3">
               This will
-              <strong v-if="isOverrideMode">overwrite the previously saved</strong>
+              <strong v-if="isOverrideMode"
+                >overwrite the previously saved</strong
+              >
               <template v-else>save</template>
-              DTR summary totals for <strong>all active JO employees</strong> for:
+              DTR summary totals for
+              <strong>all active JO employees</strong> for:
             </p>
 
             <!-- ── Period selectors ── -->
@@ -1383,7 +1874,13 @@ onUnmounted(() => {
 
             <p
               class="text-body-1 font-weight-bold mb-3"
-              :class="!isMonthComplete ? 'text-error' : isOverrideMode ? 'text-warning' : 'text-success'"
+              :class="
+                !isMonthComplete
+                  ? 'text-error'
+                  : isOverrideMode
+                    ? 'text-warning'
+                    : 'text-success'
+              "
             >
               {{ saveDtrLabel }}
             </p>
@@ -1398,14 +1895,33 @@ onUnmounted(() => {
                 color="success"
               />
               <template v-else-if="periodSummary">
-                <VChip size="small" color="success" variant="tonal" prepend-icon="mdi-briefcase-check-outline">
+                <VChip
+                  size="small"
+                  color="success"
+                  variant="tonal"
+                  prepend-icon="mdi-briefcase-check-outline"
+                >
                   {{ periodSummary.regdays }} Working Days
                 </VChip>
-                <VChip size="small" color="warning" variant="tonal" prepend-icon="mdi-calendar-star">
-                  {{ periodSummary.total_holidays }} Holiday{{ periodSummary.total_holidays === 1 ? '' : 's' }}
+                <VChip
+                  size="small"
+                  color="warning"
+                  variant="tonal"
+                  prepend-icon="mdi-calendar-star"
+                >
+                  {{ periodSummary.total_holidays }} Holiday{{
+                    periodSummary.total_holidays === 1 ? "" : "s"
+                  }}
                 </VChip>
-                <VChip size="small" color="error" variant="tonal" prepend-icon="mdi-calendar-remove-outline">
-                  {{ periodSummary.total_suspensions }} Suspension{{ periodSummary.total_suspensions === 1 ? '' : 's' }}
+                <VChip
+                  size="small"
+                  color="error"
+                  variant="tonal"
+                  prepend-icon="mdi-calendar-remove-outline"
+                >
+                  {{ periodSummary.total_suspensions }} Suspension{{
+                    periodSummary.total_suspensions === 1 ? "" : "s"
+                  }}
                 </VChip>
               </template>
             </div>
@@ -1419,7 +1935,8 @@ onUnmounted(() => {
               class="mb-3"
               icon="mdi-alert-circle-outline"
             >
-              DTR for {{ saveDtrLabel }} has already been saved. Do you want to override the existing data?
+              DTR for {{ saveDtrLabel }} has already been saved. Do you want to
+              override the existing data?
             </VAlert>
 
             <VAlert
@@ -1430,7 +1947,8 @@ onUnmounted(() => {
               class="mb-3"
               icon="mdi-calendar-alert"
             >
-              {{ saveDtrLabel }} is not yet complete. DTR can only be saved after the month has fully ended.
+              {{ saveDtrLabel }} is not yet complete. DTR can only be saved
+              after the month has fully ended.
             </VAlert>
 
             <p class="text-caption text-medium-emphasis">
@@ -1447,9 +1965,10 @@ onUnmounted(() => {
                 density="compact"
                 variant="tonal"
                 class="mb-4"
-                style="max-width: 320px;"
+                style="max-width: 320px"
               >
-                Live progress connection lost. The save is still running in the background — refresh after it completes to confirm.
+                Live progress connection lost. The save is still running in the
+                background — refresh after it completes to confirm.
               </VAlert>
 
               <VProgressCircular
@@ -1459,7 +1978,9 @@ onUnmounted(() => {
                 :color="saveDialogColor"
                 class="mb-4"
               >
-                <span class="text-caption font-weight-bold">{{ saveProgressPercent }}%</span>
+                <span class="text-caption font-weight-bold"
+                  >{{ saveProgressPercent }}%</span
+                >
               </VProgressCircular>
 
               <p class="text-body-1 font-weight-medium mb-1">
@@ -1472,7 +1993,7 @@ onUnmounted(() => {
                 height="6"
                 rounded
                 class="mb-3"
-                style="max-width: 280px;"
+                style="max-width: 280px"
               />
 
               <p class="text-caption text-medium-emphasis mb-0">
@@ -1496,7 +2017,14 @@ onUnmounted(() => {
           >
             Override
           </VBtn>
-          <VBtn v-else color="success" variant="tonal" prepend-icon="mdi-content-save-outline" @click="saveDtr" :disabled="!canSaveDtr">
+          <VBtn
+            v-else
+            color="success"
+            variant="tonal"
+            prepend-icon="mdi-content-save-outline"
+            @click="saveDtr"
+            :disabled="!canSaveDtr"
+          >
             Save
           </VBtn>
         </VCardActions>
@@ -1513,13 +2041,22 @@ onUnmounted(() => {
           </div>
           <p class="text-body-2">
             Are you sure you want to override the existing DTR for
-            <strong>{{ saveDtrLabel }}</strong>? This will overwrite the previously
-            saved data for all active JO employees and cannot be undone.
+            <strong>{{ saveDtrLabel }}</strong
+            >? This will overwrite the previously saved data for all active JO
+            employees and cannot be undone.
           </p>
         </VCardText>
         <VCardActions class="pa-4 pt-0 gap-2 justify-end">
-          <VBtn variant="text" @click="confirmOverrideOpen = false">Cancel</VBtn>
-          <VBtn color="warning" variant="tonal" prepend-icon="mdi-restore-alert" @click="overrideDtr" :disabled="!canSaveDtr">
+          <VBtn variant="text" @click="confirmOverrideOpen = false"
+            >Cancel</VBtn
+          >
+          <VBtn
+            color="warning"
+            variant="tonal"
+            prepend-icon="mdi-restore-alert"
+            @click="overrideDtr"
+            :disabled="!canSaveDtr"
+          >
             Yes, Override
           </VBtn>
         </VCardActions>
@@ -1579,7 +2116,8 @@ onUnmounted(() => {
 
 .dtr-table td {
   padding: 7px 12px;
-  border-bottom: 1px solid rgba(var(--v-border-color), calc(var(--v-border-opacity) * 0.5));
+  border-bottom: 1px solid
+    rgba(var(--v-border-color), calc(var(--v-border-opacity) * 0.5));
   white-space: nowrap;
 }
 
@@ -1588,21 +2126,53 @@ onUnmounted(() => {
 }
 
 /* Column widths */
-.col-day    { width: 80px;  }
-.col-time   { width: 90px;  }
-.col-hours  { width: 70px;  }
-.col-status { width: 240px; }
+.col-day {
+  width: 80px;
+}
+.col-time {
+  width: 90px;
+}
+.col-hours {
+  width: 70px;
+}
+.col-status {
+  width: 240px;
+}
 
 /* ── Row highlight states ───────────────────────── */
-.dtr-row--holiday    { background: rgba(var(--v-theme-purple),        0.08); }
-.dtr-row--suspension { background: rgba(var(--v-theme-teal),          0.08); }
-.dtr-row--sunday     { background: rgba(var(--v-theme-on-surface), 0.035); color: rgba(var(--v-theme-on-surface), 0.38); }
-.dtr-row--saturday   { background: rgba(var(--v-theme-on-surface),    0.02); }
-.dtr-row--absent     { background: rgba(var(--v-theme-error),         0.08); }
-.dtr-row--halfday    { background: rgba(var(--v-theme-warning),       0.08); }
-.dtr-row--late       { background: rgba(var(--v-theme-warning),       0.04); }
-.dtr-row--undertime  { background: rgba(var(--v-theme-info),          0.06); }
-.dtr-row--fri-cmp    { background: rgba(128, 0, 128,                  0.05); color: rgba(var(--v-theme-on-surface), 0.45); }
+.dtr-row--holiday {
+  background: rgba(var(--v-theme-purple), 0.08);
+}
+.dtr-row--suspension {
+  background: rgba(var(--v-theme-teal), 0.08);
+}
+.dtr-row--sunday {
+  background: rgba(var(--v-theme-on-surface), 0.035);
+  color: rgba(var(--v-theme-on-surface), 0.38);
+}
+.dtr-row--saturday {
+  background: rgba(var(--v-theme-on-surface), 0.02);
+}
+.dtr-row--absent {
+  background: rgba(var(--v-theme-error), 0.08);
+}
+.dtr-row--halfday {
+  background: rgba(var(--v-theme-warning), 0.08);
+}
+.dtr-row--late {
+  background: rgba(var(--v-theme-warning), 0.04);
+}
+.dtr-row--undertime {
+  background: rgba(var(--v-theme-info), 0.06);
+}
+.dtr-row--fri-cmp {
+  background: rgba(128, 0, 128, 0.05);
+  color: rgba(var(--v-theme-on-surface), 0.45);
+}
+.dtr-row--contract-break {
+  background: rgba(var(--v-theme-brown, 121, 85, 72), 0.06);
+  color: rgba(var(--v-theme-on-surface), 0.5);
+}
 
 /* ── Legend dots ────────────────────────────────── */
 .dtr-legend {
@@ -1612,15 +2182,36 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.dtr-legend--absent     { background: rgba(var(--v-theme-error),      0.5); }
-.dtr-legend--halfday    { background: rgba(var(--v-theme-warning),    0.5); }
-.dtr-legend--late       { background: rgba(var(--v-theme-warning),    0.3); }
-.dtr-legend--undertime  { background: rgba(var(--v-theme-info),       0.4); }
-.dtr-legend--holiday    { background: rgba(128, 0, 128,               0.4); }
-.dtr-legend--suspension { background: rgba(0,   128, 128,             0.4); }
-.dtr-legend--weekend    { background: rgba(var(--v-theme-on-surface), 0.15); }
-.dtr-legend--fri-cmp    { background: rgba(128, 0, 128,               0.25); }
-.dtr-legend--pass-slip  { background: rgba(var(--v-theme-info),       0.4); }
+.dtr-legend--absent {
+  background: rgba(var(--v-theme-error), 0.5);
+}
+.dtr-legend--halfday {
+  background: rgba(var(--v-theme-warning), 0.5);
+}
+.dtr-legend--late {
+  background: rgba(var(--v-theme-warning), 0.3);
+}
+.dtr-legend--undertime {
+  background: rgba(var(--v-theme-info), 0.4);
+}
+.dtr-legend--holiday {
+  background: rgba(128, 0, 128, 0.4);
+}
+.dtr-legend--suspension {
+  background: rgba(0, 128, 128, 0.4);
+}
+.dtr-legend--weekend {
+  background: rgba(var(--v-theme-on-surface), 0.15);
+}
+.dtr-legend--fri-cmp {
+  background: rgba(128, 0, 128, 0.25);
+}
+.dtr-legend--pass-slip {
+  background: rgba(var(--v-theme-info), 0.4);
+}
+.dtr-legend--contract-break {
+  background: rgba(var(--v-theme-brown, 121, 85, 72), 0.4);
+}
 
 /* ── Pass slip ────────────────────────────────── */
 .pass-slip-tooltip {
@@ -1670,5 +2261,4 @@ onUnmounted(() => {
   text-align: left;
   white-space: normal;
 }
-
 </style>
