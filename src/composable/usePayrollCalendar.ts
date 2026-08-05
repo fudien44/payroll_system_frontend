@@ -10,10 +10,19 @@ export type HolidayType = 'regular' | 'special'
 
 export interface Holiday {
   id:          number
-  date:        string       // ISO: YYYY-MM-DD
+  date:        string       
   label:       string
   type:        HolidayType
-  is_half_day: boolean      // only meaningful when type === 'special'
+  is_half_day: boolean      
+}
+
+export interface CustomStandardWeekExemptionSummary {
+  emp_id:        number
+  emp_name:      string
+  division_name: string | null
+  week_count:    number
+  earliest_week: string
+  latest_week:   string
 }
 
 export interface ContractBreakBatch {
@@ -106,6 +115,8 @@ export function formatDisplayDate(isoDate: string): string {
 // ---------------------------------------------------------------------------
 // Module-level cache — shared across all component instances
 // ---------------------------------------------------------------------------
+const customContractBreaks = ref<EmployeeContractBreak[]>([])
+const customStandardWeekExemptions = ref<CustomStandardWeekExemptionSummary[]>([])
 const contractBreakBatches = ref<ContractBreakBatch[]>([])
 const batchesFetched = ref(false)
 const standardWeekBatches = ref<StandardWeekBatch[]>([])
@@ -150,6 +161,33 @@ export function usePayrollCalendar() {
     }
   } catch {
     // non-fatal
+  }
+}
+
+async function fetchCustomContractBreaks(): Promise<void> {
+  try {
+    const { data } = await axiosInstance.get('/api/calendar/contract-breaks/custom')
+    if (data.success) customContractBreaks.value = data.data
+  } catch {
+    // non-fatal
+  }
+}
+
+async function fetchCustomStandardWeekExemptions(): Promise<void> {
+  try {
+    const { data } = await axiosInstance.get('/api/calendar/standard-week/custom')
+    if (data.success) customStandardWeekExemptions.value = data.data
+  } catch {
+    // non-fatal
+  }
+}
+
+async function clearCustomStandardWeekExemption(empId: number): Promise<true | string> {
+  try {
+    const res = await axiosInstance.post('/api/calendar/standard-week/custom/clear', { emp_id: empId })
+    return res.data.success ? true : (res.data.message ?? 'Failed to remove.')
+  } catch (err: any) {
+    return err?.response?.data?.message ?? 'Failed to remove.'
   }
 }
 
@@ -298,33 +336,14 @@ async function fetchStandardWeekBatches(force = false): Promise<void> {
   }
 }
 
-async function addStandardWeekBatch(
-  label: string, startDate: string, endDate: string, notes = '',
-): Promise<true | string> {
-  try {
-    const res = await axiosInstance.post('/api/calendar/standard-week/batches', {
-      label: label.trim(), start_date: startDate, end_date: endDate,
-      notes: notes.trim() || null,
-    })
-    if (res.data.success) {
-      standardWeekBatches.value.push(res.data.data)
-      return true
-    }
-    return res.data.message ?? 'Failed to add batch.'
-  } catch (err: any) {
-    const errors = err?.response?.data?.errors
-    if (errors) return Object.values(errors).flat().join(' ')
-    return err?.response?.data?.message ?? 'Failed to add batch.'
-  }
-}
+
 
 async function updateStandardWeekBatch(
-  id: number, label: string, startDate: string, endDate: string, notes = '',
+  id: number, label: string, weeks: string[], notes = '',
 ): Promise<true | string> {
   try {
     const res = await axiosInstance.post(`/api/calendar/standard-week/batches/update/${id}`, {
-      label: label.trim(), start_date: startDate, end_date: endDate,
-      notes: notes.trim() || null,
+      label: label.trim(), weeks, notes: notes.trim() || null,
     })
     if (res.data.success) {
       const idx = standardWeekBatches.value.findIndex(b => b.id === id)
@@ -336,6 +355,15 @@ async function updateStandardWeekBatch(
     const errors = err?.response?.data?.errors
     if (errors) return Object.values(errors).flat().join(' ')
     return err?.response?.data?.message ?? 'Failed to update batch.'
+  }
+}
+
+async function fetchStandardWeekBatchWeeks(batchId: number): Promise<string[]> {
+  try {
+    const { data } = await axiosInstance.get(`/api/calendar/standard-week/batches/${batchId}/weeks`)
+    return data.success ? data.data : []
+  } catch {
+    return []
   }
 }
 
@@ -389,33 +417,25 @@ async function unassignStandardWeekExemption(id: number): Promise<true | string>
   }
 }
 
-async function addCustomStandardWeekExemption(
-  empId: number, startDate: string, endDate: string,
-): Promise<true | string> {
+async function fetchCustomStandardWeekExemptionWeeks(empId: number): Promise<string[]> {
   try {
-    const res = await axiosInstance.post('/api/calendar/standard-week/custom', {
-      emp_id: empId, start_date: startDate, end_date: endDate,
+    const { data } = await axiosInstance.get('/api/calendar/standard-week/custom/weeks', {
+      params: { emp_id: empId },
     })
-    return res.data.success ? true : (res.data.message ?? 'Failed to add exemption.')
-  } catch (err: any) {
-    const errors = err?.response?.data?.errors
-    if (errors) return Object.values(errors).flat().join(' ')
-    return err?.response?.data?.message ?? 'Failed to add exemption.'
+    return data.success ? data.data : []
+  } catch {
+    return []
   }
 }
 
-async function updateCustomStandardWeekExemption(
-  id: number, startDate: string, endDate: string,
-): Promise<true | string> {
+async function syncCustomStandardWeekExemption(empId: number, weeks: string[]): Promise<true | string> {
   try {
-    const res = await axiosInstance.post(`/api/calendar/standard-week/${id}/update-custom`, {
-      start_date: startDate, end_date: endDate,
+    const res = await axiosInstance.post('/api/calendar/standard-week/custom/sync', {
+      emp_id: empId, weeks,
     })
-    return res.data.success ? true : (res.data.message ?? 'Failed to update.')
+    return res.data.success ? true : (res.data.message ?? 'Failed to update exemption.')
   } catch (err: any) {
-    const errors = err?.response?.data?.errors
-    if (errors) return Object.values(errors).flat().join(' ')
-    return err?.response?.data?.message ?? 'Failed to update.'
+    return err?.response?.data?.message ?? 'Failed to update exemption.'
   }
 }
 
@@ -436,6 +456,25 @@ async function fetchStandardWeekEmployeePicker(
     return data.success ? data.data : []
   } catch {
     return []
+  }
+}
+
+async function addStandardWeekBatch(
+  label: string, weeks: string[], notes = '',
+): Promise<true | string> {
+  try {
+    const res = await axiosInstance.post('/api/calendar/standard-week/batches', {
+      label: label.trim(), weeks, notes: notes.trim() || null,
+    })
+    if (res.data.success) {
+      standardWeekBatches.value.push(res.data.data)
+      return true
+    }
+    return res.data.message ?? 'Failed to add batch.'
+  } catch (err: any) {
+    const errors = err?.response?.data?.errors
+    if (errors) return Object.values(errors).flat().join(' ')
+    return err?.response?.data?.message ?? 'Failed to add batch.'
   }
 }
 
@@ -713,8 +752,16 @@ async function fetchStandardWeekEmployeePicker(
     fetchStandardWeekBatchEmployees,
     assignEmployeesToStandardWeekBatch,
     unassignStandardWeekExemption,
-    addCustomStandardWeekExemption,
-    updateCustomStandardWeekExemption,
+    fetchCustomStandardWeekExemptionWeeks,
+    syncCustomStandardWeekExemption,
     fetchStandardWeekEmployeePicker,
+    fetchStandardWeekBatchWeeks,
+
+    customContractBreaks: computed(() => customContractBreaks.value),
+    fetchCustomContractBreaks,
+
+    customStandardWeekExemptions: computed(() => customStandardWeekExemptions.value),
+    fetchCustomStandardWeekExemptions,
+    clearCustomStandardWeekExemption,
   }
 }
