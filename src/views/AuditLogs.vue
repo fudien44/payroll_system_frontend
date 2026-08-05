@@ -45,7 +45,7 @@ const perPage = ref(50)
 
 const headers = [
   { title: 'Date/Time', key: 'created_at' },
-  { title: 'Actor', key: 'username' },
+  { title: 'User', key: 'username' },
   { title: 'Module', key: 'module' },
   { title: 'Action', key: 'action' },
   { title: 'Description', key: 'description' },
@@ -139,7 +139,7 @@ onMounted(() => {
           <VSelect
             v-model="filters.user_id"
             :items="filterOptions.actors.map(a => ({ title: a.username, value: a.user_id }))"
-            label="Actor"
+            label="User"
             clearable
             density="compact"
           />
