@@ -1,153 +1,242 @@
 <script setup lang="ts">
-import BaseTable from '@/components/base/BaseTable.vue'
-import axios from '@axios'
+import BaseTable from "@/components/base/BaseTable.vue";
+import axios from "@axios";
 
 /* ─────────────────────────────────────────
    TYPES
 ───────────────────────────────────────── */
 interface PassSlipRecord {
-  id:                 number
-  user_id:            number
-  employee_name:      string
-  position:           string | null
-  division:           string | null
-  section:            string | null
-  division_id:        number | null
-  section_id:         number | null
-  request_date:       string
-  request_time_out:   string
-  actual_time:        string | null
-  estimated_arrival:  string | null
-  reason:             string | null
-  label:              string
-  nature_business:    string | null
-  minutes:            number
+  id: number;
+  user_id: number;
+  employee_name: string;
+  position: string | null;
+  division: string | null;
+  section: string | null;
+  division_id: number | null;
+  section_id: number | null;
+  request_date: string;
+  request_time_out: string;
+  actual_time: string | null;
+  estimated_arrival: string | null;
+  reason: string | null;
+  label: string;
+  nature_business: string | null;
+  minutes: number;
 }
 
 /* ─────────────────────────────────────────
    CONSTANTS
 ───────────────────────────────────────── */
 const MONTH_NAMES = [
-  'January','February','March','April','May','June',
-  'July','August','September','October','November','December',
-]
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 
-const MONTH_OPTIONS = MONTH_NAMES.map((name, i) => ({ title: name, value: i + 1 }))
+const MONTH_OPTIONS = MONTH_NAMES.map((name, i) => ({
+  title: name,
+  value: i + 1,
+}));
 
-const CURRENT_YEAR = new Date().getFullYear()
-const YEAR_OPTIONS = [CURRENT_YEAR + 1, CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2]
+const CURRENT_YEAR = new Date().getFullYear();
+const YEAR_OPTIONS = [
+  CURRENT_YEAR + 1,
+  CURRENT_YEAR,
+  CURRENT_YEAR - 1,
+  CURRENT_YEAR - 2,
+];
 
 const TABLE_HEADERS = [
-  { title: 'Employee',    key: 'employee_name',     sortable: true                        },
-  { title: 'Date',        key: 'request_date',      sortable: true                        },
-  { title: 'Request Time Out',    key: 'request_time_out',  sortable: true                        },
-  { title: 'Actual Time In', key: 'actual_time',    sortable: true                        },
-  { title: 'Minutes',     key: 'minutes',           sortable: true,  align: 'end' as const },
-  { title: 'Type',        key: 'label',             sortable: true                        },
-]
+  { title: "Employee", key: "employee_name", sortable: true },
+  { title: "Date", key: "request_date", sortable: true },
+  { title: "Request Time Out", key: "request_time_out", sortable: true },
+  { title: "Actual Time In", key: "actual_time", sortable: true },
+  { title: "Minutes", key: "minutes", sortable: true, align: "end" as const },
+  { title: "Type", key: "label", sortable: true },
+];
 
-const AVATAR_COLORS = ['primary', 'teal', 'orange', 'purple', 'pink', 'indigo'] as const
+const AVATAR_COLORS = [
+  "primary",
+  "teal",
+  "orange",
+  "purple",
+  "pink",
+  "indigo",
+] as const;
 
 /* ─────────────────────────────────────────
    STATE
 ───────────────────────────────────────── */
-const passSlips     = ref<PassSlipRecord[]>([])
-const loading        = ref(false)
-const error          = ref<string | null>(null)
-const selectedMonth = ref(new Date().getMonth() + 1)
-const selectedYear  = ref(CURRENT_YEAR)
-const selectedDivisionId = ref<number | null>(null)
-const selectedSectionId  = ref<number | null>(null)
+const passSlips = ref<PassSlipRecord[]>([]);
+const loading = ref(false);
+const error = ref<string | null>(null);
+const selectedMonth = ref(new Date().getMonth() + 1);
+const selectedYear = ref(CURRENT_YEAR);
+const selectedDivisionId = ref<number | null>(null);
+const selectedSectionId = ref<number | null>(null);
+const selectedReason = ref<"official" | "personal" | null>(null);
 
 /* ─────────────────────────────────────────
    COMPUTED
 ───────────────────────────────────────── */
 const divisionOptions = computed(() => {
-  const seen = new Map<number, string>()
-  for (const ps of passSlips.value) {
-    if (ps.division_id != null && ps.division) seen.set(ps.division_id, ps.division)
-  }
-  return Array.from(seen, ([value, title]) => ({ title, value }))
-})
+  const seen = new Map<number, string>();
+  passSlips.value.forEach((ps) => {
+    if (ps.division_id != null && ps.division)
+      seen.set(ps.division_id, ps.division);
+  });
+  return [...seen.entries()]
+    .map(([value, title]) => ({ title, value }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+});
 
 const sectionOptions = computed(() => {
-  const seen = new Map<number, string>()
-  for (const ps of passSlips.value) {
-    if (selectedDivisionId.value != null && ps.division_id !== selectedDivisionId.value) continue
-    if (ps.section_id != null && ps.section) seen.set(ps.section_id, ps.section)
-  }
-  return Array.from(seen, ([value, title]) => ({ title, value }))
-})
+  const base =
+    selectedDivisionId.value != null
+      ? passSlips.value.filter(
+          (ps) => ps.division_id === selectedDivisionId.value,
+        )
+      : passSlips.value;
+  const seen = new Map<number, string>();
+  base.forEach((ps) => {
+    if (ps.section_id != null && ps.section)
+      seen.set(ps.section_id, ps.section);
+  });
+  return [...seen.entries()]
+    .map(([value, title]) => ({ title, value }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+});
 
 const filteredItems = computed(() =>
   passSlips.value
-    .filter(ps => selectedDivisionId.value == null || ps.division_id === selectedDivisionId.value)
-    .filter(ps => selectedSectionId.value  == null || ps.section_id  === selectedSectionId.value)
-)
+    .filter(
+      (ps) =>
+        selectedDivisionId.value == null ||
+        ps.division_id === selectedDivisionId.value,
+    )
+    .filter(
+      (ps) =>
+        selectedSectionId.value == null ||
+        ps.section_id === selectedSectionId.value,
+    )
+    .filter((ps) => {
+      if (selectedReason.value == null) return true;
+      const isOfficial = ps.reason === "official";
+      return selectedReason.value === "official" ? isOfficial : !isOfficial;
+    }),
+);
 
-const totalPassSlips = computed(() => filteredItems.value.length)
-const totalMinutes   = computed(() => filteredItems.value.reduce((sum, ps) => sum + ps.minutes, 0))
-const totalOfficial  = computed(() => filteredItems.value.filter(ps => ps.reason === 'official').length)
-const totalPersonal  = computed(() => filteredItems.value.filter(ps => ps.reason !== 'official').length)
+const hasActiveFilters = computed(
+  () =>
+    selectedDivisionId.value != null ||
+    selectedSectionId.value != null ||
+    selectedReason.value != null,
+);
+
+function clearFilters() {
+  selectedDivisionId.value = null;
+  selectedSectionId.value = null;
+  selectedReason.value = null;
+}
+
+const totalPassSlips = computed(() => filteredItems.value.length);
+const totalMinutes = computed(() =>
+  filteredItems.value.reduce((sum, ps) => sum + ps.minutes, 0),
+);
+const totalOfficial = computed(
+  () => filteredItems.value.filter((ps) => ps.reason === "official").length,
+);
+const totalPersonal = computed(
+  () => filteredItems.value.filter((ps) => ps.reason !== "official").length,
+);
 
 /* ─────────────────────────────────────────
    HELPERS
 ───────────────────────────────────────── */
 function initials(fullName: string): string {
-  const [surname, rest] = fullName.split(', ')
-  const first = rest?.trim().charAt(0) ?? ''
-  return `${surname?.charAt(0) ?? ''}${first}`.toUpperCase()
+  const [surname, rest] = fullName.split(", ");
+  const first = rest?.trim().charAt(0) ?? "";
+  return `${surname?.charAt(0) ?? ""}${first}`.toUpperCase();
 }
 
 function avatarColor(id: number): string {
-  return AVATAR_COLORS[id % AVATAR_COLORS.length]
+  return AVATAR_COLORS[id % AVATAR_COLORS.length];
 }
 
 /* ─────────────────────────────────────────
    API
 ───────────────────────────────────────── */
 async function fetchPassSlips() {
-  loading.value = true
-  error.value   = null
+  loading.value = true;
+  error.value = null;
   try {
-    const { data } = await axios.get('/api/pass-slip', {
+    const { data } = await axios.get("/api/pass-slip", {
       params: { month: selectedMonth.value, year: selectedYear.value },
-    })
-    passSlips.value = data.data ?? []
+    });
+    passSlips.value = data.data ?? [];
   } catch {
-    error.value = 'Failed to load pass slip records.'
+    error.value = "Failed to load pass slip records.";
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 watch([selectedMonth, selectedYear], () => {
-  selectedDivisionId.value = null
-  selectedSectionId.value  = null
-  fetchPassSlips()
-})
+  selectedDivisionId.value = null;
+  selectedSectionId.value = null;
+  fetchPassSlips();
+});
+
+const syncingDivisionFromSection = ref(false);
 
 watch(selectedDivisionId, () => {
-  selectedSectionId.value = null
-})
+  if (syncingDivisionFromSection.value) {
+    syncingDivisionFromSection.value = false;
+    return;
+  }
+  selectedSectionId.value = null;
+});
+
+watch(selectedSectionId, (newSectionId) => {
+  if (newSectionId == null) return;
+  if (selectedDivisionId.value != null) return;
+
+  const match = passSlips.value.find((ps) => ps.section_id === newSectionId);
+  if (match?.division_id != null) {
+    syncingDivisionFromSection.value = true;
+    selectedDivisionId.value = match.division_id;
+  }
+});
 
 /* ─────────────────────────────────────────
    INIT
 ───────────────────────────────────────── */
-onMounted(fetchPassSlips)
+onMounted(() => {
+  fetchPassSlips();
+});
 </script>
 
 <template>
   <div>
     <VContainer fluid class="pa-6">
-
       <!-- ── Page Header ── -->
-      <div class="d-flex align-center justify-space-between flex-wrap gap-4 mb-2">
+      <div
+        class="d-flex align-center justify-space-between flex-wrap gap-4 mb-2"
+      >
         <div>
           <h4 class="text-h5 font-weight-bold mb-1">Pass Slip Reference</h4>
           <p class="text-body-2 text-medium-emphasis mb-0">
-            Read-only list of approved, completed pass slips of all active JO employees for the selected period.
-            View DTR to make edits — this page is for reference only.
+            Read-only list of approved, completed pass slips of all active JO
+            employees for the selected period. This page is for reference only.
           </p>
         </div>
       </div>
@@ -169,8 +258,8 @@ onMounted(fetchPassSlips)
       </VAlert>
 
       <!-- ── Filters ── -->
-      <VRow class="mb-2 mt-4" dense>
-        <VCol cols="6" sm="3">
+      <VCard variant="flat" rounded="lg" class="mb-2 mt-4">
+        <VCardText class="d-flex flex-wrap align-center gap-3">
           <VSelect
             v-model="selectedMonth"
             label="Month"
@@ -179,20 +268,20 @@ onMounted(fetchPassSlips)
             item-value="value"
             variant="outlined"
             density="compact"
+            prepend-inner-icon="mdi-calendar-month-outline"
             hide-details
+            style="max-width: 160px"
           />
-        </VCol>
-        <VCol cols="6" sm="2">
           <VSelect
             v-model="selectedYear"
             label="Year"
             :items="YEAR_OPTIONS"
             variant="outlined"
             density="compact"
+            prepend-inner-icon="mdi-calendar-outline"
             hide-details
+            style="max-width: 130px"
           />
-        </VCol>
-        <VCol cols="6" sm="3">
           <VSelect
             v-model="selectedDivisionId"
             label="Division"
@@ -201,12 +290,12 @@ onMounted(fetchPassSlips)
             item-value="value"
             variant="outlined"
             density="compact"
+            prepend-inner-icon="mdi-office-building-outline"
             clearable
             hide-details
-            :no-data-text="'No divisions in this period'"
+            :no-data-text="'No divisions found'"
+            style="max-width: 200px"
           />
-        </VCol>
-        <VCol cols="6" sm="3">
           <VSelect
             v-model="selectedSectionId"
             label="Section"
@@ -215,12 +304,43 @@ onMounted(fetchPassSlips)
             item-value="value"
             variant="outlined"
             density="compact"
+            prepend-inner-icon="mdi-account-group-outline"
             clearable
             hide-details
-            :no-data-text="'No sections in this period'"
+            :no-data-text="'No sections found'"
+            style="max-width: 200px"
           />
-        </VCol>
-      </VRow>
+
+          <VBtnToggle
+            v-model="selectedReason"
+            density="compact"
+            variant="outlined"
+            divided
+            rounded="lg"
+            color="primary"
+          >
+            <VBtn value="official" size="small">
+              <VIcon start icon="mdi-briefcase-outline" size="16" />
+              Official
+            </VBtn>
+            <VBtn value="personal" size="small">
+              <VIcon start icon="mdi-account-outline" size="16" />
+              Personal
+            </VBtn>
+          </VBtnToggle>
+
+          <VBtn
+            v-if="hasActiveFilters"
+            variant="text"
+            size="small"
+            color="default"
+            prepend-icon="mdi-close"
+            @click="clearFilters"
+          >
+            Clear filters
+          </VBtn>
+        </VCardText>
+      </VCard>
 
       <!-- ── Summary Cards ── -->
       <VRow class="mb-6 mt-2">
@@ -282,12 +402,22 @@ onMounted(fetchPassSlips)
         <!-- Employee cell with avatar -->
         <template #item.employee_name="{ item }">
           <div class="d-flex align-center gap-3">
-            <VAvatar :color="avatarColor(item.user_id)" variant="tonal" size="36">
-              <span class="text-caption font-weight-medium">{{ initials(item.employee_name) }}</span>
+            <VAvatar
+              :color="avatarColor(item.user_id)"
+              variant="tonal"
+              size="36"
+            >
+              <span class="text-caption font-weight-medium">{{
+                initials(item.employee_name)
+              }}</span>
             </VAvatar>
             <div>
-              <div class="text-body-2 font-weight-medium">{{ item.employee_name }}</div>
-              <div class="text-caption text-medium-emphasis">{{ item.position ?? '' }}</div>
+              <div class="text-body-2 font-weight-medium">
+                {{ item.employee_name }}
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                {{ item.position ?? "" }}
+              </div>
             </div>
           </div>
         </template>
@@ -312,17 +442,23 @@ onMounted(fetchPassSlips)
           >
             <VIcon
               start
-              :icon="item.reason === 'official' ? 'mdi-briefcase-outline' : 'mdi-account-outline'"
+              :icon="
+                item.reason === 'official'
+                  ? 'mdi-briefcase-outline'
+                  : 'mdi-account-outline'
+              "
               size="14"
             />
-            {{ item.reason === 'official' ? 'Official' : 'Personal' }}
+            {{ item.reason === "official" ? "Official" : "Personal" }}
           </VChip>
-          <div v-if="item.nature_business" class="text-caption text-medium-emphasis mt-1">
+          <div
+            v-if="item.nature_business"
+            class="text-caption text-medium-emphasis mt-1"
+          >
             {{ item.nature_business }}
           </div>
         </template>
       </BaseTable>
-
     </VContainer>
   </div>
 </template>
