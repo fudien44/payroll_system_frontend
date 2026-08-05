@@ -20,7 +20,7 @@ export const globals: Globals = {
     host: '10.10.123.41',
     port: 8080,
     key: 'hu882a2okihcyczisf6y',
-    scheme: 'http',
+    scheme: 'https',
   },
 
 }

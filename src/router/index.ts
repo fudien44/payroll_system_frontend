@@ -1,4 +1,6 @@
 import { useAuthStore } from '@/stores/auth'
+import { useSnackbarStore } from '@/stores/snackbar'
+import { useUserStore } from '@/stores/user'
 import { createRouter, createWebHistory } from 'vue-router'
 
 declare module 'vue-router' {
@@ -6,6 +8,7 @@ declare module 'vue-router' {
     layout?: string
     requiresAuth?: boolean
     requiresGuest?: boolean
+    requiresSuperAdmin?: boolean
   }
 }
 
@@ -187,11 +190,25 @@ const router = createRouter({
         layout: 'blank',
       },
     },
+
+    {
+  path: '/audit-logs',
+  name: 'AuditLogs',
+  component: () => import('@/views/AuditLogs.vue'),
+  meta: {
+    title: 'Audit Trail',
+    layout: 'content',
+    requiresAuth: true,
+    requiresSuperAdmin: true,
+      },
+    },
   ],
 })
 
 router.beforeEach(async (to, _from) => {
   const authStore = useAuthStore()
+  const userStore = useUserStore() 
+  const snackbarStore = useSnackbarStore()
 
   const isLoggedIn = authStore.isAuthenticated
 
@@ -203,6 +220,11 @@ router.beforeEach(async (to, _from) => {
   }
 
   if (to.meta.requiresGuest && isLoggedIn) {
+    return { name: 'home' }
+  }
+
+  if (to.meta.requiresSuperAdmin && !userStore.isSuperAdmin) {
+    snackbarStore.show('error', 'Access denied. Superadmin privileges required.')   // NEW — direct trigger, no query param
     return { name: 'home' }
   }
 

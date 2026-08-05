@@ -9,6 +9,7 @@ import { isGroupActive } from '@/layouts/components/utils'
 import VerticalNavGroup from '@/layouts/components/vertical-nav/VerticalNavGroup.vue'
 import VerticalNavLink from '@/layouts/components/vertical-nav/VerticalNavLink.vue'
 import verticalItems from '@/menus/vertical'
+import { useUserStore } from '@/stores/user'
 import { appConfig } from '@appConfig'
 import 'vue3-perfect-scrollbar/dist/vue3-perfect-scrollbar.css'
 
@@ -24,11 +25,36 @@ interface Emit {
   (e: 'update:isDrawerOpen', val: boolean): void
 }
 
+
 const { isVerticalMenuMini, isSemiDark, skins } = useAppConfig()
 const OpenedGroup = ref<string[]>([])
 
+const userStore = useUserStore()
+
+// NEW — hide superAdminOnly items (and any heading whose section becomes
+// entirely empty as a result) for non-superadmins
+const filteredVerticalItems = computed(() => {
+  const filtered = verticalItems.filter(
+    item => !item.superAdminOnly || userStore.isSuperAdmin
+  )
+
+  // Drop a heading if every item that followed it (up to the next heading)
+  // got filtered out, so we don't show a lonely section label with nothing under it
+  const result: typeof filtered = []
+  for (let i = 0; i < filtered.length; i++) {
+    const item = filtered[i]
+    if (item.heading) {
+      const next = filtered[i + 1]
+      if (!next || next.heading) continue   // skip heading with no items after it
+    }
+    result.push(item)
+  }
+  return result
+})
+
 const resolveNavLinkGroup = computed(() => {
-  return (navItem: VerticalMenuItem) => (navItem.children ? VerticalNavGroup : VerticalNavLink)
+  return (navItem: VerticalMenuItem) =>
+    ('children' in navItem && navItem.children) ? VerticalNavGroup : VerticalNavLink
 })
 
 OpenedGroup.value = isGroupActive(verticalItems)
@@ -133,10 +159,10 @@ const handleScroll = () => {
           open-strategy="single"
           class="layout-vertical-nav-list text-high-emphasis"
         >
-          <template
-            v-for="navItem in verticalItems"
-            :key="navItem.title"
-          >
+                  <template
+          v-for="navItem in filteredVerticalItems"
+          :key="'heading' in navItem ? navItem.heading : navItem.name"
+        >
             <VListSubheader
               v-if="navItem.heading"
               class="text-uppercase font-weight-bold"

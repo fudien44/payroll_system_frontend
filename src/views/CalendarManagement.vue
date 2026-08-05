@@ -12,21 +12,29 @@
       </div>
 
       <div class="cm-header-actions">
-        <VBtn
-          variant="outlined"
-          prepend-icon="mdi-calendar-star"
-          @click="openHolidayDialog()"
-        >
-          Add Holiday
-        </VBtn>
-        <VBtn
-          color="primary"
-          prepend-icon="mdi-calendar-remove"
-          @click="openSuspensionDialog()"
-        >
-          Add Suspension
-        </VBtn>
-      </div>
+  <VMenu>
+    <template #activator="{ props: menuProps }">
+      <VBtn
+        v-bind="menuProps"
+        color="primary"
+        prepend-icon="mdi-plus"
+        append-icon="mdi-menu-down"
+      >
+        Add
+      </VBtn>
+    </template>
+    <VList density="compact">
+  <VListItem prepend-icon="mdi-calendar-star" title="Holiday" @click="openHolidayDialog()" />
+  <VListItem prepend-icon="mdi-calendar-remove" title="Suspension Day" @click="openSuspensionDialog()" />
+  <VDivider class="my-1" />
+  <VListItem prepend-icon="mdi-calendar-remove-outline" title="Contract Break Batch" @click="openBatchDialog()" />
+  <VListItem prepend-icon="mdi-account-clock-outline" title="Individual Contract Break" @click="openCustomBreakDialog()" />
+  <VDivider class="my-1" />
+  <VListItem prepend-icon="mdi-calendar-clock-outline" title="Standard Week Batch" @click="openStandardWeekBatchDialog()" />
+  <VListItem prepend-icon="mdi-account-clock" title="Individual Standard Week" @click="openCustomStandardWeekDialog()" />
+</VList>
+  </VMenu>
+</div>
     </div>
 
     <!-- ── Global Error ──────────────────────────────────────────────────── -->
@@ -234,13 +242,87 @@
           </div>
         </div>
 
+                <!-- Contract Breaks -->
+        <div class="cm-card">
+          <div class="cm-card-header">
+            <h3 class="cm-card-title">Contract Breaks</h3>
+          </div>
+
+          <div v-if="contractBreakBatchesForYear.length">
+          <div
+            v-for="batch in contractBreakBatchesForYear"
+            :key="batch.id"
+            class="cm-cb-item"
+            @click="openBatchDetail(batch)"
+          >
+            <div class="cm-cb-item-main">
+              <VChip size="x-small" color="grey-darken-1" variant="tonal" label>
+                {{ formatBatchRange(batch.start_date, batch.end_date) }}
+              </VChip>
+              <span class="cm-cb-item-label">{{ batch.label }}</span>
+            </div>
+            <div class="cm-cb-item-meta">
+              <span class="text-caption text-medium-emphasis">
+                Resumes {{ formatDisplayDate(batch.resumption_date) }}
+              </span>
+              <VChip size="x-small" color="primary" variant="tonal">
+                <VIcon start size="11">mdi-account-multiple</VIcon>
+                {{ batch.employee_breaks_count ?? 0 }}
+              </VChip>
+              <VBtn icon size="x-small" variant="text" color="primary" @click.stop="openBatchDialog(batch)">
+                <VIcon size="15">mdi-pencil-outline</VIcon>
+              </VBtn>
+              <VBtn icon size="x-small" variant="text" color="error" @click.stop="handleRemoveBatch(batch.id)">
+                <VIcon size="15">mdi-delete-outline</VIcon>
+              </VBtn>
+            </div>
+          </div>
+        </div>
+
+        <p v-else class="cm-empty-text">No contract break batches for {{ viewYear }}.</p>
+        </div>
+
+        <!-- Standard Week Exemptions -->
+        <div class="cm-card">
+          <div class="cm-card-header">
+            <h3 class="cm-card-title">Standard Week Exemptions</h3>
+          </div>
+
+          <div v-if="standardWeekBatchesForYear.length">
+            <div
+              v-for="batch in standardWeekBatchesForYear"
+              :key="batch.id"
+              class="cm-cb-item"
+              @click="openStandardWeekBatchDetail(batch)"
+            >
+              <div class="cm-cb-item-main">
+                <VChip size="x-small" color="grey-darken-1" variant="tonal" label>
+                  {{ formatBatchRange(batch.start_date, batch.end_date) }}
+                </VChip>
+                <span class="cm-cb-item-label">{{ batch.label }}</span>
+              </div>
+              <div class="cm-cb-item-meta">
+                <VChip size="x-small" color="primary" variant="tonal">
+                  <VIcon start size="11">mdi-account-multiple</VIcon>
+                  {{ batch.employee_exemptions_count ?? 0 }}
+                </VChip>
+                <VBtn icon size="x-small" variant="text" color="primary" @click.stop="openStandardWeekBatchDialog(batch)">
+                  <VIcon size="15">mdi-pencil-outline</VIcon>
+                </VBtn>
+                <VBtn icon size="x-small" variant="text" color="error" @click.stop="handleRemoveStandardWeekBatch(batch.id)">
+                  <VIcon size="15">mdi-delete-outline</VIcon>
+                </VBtn>
+              </div>
+            </div>
+          </div>
+
+          <p v-else class="cm-empty-text">No standard-week exemptions for {{ viewYear }}.</p>
+        </div>
+
         <!-- Holidays -->
         <div class="cm-card">
           <div class="cm-card-header">
             <h3 class="cm-card-title">Holidays</h3>
-            <VBtn size="small" variant="tonal" color="primary" prepend-icon="mdi-plus" @click="openHolidayDialog()">
-              Add
-            </VBtn>
           </div>
 
           <div v-if="summary.regularHolidays.length || summary.specialHolidays.length">
@@ -303,9 +385,6 @@
         <div class="cm-card">
           <div class="cm-card-header">
             <h3 class="cm-card-title">Suspension Days</h3>
-            <VBtn size="small" variant="tonal" color="primary" prepend-icon="mdi-plus" @click="openSuspensionDialog()">
-              Add
-            </VBtn>
           </div>
 
           <div v-if="summary.suspensions.length">
@@ -337,52 +416,7 @@
           <p v-else class="cm-empty-text">No suspension days this month.</p>
         </div>
 
-        <!-- Contract Breaks -->
-<div class="cm-card">
-  <div class="cm-card-header">
-    <h3 class="cm-card-title">Contract Breaks</h3>
-    <div class="d-flex gap-2">
-      <VBtn size="small" variant="text" color="primary" @click="openCustomBreakDialog()">
-        + Individual
-      </VBtn>
-      <VBtn size="small" variant="tonal" color="primary" prepend-icon="mdi-plus" @click="openBatchDialog()">
-        Add Batch
-      </VBtn>
-    </div>
-  </div>
 
-  <div v-if="contractBreakBatches.length">
-    <div
-      v-for="batch in contractBreakBatches"
-      :key="batch.id"
-      class="cm-list-item"
-      style="cursor: pointer;"
-      @click="openBatchDetail(batch)"
-    >
-      <div class="cm-list-item-info">
-        <VChip size="x-small" color="grey-darken-1" variant="tonal" label>
-          {{ formatDisplayDate(batch.start_date) }} – {{ formatDisplayDate(batch.end_date) }}
-        </VChip>
-        <span class="cm-list-item-label">
-          {{ batch.label }}
-          <VChip size="x-small" color="primary" variant="tonal" class="ml-1">
-            {{ batch.employee_breaks_count ?? 0 }}
-          </VChip>
-        </span>
-      </div>
-      <div class="cm-list-item-actions">
-        <VBtn icon size="x-small" variant="text" color="primary" @click.stop="openBatchDialog(batch)">
-          <VIcon size="15">mdi-pencil-outline</VIcon>
-        </VBtn>
-        <VBtn icon size="x-small" variant="text" color="error" @click.stop="handleRemoveBatch(batch.id)">
-          <VIcon size="15">mdi-delete-outline</VIcon>
-        </VBtn>
-      </div>
-    </div>
-  </div>
-
-  <p v-else class="cm-empty-text">No contract break batches yet.</p>
-</div>
 
       </div>
     </div>
@@ -755,6 +789,182 @@
   </VCard>
 </VDialog>
 
+
+<VDialog v-model="standardWeekBatchDialog.visible" max-width="440" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar color="indigo" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-calendar-clock-outline" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">
+            {{ standardWeekBatchDialog.editId ? 'Edit Batch' : 'Add Standard Week Batch' }}
+          </div>
+          <div class="text-caption text-medium-emphasis">
+            {{ standardWeekBatchDialog.editId ? 'Update batch details' : 'Exempt employees from compressed week for a date range' }}
+          </div>
+        </div>
+      </div>
+
+      <div class="cm-field mb-3">
+        <label class="cm-label">Label <span class="cm-required">*</span></label>
+        <VTextField
+          v-model="standardWeekBatchDialog.label"
+          placeholder="e.g. August 2026 - Cashiering"
+          density="compact"
+          variant="outlined"
+          prepend-inner-icon="mdi-tag-outline"
+          hide-details="auto"
+        />
+      </div>
+
+      <div class="d-flex gap-3 mb-3">
+        <div class="cm-field flex-1">
+          <label class="cm-label">Start Date <span class="cm-required">*</span></label>
+          <VTextField v-model="standardWeekBatchDialog.startDate" type="date" density="compact" variant="outlined" hide-details="auto" />
+        </div>
+        <div class="cm-field flex-1">
+          <label class="cm-label">End Date <span class="cm-required">*</span></label>
+          <VTextField v-model="standardWeekBatchDialog.endDate" type="date" density="compact" variant="outlined" hide-details="auto" />
+        </div>
+      </div>
+
+      <div class="cm-field">
+        <label class="cm-label">Notes</label>
+        <VTextField
+          v-model="standardWeekBatchDialog.notes"
+          placeholder="Optional — e.g. memo reference"
+          density="compact"
+          variant="outlined"
+          prepend-inner-icon="mdi-note-outline"
+          hide-details="auto"
+        />
+      </div>
+
+      <VAlert v-if="standardWeekBatchDialog.error" type="error" variant="tonal" density="compact" class="mt-3">
+        {{ standardWeekBatchDialog.error }}
+      </VAlert>
+    </VCardText>
+
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" :disabled="standardWeekBatchDialog.loading" @click="closeStandardWeekBatchDialog">Cancel</VBtn>
+      <VBtn
+        color="indigo"
+        variant="tonal"
+        :loading="standardWeekBatchDialog.loading"
+        :prepend-icon="standardWeekBatchDialog.editId ? 'mdi-content-save-outline' : 'mdi-calendar-plus'"
+        @click="submitStandardWeekBatch"
+      >
+        {{ standardWeekBatchDialog.editId ? 'Save Changes' : 'Create Batch' }}
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
+<!-- ── Standard Week Employee Picker Dialog (batch assignment) ───────── -->
+<VDialog v-model="standardWeekEmployeePickerDialog.visible" max-width="480" scrollable>
+  <VCard rounded="lg">
+    <VCardText class="pa-6 pb-2">
+      <div class="text-body-1 font-weight-medium mb-1">Assign Employees</div>
+      <div class="text-caption text-medium-emphasis mb-3">Select employees to exempt from compressed week for this batch's date range</div>
+
+      <div class="d-flex gap-2 mb-2">
+        <VSelect
+          v-model="standardWeekPickerDivisionFilter"
+          :items="standardWeekPickerDivisionOptions"
+          label="Division"
+          density="compact"
+          variant="outlined"
+          clearable
+          hide-details
+        />
+        <VSelect
+          v-model="standardWeekPickerSectionFilter"
+          :items="standardWeekPickerSectionOptions"
+          label="Section"
+          density="compact"
+          variant="outlined"
+          clearable
+          hide-details
+        />
+      </div>
+
+      <VTextField
+        v-model="standardWeekEmployeePickerDialog.search"
+        placeholder="Search by name or position"
+        density="compact"
+        variant="outlined"
+        prepend-inner-icon="mdi-magnify"
+        hide-details
+        clearable
+      />
+    </VCardText>
+
+    <VDivider />
+
+    <VCardText class="pa-0" style="max-height: 400px; overflow-y: auto;">
+      <div v-if="filteredStandardWeekPickerEmployees.length > 0" class="d-flex align-center gap-2 pa-3 pb-0">
+        <VCheckboxBtn
+          :model-value="allStandardWeekFilteredChecked"
+          :indeterminate="someStandardWeekFilteredChecked"
+          density="compact"
+          color="indigo"
+          hide-details
+          @update:model-value="toggleSelectAllStandardWeekFiltered"
+        />
+        <span class="text-caption text-medium-emphasis">
+          Select all shown ({{ filteredStandardWeekPickerEmployees.length }})
+        </span>
+      </div>
+
+      <VSkeletonLoader v-if="standardWeekEmployeePickerDialog.loading" type="list-item-two-line, list-item-two-line, list-item-two-line" />
+
+      <VList v-else select-strategy="classic">
+        <VListItem
+          v-for="emp in filteredStandardWeekPickerEmployees"
+          :key="emp.emp_id"
+          @click="
+            standardWeekEmployeePickerDialog.selected.includes(emp.emp_id)
+              ? standardWeekEmployeePickerDialog.selected = standardWeekEmployeePickerDialog.selected.filter(id => id !== emp.emp_id)
+              : standardWeekEmployeePickerDialog.selected.push(emp.emp_id)
+          "
+        >
+          <template #prepend>
+            <VCheckboxBtn :model-value="standardWeekEmployeePickerDialog.selected.includes(emp.emp_id)" />
+          </template>
+          <VListItemTitle>{{ emp.name }}</VListItemTitle>
+          <VListItemSubtitle>{{ emp.position }} · {{ emp.division_name ?? '—' }}</VListItemSubtitle>
+        </VListItem>
+
+        <p v-if="filteredStandardWeekPickerEmployees.length === 0" class="text-center text-body-2 text-medium-emphasis pa-4 mb-0">
+          No matching employees found.
+        </p>
+      </VList>
+    </VCardText>
+
+    <VDivider />
+    <VCardActions class="justify-space-between pa-4">
+      <span class="text-caption text-medium-emphasis">
+        {{ standardWeekEmployeePickerDialog.selected.length }} selected
+      </span>
+      <div class="d-flex gap-2">
+        <VBtn variant="text" @click="standardWeekEmployeePickerDialog.visible = false">Cancel</VBtn>
+        <VBtn
+          color="indigo"
+          variant="tonal"
+          :loading="standardWeekEmployeePickerDialog.assigning"
+          :disabled="standardWeekEmployeePickerDialog.selected.length === 0"
+          @click="confirmStandardWeekAssignment"
+        >
+          Assign ({{ standardWeekEmployeePickerDialog.selected.length }})
+        </VBtn>
+      </div>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
 <!-- ── Batch Detail Dialog ────────────────────────────────────────────── -->
 <VDialog v-model="batchDetailDialog.visible" max-width="560" scrollable>
   <VCard rounded="lg">
@@ -844,26 +1054,61 @@
 <VDialog v-model="employeePickerDialog.visible" max-width="480" scrollable>
   <VCard rounded="lg">
     <VCardText class="pa-6 pb-2">
-      <div class="text-body-1 font-weight-medium mb-1">Assign Employees</div>
-      <div class="text-caption text-medium-emphasis mb-3">Select employees to add to this batch</div>
+  <div class="text-body-1 font-weight-medium mb-1">Assign Employees</div>
+  <div class="text-caption text-medium-emphasis mb-3">Select employees to add to this batch</div>
 
-      <VTextField
-        v-model="employeePickerDialog.search"
-        placeholder="Search by name or position"
-        density="compact"
-        variant="outlined"
-        prepend-inner-icon="mdi-magnify"
-        hide-details
-        clearable
-      />
-    </VCardText>
+  <div class="d-flex gap-2 mb-2">
+    <VSelect
+      v-model="employeePickerDivisionFilter"
+      :items="employeePickerDivisionOptions"
+      label="Division"
+      density="compact"
+      variant="outlined"
+      clearable
+      hide-details
+    />
+    <VSelect
+      v-model="employeePickerSectionFilter"
+      :items="employeePickerSectionOptions"
+      label="Section"
+      density="compact"
+      variant="outlined"
+      clearable
+      hide-details
+    />
+  </div>
 
-    <VDivider />
+  <VTextField
+    v-model="employeePickerDialog.search"
+    placeholder="Search by name or position"
+    density="compact"
+    variant="outlined"
+    prepend-inner-icon="mdi-magnify"
+    hide-details
+    clearable
+  />
+</VCardText>
 
-    <VCardText class="pa-0" style="max-height: 400px; overflow-y: auto;">
-      <VSkeletonLoader v-if="employeePickerDialog.loading" type="list-item-two-line, list-item-two-line, list-item-two-line" />
+<VDivider />
 
-      <VList v-else select-strategy="classic">
+<VCardText class="pa-0" style="max-height: 400px; overflow-y: auto;">
+  <div v-if="filteredPickerEmployees.length > 0" class="d-flex align-center gap-2 pa-3 pb-0">
+    <VCheckboxBtn
+      :model-value="allFilteredChecked"
+      :indeterminate="someFilteredChecked"
+      density="compact"
+      color="primary"
+      hide-details
+      @update:model-value="toggleSelectAllFiltered"
+    />
+    <span class="text-caption text-medium-emphasis">
+      Select all shown ({{ filteredPickerEmployees.length }})
+    </span>
+  </div>
+
+  <VSkeletonLoader v-if="employeePickerDialog.loading" type="list-item-two-line, list-item-two-line, list-item-two-line" />
+
+  <VList v-else select-strategy="classic">
         <VListItem
           v-for="emp in filteredPickerEmployees"
           :key="emp.emp_id"
@@ -906,6 +1151,91 @@
     </VCardActions>
   </VCard>
 </VDialog>
+
+<!-- ── Standard Week Batch Detail Dialog ─────────────────────────────── -->
+<VDialog v-model="standardWeekBatchDetailDialog.visible" max-width="560" scrollable>
+  <VCard rounded="lg">
+    <VCardText class="pa-6 pb-0">
+      <div class="d-flex align-center gap-3 mb-1">
+        <VAvatar color="indigo" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-calendar-clock-outline" size="22" />
+        </VAvatar>
+        <div class="flex-grow-1">
+          <div class="text-body-1 font-weight-medium">{{ standardWeekBatchDetailDialog.batch?.label }}</div>
+          <div class="text-caption text-medium-emphasis">
+            {{ standardWeekBatchDetailDialog.batch ? formatDisplayDate(standardWeekBatchDetailDialog.batch.start_date) : '' }}
+            –
+            {{ standardWeekBatchDetailDialog.batch ? formatDisplayDate(standardWeekBatchDetailDialog.batch.end_date) : '' }}
+          </div>
+        </div>
+        <VBtn icon variant="text" size="small" @click="closeStandardWeekBatchDetail">
+          <VIcon>mdi-close</VIcon>
+        </VBtn>
+      </div>
+    </VCardText>
+
+    <VDivider class="mt-4" />
+
+    <VCardText class="pa-6">
+      <div class="d-flex justify-space-between align-center mb-3">
+        <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
+          Assigned Employees
+          <VChip size="x-small" color="primary" variant="tonal" class="ml-1">
+            {{ standardWeekBatchDetailDialog.assignedEmployees.length }}
+          </VChip>
+        </p>
+        <VBtn
+          size="small"
+          variant="tonal"
+          color="indigo"
+          prepend-icon="mdi-account-plus-outline"
+          @click="standardWeekBatchDetailDialog.batch && openStandardWeekEmployeePicker(standardWeekBatchDetailDialog.batch.id)"
+        >
+          Assign Employees
+        </VBtn>
+      </div>
+
+      <VSkeletonLoader v-if="standardWeekBatchDetailDialog.loadingAssigned" type="list-item-two-line, list-item-two-line" />
+
+      <div v-else-if="standardWeekBatchDetailDialog.assignedEmployees.length === 0" class="text-center py-6"
+        style="border: 1px dashed rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 8px;">
+        <VIcon icon="mdi-account-off-outline" size="32" class="text-medium-emphasis mb-2" />
+        <p class="text-body-2 text-medium-emphasis mb-0">No employees assigned yet.</p>
+      </div>
+
+      <div v-else style="max-height: 360px; overflow-y: auto;">
+        <div
+          v-for="exemption in standardWeekBatchDetailDialog.assignedEmployees"
+          :key="exemption.id"
+          class="cm-list-item"
+        >
+          <div class="cm-list-item-info">
+            <VAvatar size="28" color="grey-lighten-2" class="mr-1">
+              <VIcon size="14">mdi-account</VIcon>
+            </VAvatar>
+            <span class="cm-list-item-label">
+              {{ exemption.emp_name }}
+              <span v-if="exemption.division_name" class="text-caption text-medium-emphasis ml-1">
+                · {{ exemption.division_name }}
+              </span>
+            </span>
+          </div>
+          <div class="cm-list-item-actions">
+            <VBtn icon size="x-small" variant="text" color="error" @click="handleUnassignStandardWeek(exemption)">
+              <VIcon size="15">mdi-close</VIcon>
+            </VBtn>
+          </div>
+        </div>
+      </div>
+    </VCardText>
+
+    <VDivider />
+    <VCardActions class="justify-end pa-4">
+      <VBtn variant="tonal" @click="closeStandardWeekBatchDetail">Close</VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
 
 <!-- ── Individual Contract Break Dialog ──────────────────────────────── -->
 <VDialog v-model="customBreakDialog.visible" max-width="440" persistent>
@@ -1041,6 +1371,126 @@
   </VCard>
 </VDialog>
 
+<!-- ── Individual Standard Week Dialog ───────────────────────────────── -->
+<VDialog v-model="customStandardWeekDialog.visible" max-width="440" persistent>
+  <VCard rounded="lg">
+    <VCardText class="pa-6">
+      <div class="d-flex align-center gap-3 mb-4">
+        <VAvatar color="indigo" variant="tonal" size="44" rounded="lg">
+          <VIcon icon="mdi-account-clock" size="22" />
+        </VAvatar>
+        <div>
+          <div class="text-body-1 font-weight-medium">
+            {{ customStandardWeekDialog.editId ? 'Edit Individual Standard Week' : 'Add Individual Standard Week' }}
+          </div>
+          <div class="text-caption text-medium-emphasis">
+            {{ customStandardWeekDialog.editId ? 'Update this employee\'s exemption dates' : 'For an employee whose exemption doesn\'t match any batch' }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Employee selection — only shown when adding new, not editing -->
+      <div v-if="!customStandardWeekDialog.editId" class="cm-field mb-3">
+        <label class="cm-label">Employee <span class="cm-required">*</span></label>
+
+        <VTextField
+          v-if="!customStandardWeekDialog.empId"
+          v-model="customStandardWeekDialog.employeeSearch"
+          placeholder="Search by name"
+          density="compact"
+          variant="outlined"
+          prepend-inner-icon="mdi-magnify"
+          hide-details
+          clearable
+        />
+
+        <VCard v-else variant="tonal" color="indigo" rounded="lg" flat>
+          <VCardText class="d-flex align-center gap-2 pa-3">
+            <VIcon icon="mdi-account" size="18" />
+            <span class="text-body-2 font-weight-medium">{{ customStandardWeekDialog.empName }}</span>
+            <VSpacer />
+            <VBtn size="x-small" variant="text" @click="customStandardWeekDialog.empId = null; customStandardWeekDialog.empName = ''">
+              Change
+            </VBtn>
+          </VCardText>
+        </VCard>
+
+        <div v-if="!customStandardWeekDialog.empId" style="max-height: 220px; overflow-y: auto;" class="mt-2">
+          <VSkeletonLoader v-if="customStandardWeekDialog.loadingEmployees" type="list-item-two-line, list-item-two-line" />
+          <VList v-else density="compact">
+            <VListItem
+              v-for="emp in filteredCustomStandardWeekEmployees"
+              :key="emp.emp_id"
+              @click="selectCustomStandardWeekEmployee(emp)"
+            >
+              <VListItemTitle>{{ emp.name }}</VListItemTitle>
+              <VListItemSubtitle>{{ emp.position }} · {{ emp.division_name ?? '—' }}</VListItemSubtitle>
+            </VListItem>
+            <p v-if="filteredCustomStandardWeekEmployees.length === 0" class="text-caption text-medium-emphasis pa-2 mb-0">
+              No matching employees.
+            </p>
+          </VList>
+        </div>
+      </div>
+
+      <!-- Read-only employee name when editing -->
+      <div v-else class="cm-field mb-3">
+        <label class="cm-label">Employee</label>
+        <VCard variant="tonal" color="grey" rounded="lg" flat>
+          <VCardText class="d-flex align-center gap-2 pa-3">
+            <VIcon icon="mdi-account" size="18" />
+            <span class="text-body-2 font-weight-medium">{{ customStandardWeekDialog.empName }}</span>
+          </VCardText>
+        </VCard>
+      </div>
+
+      <div class="d-flex gap-3 mb-3">
+        <div class="cm-field flex-1">
+          <label class="cm-label">Start Date <span class="cm-required">*</span></label>
+          <VTextField
+            v-model="customStandardWeekDialog.startDate"
+            type="date"
+            density="compact"
+            variant="outlined"
+            hide-details="auto"
+          />
+        </div>
+        <div class="cm-field flex-1">
+          <label class="cm-label">End Date <span class="cm-required">*</span></label>
+          <VTextField
+            v-model="customStandardWeekDialog.endDate"
+            type="date"
+            density="compact"
+            variant="outlined"
+            hide-details="auto"
+          />
+        </div>
+      </div>
+
+      <VAlert v-if="customStandardWeekDialog.error" type="error" variant="tonal" density="compact" class="mt-3">
+        {{ customStandardWeekDialog.error }}
+      </VAlert>
+    </VCardText>
+
+    <VDivider />
+    <VCardActions class="justify-end pa-4 gap-2">
+      <VBtn variant="text" :disabled="customStandardWeekDialog.loading" @click="closeCustomStandardWeekDialog">
+        Cancel
+      </VBtn>
+      <VBtn
+        color="indigo"
+        variant="tonal"
+        :loading="customStandardWeekDialog.loading"
+        :prepend-icon="customStandardWeekDialog.editId ? 'mdi-content-save-outline' : 'mdi-calendar-plus'"
+        @click="submitCustomStandardWeek"
+      >
+        {{ customStandardWeekDialog.editId ? 'Save Changes' : 'Add Exemption' }}
+      </VBtn>
+    </VCardActions>
+  </VCard>
+</VDialog>
+
+
     <!-- ── Event Type Picker Dialog ──────────────────────────────────────── -->
     <VDialog v-model="pickerDialog.visible" max-width="340">
       <VCard rounded="lg">
@@ -1158,7 +1608,6 @@
 
   </div>
 </template>
-
 <script setup lang="ts">
 import {
   formatDisplayDate,
@@ -1167,8 +1616,10 @@ import {
   type ContractBreakBatch,
   type ContractBreakEmployeePickerRow,
   type EmployeeContractBreak,
+  type EmployeeStandardWeekExemption,
   type Holiday,
   type HolidayType,
+  type StandardWeekBatch,
   type SuspensionDay,
 } from '@/composable/usePayrollCalendar'
 import axios from '@axios'
@@ -1198,11 +1649,34 @@ const {
   addCustomContractBreak,
   updateCustomContractBreak,
   fetchContractBreakEmployeePicker,
+  standardWeekBatches,
+  fetchStandardWeekBatches,
+  addStandardWeekBatch,
+  updateStandardWeekBatch,
+  removeStandardWeekBatch,
+  fetchStandardWeekBatchEmployees,
+  assignEmployeesToStandardWeekBatch,
+  unassignStandardWeekExemption,
+  addCustomStandardWeekExemption,
+  updateCustomStandardWeekExemption,
+  fetchStandardWeekEmployeePicker,
 } = usePayrollCalendar()
+
+const contractBreakBatchesForYear = computed(() =>
+  contractBreakBatches.value.filter(b => new Date(b.start_date).getFullYear() === viewYear.value)
+)
+const standardWeekBatchesForYear = computed(() =>
+  standardWeekBatches.value.filter(b => new Date(b.start_date).getFullYear() === viewYear.value)
+)
 
 // ---------------------------------------------------------------------------
 // Week Schedules
 // ---------------------------------------------------------------------------
+
+function formatBatchRange(start: string, end: string): string {
+  return start === end ? formatDisplayDate(start) : `${formatDisplayDate(start)} – ${formatDisplayDate(end)}`
+}
+
 const weekScheduleMap         = ref<Record<string, { is_compressed: boolean; is_manual_override: boolean }>>({})
 const scheduleOverrideLoading = ref<string | null>(null)
 
@@ -1312,6 +1786,7 @@ watch([viewYear, viewMonth], async ([y, m]) => {
 
 onMounted(() => {
   fetchContractBreakBatches()
+  fetchStandardWeekBatches()
 })
 
 // ---------------------------------------------------------------------------
@@ -1345,8 +1820,7 @@ interface CalendarWeek {
 }
 
 // ---------------------------------------------------------------------------
-// Half-day helper — true when cell has a half-day special holiday or suspension
-// (regular holidays are never half-day)
+// Half-day helper
 // ---------------------------------------------------------------------------
 function isHalfDay(cell: CalendarCell): boolean {
   if (cell.info.holiday?.type === 'special' && cell.info.holiday.is_half_day) return true
@@ -1428,8 +1902,6 @@ function cellClasses(cell: CalendarCell, isCompressed: boolean) {
 
 // ---------------------------------------------------------------------------
 // Summary — working days count
-// Only suspensions reduce working days (holidays do NOT affect the count).
-// Full suspension = −1, half-day suspension = −0.5.
 // ---------------------------------------------------------------------------
 const summary = computed(() => {
    const base = getMonthSummary(viewYear.value, viewMonth.value)
@@ -1439,23 +1911,14 @@ const summary = computed(() => {
      for (const cell of week.cells) {
        if (!cell.date) continue
        const dow = cell.date.getDay()
-
-     // Working day slots are always Mon–Fri, regardless of compressed
-    // vs standard schedule — compressed weeks just compress the hours
-     // worked on Mon–Thu and leave Friday off duty, but Friday still
-     // counts as a regular working day unless a suspension removes it.
-      const isWorkSlot = dow >= 1 && dow <= 5
-
+       const isWorkSlot = dow >= 1 && dow <= 5
        if (!isWorkSlot) continue
 
        if (!cell.info.suspension) {
-         // No suspension — counts as a full working day regardless of holidays
          workingDays += 1
        } else if (cell.info.suspension.is_half_day) {
-         // Half-day suspension — only half the day is lost
          workingDays += 0.5
        }
-       // Full suspension — 0 contribution
      }
    }
 
@@ -1510,7 +1973,6 @@ async function submitHoliday() {
   if (!holidayDialog.label.trim()) { holidayDialog.error = 'Please enter a label.'; return }
   holidayDialog.loading = true
 
-  // Regular holidays are never half-day
   const isHalfDay = holidayDialog.type === 'special' ? holidayDialog.isHalfDay : false
 
   const result = holidayDialog.editId
@@ -1573,6 +2035,7 @@ async function submitSuspension() {
     suspensionDialog.error = result
   }
 }
+
 // ---------------------------------------------------------------------------
 // Contract Break Batch dialog
 // ---------------------------------------------------------------------------
@@ -1637,7 +2100,7 @@ async function handleRemoveBatch(id: number) {
 }
 
 // ---------------------------------------------------------------------------
-// Batch Detail dialog (employee assignment list)
+// Batch Detail dialog (Contract Break — employee assignment list)
 // ---------------------------------------------------------------------------
 const batchDetailDialog = reactive({
   visible: false,
@@ -1671,7 +2134,7 @@ async function handleUnassign(assignment: EmployeeContractBreak) {
 }
 
 // ---------------------------------------------------------------------------
-// Employee Picker dialog (assign to batch)
+// Employee Picker dialog (Contract Break — assign to batch)
 // ---------------------------------------------------------------------------
 const employeePickerDialog = reactive({
   visible: false,
@@ -1683,22 +2146,70 @@ const employeePickerDialog = reactive({
   assigning: false,
 })
 
+const employeePickerDivisionFilter = ref<string | null>(null)
+const employeePickerSectionFilter  = ref<string | null>(null)
+
+watch(employeePickerDivisionFilter, () => {
+  employeePickerSectionFilter.value = null
+})
+
 async function openEmployeePicker(batchId: number) {
   employeePickerDialog.batchId   = batchId
   employeePickerDialog.search    = ''
   employeePickerDialog.selected  = []
   employeePickerDialog.visible   = true
   employeePickerDialog.loading   = true
+  employeePickerDivisionFilter.value = null
+  employeePickerSectionFilter.value  = null
   employeePickerDialog.employees = await fetchContractBreakEmployeePicker(batchId)
   employeePickerDialog.loading   = false
 }
 
 const filteredPickerEmployees = computed(() => {
   const q = employeePickerDialog.search.trim().toLowerCase()
-  const base = employeePickerDialog.employees.filter(e => !e.already_assigned)
+  let base = employeePickerDialog.employees.filter(e => !e.already_assigned)
+
+  if (employeePickerDivisionFilter.value) {
+    base = base.filter(e => e.division_name === employeePickerDivisionFilter.value)
+  }
+  if (employeePickerSectionFilter.value) {
+    base = base.filter(e => e.section_name === employeePickerSectionFilter.value)
+  }
   if (!q) return base
   return base.filter(e => e.name.toLowerCase().includes(q) || e.position.toLowerCase().includes(q))
 })
+const employeePickerDivisionOptions = computed(() => {
+  const divisions = new Set(employeePickerDialog.employees.map(e => e.division_name).filter(Boolean))
+  return Array.from(divisions).sort() as string[]
+})
+
+const employeePickerSectionOptions = computed(() => {
+  const relevant = employeePickerDivisionFilter.value
+    ? employeePickerDialog.employees.filter(e => e.division_name === employeePickerDivisionFilter.value)
+    : employeePickerDialog.employees
+  const sections = new Set(relevant.map(e => e.section_name).filter(Boolean))
+  return Array.from(sections).sort() as string[]
+})
+
+const allFilteredChecked = computed(() =>
+  filteredPickerEmployees.value.length > 0 &&
+  filteredPickerEmployees.value.every(e => employeePickerDialog.selected.includes(e.emp_id))
+)
+const someFilteredChecked = computed(() =>
+  filteredPickerEmployees.value.some(e => employeePickerDialog.selected.includes(e.emp_id)) &&
+  !allFilteredChecked.value
+)
+
+function toggleSelectAllFiltered() {
+  const filteredIds = filteredPickerEmployees.value.map(e => e.emp_id)
+  if (allFilteredChecked.value) {
+    employeePickerDialog.selected = employeePickerDialog.selected.filter(id => !filteredIds.includes(id))
+  } else {
+    const merged = new Set(employeePickerDialog.selected)
+    filteredIds.forEach(id => merged.add(id))
+    employeePickerDialog.selected = Array.from(merged)
+  }
+}
 
 async function confirmAssignment() {
   if (!employeePickerDialog.batchId || employeePickerDialog.selected.length === 0) return
@@ -1792,6 +2303,286 @@ async function submitCustomBreak() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Standard Week Batch dialog
+// ---------------------------------------------------------------------------
+const standardWeekBatchDialog = reactive({
+  visible: false,
+  editId: null as number | null,
+  label: '',
+  startDate: '',
+  endDate: '',
+  notes: '',
+  error: '',
+  loading: false,
+})
+
+function openStandardWeekBatchDialog(batch?: StandardWeekBatch) {
+  standardWeekBatchDialog.editId    = batch?.id ?? null
+  standardWeekBatchDialog.label     = batch?.label ?? ''
+  standardWeekBatchDialog.startDate = batch?.start_date ?? ''
+  standardWeekBatchDialog.endDate   = batch?.end_date ?? ''
+  standardWeekBatchDialog.notes     = batch?.notes ?? ''
+  standardWeekBatchDialog.error     = ''
+  standardWeekBatchDialog.loading   = false
+  standardWeekBatchDialog.visible   = true
+}
+
+function closeStandardWeekBatchDialog() { standardWeekBatchDialog.visible = false }
+
+async function submitStandardWeekBatch() {
+  standardWeekBatchDialog.error = ''
+  if (!standardWeekBatchDialog.label.trim()) { standardWeekBatchDialog.error = 'Please enter a label.'; return }
+  if (!standardWeekBatchDialog.startDate)    { standardWeekBatchDialog.error = 'Please select a start date.'; return }
+  if (!standardWeekBatchDialog.endDate)      { standardWeekBatchDialog.error = 'Please select an end date.'; return }
+  if (standardWeekBatchDialog.endDate < standardWeekBatchDialog.startDate) {
+    standardWeekBatchDialog.error = 'End date must be on or after the start date.'
+    return
+  }
+
+  standardWeekBatchDialog.loading = true
+  const result = standardWeekBatchDialog.editId
+    ? await updateStandardWeekBatch(standardWeekBatchDialog.editId, standardWeekBatchDialog.label, standardWeekBatchDialog.startDate, standardWeekBatchDialog.endDate, standardWeekBatchDialog.notes)
+    : await addStandardWeekBatch(standardWeekBatchDialog.label, standardWeekBatchDialog.startDate, standardWeekBatchDialog.endDate, standardWeekBatchDialog.notes)
+
+  standardWeekBatchDialog.loading = false
+  if (result === true) {
+    closeStandardWeekBatchDialog()
+    showToast(standardWeekBatchDialog.editId ? 'Batch updated.' : 'Batch created.')
+  } else {
+    standardWeekBatchDialog.error = result
+  }
+}
+
+async function handleRemoveStandardWeekBatch(id: number) {
+  const result = await removeStandardWeekBatch(id)
+  if (result === true) showToast('Batch deleted.')
+  else showToast(result, 'error')
+}
+
+// ---------------------------------------------------------------------------
+// Standard Week Batch Detail dialog (employee assignment list)
+// ---------------------------------------------------------------------------
+const standardWeekBatchDetailDialog = reactive({
+  visible: false,
+  batch: null as StandardWeekBatch | null,
+  assignedEmployees: [] as EmployeeStandardWeekExemption[],
+  loadingAssigned: false,
+})
+
+async function openStandardWeekBatchDetail(batch: StandardWeekBatch) {
+  standardWeekBatchDetailDialog.batch   = batch
+  standardWeekBatchDetailDialog.visible = true
+  standardWeekBatchDetailDialog.loadingAssigned = true
+  standardWeekBatchDetailDialog.assignedEmployees = await fetchStandardWeekBatchEmployees(batch.id)
+  standardWeekBatchDetailDialog.loadingAssigned = false
+}
+
+function closeStandardWeekBatchDetail() { standardWeekBatchDetailDialog.visible = false }
+
+async function handleUnassignStandardWeek(exemption: EmployeeStandardWeekExemption) {
+  const result = await unassignStandardWeekExemption(exemption.id)
+  if (result === true) {
+    standardWeekBatchDetailDialog.assignedEmployees =
+      standardWeekBatchDetailDialog.assignedEmployees.filter(
+        (a: EmployeeStandardWeekExemption) => a.id !== exemption.id   // ← explicit type added
+      )
+    if (standardWeekBatchDetailDialog.batch) {
+      const idx = standardWeekBatches.value.findIndex(
+        (b: StandardWeekBatch) => b.id === standardWeekBatchDetailDialog.batch!.id  // ← explicit type added too, for consistency
+      )
+      if (idx !== -1) standardWeekBatches.value[idx].employee_exemptions_count = standardWeekBatchDetailDialog.assignedEmployees.length
+    }
+    showToast('Employee removed from batch.')
+  } else {
+    showToast(result, 'error')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Standard Week Employee Picker dialog (assign to batch)
+// ---------------------------------------------------------------------------
+const standardWeekEmployeePickerDialog = reactive({
+  visible: false,
+  batchId: null as number | null,
+  search: '',
+  employees: [] as ContractBreakEmployeePickerRow[],
+  selected: [] as number[],
+  loading: false,
+  assigning: false,
+})
+
+const standardWeekPickerDivisionFilter = ref<string | null>(null)
+const standardWeekPickerSectionFilter  = ref<string | null>(null)
+
+watch(standardWeekPickerDivisionFilter, () => {
+  standardWeekPickerSectionFilter.value = null
+})
+
+
+async function openStandardWeekEmployeePicker(batchId: number) {
+  standardWeekEmployeePickerDialog.batchId   = batchId
+  standardWeekEmployeePickerDialog.search    = ''
+  standardWeekEmployeePickerDialog.selected  = []
+  standardWeekEmployeePickerDialog.visible   = true
+  standardWeekEmployeePickerDialog.loading   = true
+  standardWeekPickerDivisionFilter.value = null
+  standardWeekPickerSectionFilter.value  = null
+  standardWeekEmployeePickerDialog.employees = await fetchStandardWeekEmployeePicker(batchId)
+  standardWeekEmployeePickerDialog.loading   = false
+}
+
+const filteredStandardWeekPickerEmployees = computed(() => {
+  const q = standardWeekEmployeePickerDialog.search.trim().toLowerCase()
+  let base = standardWeekEmployeePickerDialog.employees.filter(e => !e.already_assigned)
+
+  if (standardWeekPickerDivisionFilter.value) {
+    base = base.filter(e => e.division_name === standardWeekPickerDivisionFilter.value)
+  }
+  if (standardWeekPickerSectionFilter.value) {
+    base = base.filter(e => e.section_name === standardWeekPickerSectionFilter.value)
+  }
+  if (!q) return base
+  return base.filter(e => e.name.toLowerCase().includes(q) || e.position.toLowerCase().includes(q))
+})
+
+const standardWeekPickerDivisionOptions = computed(() => {
+  const divisions = new Set(standardWeekEmployeePickerDialog.employees.map(e => e.division_name).filter(Boolean))
+  return Array.from(divisions).sort() as string[]
+})
+
+const standardWeekPickerSectionOptions = computed(() => {
+  const relevant = standardWeekPickerDivisionFilter.value
+    ? standardWeekEmployeePickerDialog.employees.filter(e => e.division_name === standardWeekPickerDivisionFilter.value)
+    : standardWeekEmployeePickerDialog.employees
+  const sections = new Set(relevant.map(e => e.section_name).filter(Boolean))
+  return Array.from(sections).sort() as string[]
+})
+
+const allStandardWeekFilteredChecked = computed(() =>
+  filteredStandardWeekPickerEmployees.value.length > 0 &&
+  filteredStandardWeekPickerEmployees.value.every(e => standardWeekEmployeePickerDialog.selected.includes(e.emp_id))
+)
+const someStandardWeekFilteredChecked = computed(() =>
+  filteredStandardWeekPickerEmployees.value.some(e => standardWeekEmployeePickerDialog.selected.includes(e.emp_id)) &&
+  !allStandardWeekFilteredChecked.value
+)
+
+function toggleSelectAllStandardWeekFiltered() {
+  const filteredIds = filteredStandardWeekPickerEmployees.value.map(e => e.emp_id)
+  if (allStandardWeekFilteredChecked.value) {
+    standardWeekEmployeePickerDialog.selected = standardWeekEmployeePickerDialog.selected.filter(id => !filteredIds.includes(id))
+  } else {
+    const merged = new Set(standardWeekEmployeePickerDialog.selected)
+    filteredIds.forEach(id => merged.add(id))
+    standardWeekEmployeePickerDialog.selected = Array.from(merged)
+  }
+}
+
+async function confirmStandardWeekAssignment() {
+  if (!standardWeekEmployeePickerDialog.batchId || standardWeekEmployeePickerDialog.selected.length === 0) return
+  standardWeekEmployeePickerDialog.assigning = true
+  const result = await assignEmployeesToStandardWeekBatch(
+    standardWeekEmployeePickerDialog.batchId,
+    standardWeekEmployeePickerDialog.selected
+  )
+  standardWeekEmployeePickerDialog.assigning = false
+
+  if (result.success) {
+    standardWeekEmployeePickerDialog.visible = false
+    showToast(result.message)
+    if (standardWeekBatchDetailDialog.batch?.id === standardWeekEmployeePickerDialog.batchId) {
+      standardWeekBatchDetailDialog.assignedEmployees =
+        await fetchStandardWeekBatchEmployees(standardWeekEmployeePickerDialog.batchId)
+    }
+  } else {
+    showToast(result.message, 'error')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Custom / Individual Standard Week dialog
+// ---------------------------------------------------------------------------
+const customStandardWeekDialog = reactive({
+  visible: false,
+  editId: null as number | null,
+  empId: null as number | null,
+  empName: '',
+  startDate: '',
+  endDate: '',
+  error: '',
+  loading: false,
+  employeeSearch: '',
+  employees: [] as ContractBreakEmployeePickerRow[],
+  loadingEmployees: false,
+})
+
+async function openCustomStandardWeekDialog(existing?: EmployeeStandardWeekExemption) {
+  customStandardWeekDialog.editId         = existing?.id ?? null
+  customStandardWeekDialog.empId          = existing?.emp_id ?? null
+  customStandardWeekDialog.empName        = existing?.emp_name ?? ''
+  customStandardWeekDialog.startDate      = existing?.start_date ?? ''
+  customStandardWeekDialog.endDate        = existing?.end_date ?? ''
+  customStandardWeekDialog.error          = ''
+  customStandardWeekDialog.loading        = false
+  customStandardWeekDialog.employeeSearch = ''
+  customStandardWeekDialog.visible        = true
+
+  if (!existing) {
+  customStandardWeekDialog.loadingEmployees = true
+  customStandardWeekDialog.employees = await fetchStandardWeekEmployeePicker()
+  customStandardWeekDialog.loadingEmployees = false
+}
+}
+
+watch(
+  () => [customStandardWeekDialog.startDate, customStandardWeekDialog.endDate] as const,
+  async ([start, end]) => {
+    if (!customStandardWeekDialog.visible || customStandardWeekDialog.editId) return
+    if (!start || !end) return
+    customStandardWeekDialog.loadingEmployees = true
+    customStandardWeekDialog.employees = await fetchStandardWeekEmployeePicker(undefined, start, end)
+    customStandardWeekDialog.loadingEmployees = false
+  }
+)
+
+function closeCustomStandardWeekDialog() { customStandardWeekDialog.visible = false }
+
+const filteredCustomStandardWeekEmployees = computed(() => {
+  const q = customStandardWeekDialog.employeeSearch.trim().toLowerCase()
+  const base = customStandardWeekDialog.employees.filter(e => !e.already_assigned)
+  if (!q) return base
+  return base.filter(e => e.name.toLowerCase().includes(q))
+})
+
+function selectCustomStandardWeekEmployee(emp: ContractBreakEmployeePickerRow) {
+  customStandardWeekDialog.empId   = emp.emp_id
+  customStandardWeekDialog.empName = emp.name
+}
+
+async function submitCustomStandardWeek() {
+  customStandardWeekDialog.error = ''
+  if (!customStandardWeekDialog.empId)     { customStandardWeekDialog.error = 'Please select an employee.'; return }
+  if (!customStandardWeekDialog.startDate) { customStandardWeekDialog.error = 'Please select a start date.'; return }
+  if (!customStandardWeekDialog.endDate)   { customStandardWeekDialog.error = 'Please select an end date.'; return }
+  if (customStandardWeekDialog.endDate < customStandardWeekDialog.startDate) {
+    customStandardWeekDialog.error = 'End date must be on or after the start date.'
+    return
+  }
+
+  customStandardWeekDialog.loading = true
+  const result = customStandardWeekDialog.editId
+    ? await updateCustomStandardWeekExemption(customStandardWeekDialog.editId, customStandardWeekDialog.startDate, customStandardWeekDialog.endDate)
+    : await addCustomStandardWeekExemption(customStandardWeekDialog.empId, customStandardWeekDialog.startDate, customStandardWeekDialog.endDate)
+
+  customStandardWeekDialog.loading = false
+  if (result === true) {
+    closeCustomStandardWeekDialog()
+    showToast(customStandardWeekDialog.editId ? 'Exemption updated.' : 'Exemption added.')
+  } else {
+    customStandardWeekDialog.error = result
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Delete dialog
@@ -2237,7 +3028,33 @@ async function executeDelete() {
   letter-spacing: 0.05em;
   margin-bottom: 0.25rem;
 }
+.cm-cb-item {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--surface-border);
+  cursor: pointer;
+}
+.cm-cb-item:last-child { border-bottom: none; }
+.cm-cb-item:hover { background: var(--surface-hover); border-radius: 6px; }
 
+.cm-cb-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.cm-cb-item-label {
+  font-size: 0.85rem;
+  color: var(--text-color);
+  font-weight: 500;
+}
+
+.cm-cb-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
 .cm-list-item {
   display: flex;
   justify-content: space-between;
