@@ -811,7 +811,7 @@ function cancelSaveDtr() {
 onMounted(() => {
   fetchData();
   resumeCooldownIfAny();
-  maybeAutoStartTour();
+  // maybeAutoStartTour();
 
   const userId = userStore.user?.id;
   if (!userId) return;
@@ -969,8 +969,8 @@ onUnmounted(() => {
         closable
         data-tour="calendar-reminder"
       >
-        <strong>Before saving DTR summaries:</strong> Ensure all
-        <strong>holidays and suspensions</strong> for the period are set in the
+        <strong>Reminder:</strong> Before saving DTR summaries, ensure all
+        <strong>holidays</strong>, <strong>suspensions</strong>, <strong>contract breaks</strong> and <strong>standard week exemptions</strong> for the period are set in the
         <strong>Calendar</strong> module. DTR summaries cannot be re-saved
         without going through Override, so missing calendar entries will require
         an override to correct. A <strong>3-minute cooldown</strong> applies
