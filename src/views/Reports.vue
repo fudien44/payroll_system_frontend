@@ -50,6 +50,17 @@ interface TardinessDivision {
   employees: TardinessEmployee[];
 }
 
+interface UndertimeEmployee {
+  name: string;
+  position: string;
+  minutes: string;
+}
+
+interface UndertimeDivision {
+  name: string;
+  employees: UndertimeEmployee[];
+}
+
 interface PunctualityEmployee {
   name: string; // "RODRIGUEZ, JULIUS CEZAR"
   position: string; // "Administrative Assistant III"
@@ -60,6 +71,12 @@ interface PunctualityEmployee {
 interface PunctualityDivision {
   name: string; // "LOCAL HEALTH SUPPORT DIVISION"
   employees: PunctualityEmployee[];
+}
+
+interface ApprovedBySignatory {
+  id: number;
+  name: string;
+  position: string;
 }
 
 type AlertType = "success" | "error" | "warning" | "info";
@@ -98,9 +115,9 @@ const ATTENDANCE_HEADERS = [
 /* ─────────────────────────────────────────
    STATE — shared
 ───────────────────────────────────────── */
-const activeTab = ref<"attendance" | "punctuality" | "tardiness" | "payslip">(
-  "attendance",
-);
+const activeTab = ref<
+  "attendance" | "punctuality" | "tardiness" | "undertime" | "payslip"
+>("attendance");
 const alertVisible = ref(false);
 const alertMessage = ref("");
 const alertType = ref<AlertType>("success");
@@ -132,7 +149,13 @@ const TAB_BANNERS = {
     type: "warning" as const,
     icon: "mdi-clock-alert-outline",
     title: "Tardiness threshold: more than five (5) days",
-    body: "Only employees with <strong>more than five (5) days of tardiness</strong> are shown. Late minutes include pass-slip adjustments that exceed the 2-hour allowance and are not captured in the DTR — these are flagged with an <strong>adj</strong> badge.",
+    body: "Only employees with <strong>more than five (5) times of tardiness</strong> are shown. Late minutes include pass-slip adjustments that exceed the 2-hour allowance and are not captured in the DTR — these are flagged with an <strong>adj</strong> badge.",
+  },
+  undertime: {
+    type: "warning" as const,
+    icon: "mdi-timer-sand",
+    title: "All recorded undertime is shown — no minimum threshold",
+    body: "Employees with any undertime minutes for the selected month are listed here, grouped by division. Values reflect the finalized payroll batch total where available, falling back to the saved DTR summary.",
   },
   attendance: {
     type: "info" as const,
@@ -143,6 +166,31 @@ const TAB_BANNERS = {
 } as const;
 
 const tabBanner = computed(() => TAB_BANNERS[activeTab.value] ?? null);
+
+const approvedBySignatories = ref<ApprovedBySignatory[]>([]);
+const loadingApprovedBy = ref(false);
+const selectedApprovedBy = ref<number | null>(null);
+
+async function fetchApprovedBySignatories() {
+  if (approvedBySignatories.value.length) return; // already loaded
+  loadingApprovedBy.value = true;
+  try {
+    const { data } = await axios.get("/api/signatories/approved-by");
+    approvedBySignatories.value = data.data ?? [];
+  } catch {
+    showAlert("error", "Failed to load signatories.");
+  } finally {
+    loadingApprovedBy.value = false;
+  }
+}
+
+const approvedByOptions = computed(() =>
+  approvedBySignatories.value.map((s) => ({
+    title: s.name,
+    subtitle: s.position,
+    value: s.id,
+  })),
+);
 
 /* ─────────────────────────────────────────
    STATE — Attendance tab
@@ -564,6 +612,11 @@ async function exportPunctualityPdf() {
     return;
   }
 
+  if (!selectedApprovedBy.value) {
+    showAlert("warning", "Please select a signatory (FROM) before exporting.");
+    return;
+  }
+
   generatingPunctualityPdf.value = true;
 
   // Open the tab immediately while still in the user gesture context
@@ -575,6 +628,7 @@ async function exportPunctualityPdf() {
       {
         month: punctualityMonth.value,
         year: punctualityYear.value,
+        approved_by_id: selectedApprovedBy.value,
       },
       { responseType: "blob" },
     );
@@ -652,6 +706,11 @@ async function exportTardinessPdf() {
     return;
   }
 
+  if (!selectedApprovedBy.value) {
+    showAlert("warning", "Please select a signatory (FROM) before exporting.");
+    return;
+  }
+
   generatingTardinessPdf.value = true;
 
   // Open the tab immediately while still in the user gesture context
@@ -663,6 +722,7 @@ async function exportTardinessPdf() {
       {
         month: tardinessMonth.value,
         year: tardinessYear.value,
+        approved_by_id: selectedApprovedBy.value,
       },
       { responseType: "blob" },
     );
@@ -683,6 +743,93 @@ async function exportTardinessPdf() {
     showAlert("error", msg ?? "Failed to generate tardiness memo PDF.");
   } finally {
     generatingTardinessPdf.value = false;
+  }
+}
+
+/* ─────────────────────────────────────────
+   STATE — Undertime tab
+───────────────────────────────────────── */
+const generatingUndertimePdf = ref(false);
+
+const undertimeMonth = ref<number>(prevMonth);
+const undertimeYear = ref<number>(currentYear);
+const loadingUndertime = ref(false);
+const undertimeDivisions = ref<UndertimeDivision[]>([]);
+const undertimeLoadedLabel = ref("");
+
+async function fetchUndertime() {
+  loadingUndertime.value = true;
+  undertimeDivisions.value = [];
+  try {
+    const { data } = await axios.get("/api/reports/undertime", {
+      params: {
+        month: undertimeMonth.value,
+        year: undertimeYear.value,
+      },
+    });
+    undertimeDivisions.value = data.data;
+    undertimeLoadedLabel.value = undertimeMonthLabel.value;
+  } catch (err: any) {
+    const status = err?.response?.status;
+    if (status === 404) {
+      showAlert(
+        "warning",
+        `No saved DTR data found for ${undertimeMonthLabel.value}.`,
+      );
+    } else {
+      showAlert("error", "Failed to load undertime data.");
+    }
+  } finally {
+    loadingUndertime.value = false;
+  }
+}
+
+const undertimeMonthLabel = computed(() => {
+  const m = MONTH_ITEMS.find((x) => x.value === undertimeMonth.value);
+  return `${m?.title ?? ""} ${undertimeYear.value}`;
+});
+
+async function exportUndertimePdf() {
+  if (!undertimeDivisions.value.length) {
+    showAlert("warning", "No undertime data to export.");
+    return;
+  }
+
+  if (!selectedApprovedBy.value) {
+    showAlert("warning", "Please select a signatory (FROM) before exporting.");
+    return;
+  }
+  generatingUndertimePdf.value = true;
+
+  const previewTab = window.open("", "_blank");
+
+  try {
+    const resp = await axios.post(
+      "/api/reports/undertime/generate",
+      {
+        month: undertimeMonth.value,
+        year: undertimeYear.value,
+        approved_by_id: selectedApprovedBy.value,
+      },
+      { responseType: "blob" },
+    );
+
+    const url = URL.createObjectURL(
+      new Blob([resp.data], { type: "application/pdf" }),
+    );
+
+    if (previewTab) {
+      previewTab.location.href = url;
+    }
+
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    showAlert("success", "Undertime memo PDF opened in a new tab.");
+  } catch (err: any) {
+    previewTab?.close();
+    const msg = await blobErrorMessage(err);
+    showAlert("error", msg ?? "Failed to generate undertime memo PDF.");
+  } finally {
+    generatingUndertimePdf.value = false;
   }
 }
 
@@ -918,6 +1065,7 @@ function fmtMins(mins: number): string {
 ───────────────────────────────────────── */
 onMounted(() => {
   fetchEmployeeRefs();
+  fetchApprovedBySignatories();
 });
 
 watch(activeTab, (tab) => {
@@ -960,6 +1108,7 @@ watch(activeTab, (tab) => {
         <VTab value="tardiness" prepend-icon="mdi-clock-alert-outline"
           >Tardiness</VTab
         >
+        <VTab value="undertime" prepend-icon="mdi-timer-sand">Undertime</VTab>
         <VTab value="payslip" prepend-icon="mdi-file-document-outline"
           >Payslip</VTab
         >
@@ -1291,6 +1440,34 @@ watch(activeTab, (tab) => {
                         hide-details
                       />
                     </VCol>
+                    <VCol cols="12" sm="6" md="4">
+                      <VSelect
+                        v-model="selectedApprovedBy"
+                        :items="approvedByOptions"
+                        :loading="loadingApprovedBy"
+                        item-title="title"
+                        item-value="value"
+                        label="Signatory (FROM)"
+                        variant="outlined"
+                        density="compact"
+                        prepend-inner-icon="mdi-account-check-outline"
+                        clearable
+                        hide-details
+                        placeholder="Default signatory"
+                      >
+                        <template #item="{ item, props }">
+                          <VListItem v-bind="props" :title="undefined">
+                            <VListItemTitle
+                              class="text-body-2 font-weight-medium"
+                              >{{ item.raw.title }}</VListItemTitle
+                            >
+                            <VListItemSubtitle class="text-caption">{{
+                              item.raw.subtitle
+                            }}</VListItemSubtitle>
+                          </VListItem>
+                        </template>
+                      </VSelect>
+                    </VCol>
                     <VCol cols="12" sm="6" md="2">
                       <VBtn
                         variant="tonal"
@@ -1496,6 +1673,34 @@ watch(activeTab, (tab) => {
                         hide-details
                       />
                     </VCol>
+                    <VCol cols="12" sm="6" md="4">
+                      <VSelect
+                        v-model="selectedApprovedBy"
+                        :items="approvedByOptions"
+                        :loading="loadingApprovedBy"
+                        item-title="title"
+                        item-value="value"
+                        label="Signatory (FROM)"
+                        variant="outlined"
+                        density="compact"
+                        prepend-inner-icon="mdi-account-check-outline"
+                        clearable
+                        hide-details
+                        placeholder="Default signatory"
+                      >
+                        <template #item="{ item, props }">
+                          <VListItem v-bind="props" :title="undefined">
+                            <VListItemTitle
+                              class="text-body-2 font-weight-medium"
+                              >{{ item.raw.title }}</VListItemTitle
+                            >
+                            <VListItemSubtitle class="text-caption">{{
+                              item.raw.subtitle
+                            }}</VListItemSubtitle>
+                          </VListItem>
+                        </template>
+                      </VSelect>
+                    </VCol>
                     <VCol cols="12" sm="6" md="2">
                       <VBtn
                         variant="tonal"
@@ -1660,9 +1865,195 @@ watch(activeTab, (tab) => {
                     tardiness records.
                   </p>
                   <p class="text-caption text-medium-emphasis mt-2">
-                    Employees with 6 or more days of tardiness will appear here,
-                    grouped by division. Pass-slip late adjustments are
-                    included.
+                    Employees with more than five (5) times of tardiness will
+                    appear here, grouped by division. Pass-slip late adjustments
+                    are included.
+                  </p>
+                </VCardText>
+              </VCard>
+            </VCol>
+          </VRow>
+        </VWindowItem>
+
+        <!-- ══════════════════════════════════════════
+          TAB — UNDERTIME
+    ══════════════════════════════════════════ -->
+        <VWindowItem value="undertime">
+          <VRow>
+            <VCol cols="12">
+              <VCard variant="flat" rounded="lg">
+                <VCardText>
+                  <p
+                    class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3"
+                  >
+                    Select Period
+                  </p>
+                  <VRow dense align="center">
+                    <VCol cols="12" sm="6" md="2">
+                      <VSelect
+                        v-model="undertimeMonth"
+                        label="Month"
+                        :items="MONTH_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        variant="outlined"
+                        density="compact"
+                        prepend-inner-icon="mdi-calendar-month-outline"
+                        hide-details
+                      />
+                    </VCol>
+                    <VCol cols="12" sm="6" md="2">
+                      <VSelect
+                        v-model="undertimeYear"
+                        label="Year"
+                        :items="YEAR_ITEMS"
+                        variant="outlined"
+                        density="compact"
+                        prepend-inner-icon="mdi-calendar-outline"
+                        hide-details
+                      />
+                    </VCol>
+                    <VCol cols="12" sm="6" md="4">
+                      <VSelect
+                        v-model="selectedApprovedBy"
+                        :items="approvedByOptions"
+                        :loading="loadingApprovedBy"
+                        item-title="title"
+                        item-value="value"
+                        label="Signatory (FROM)"
+                        variant="outlined"
+                        density="compact"
+                        prepend-inner-icon="mdi-account-check-outline"
+                        clearable
+                        hide-details
+                        placeholder="Default signatory"
+                      >
+                        <template #item="{ item, props }">
+                          <VListItem v-bind="props" :title="undefined">
+                            <VListItemTitle
+                              class="text-body-2 font-weight-medium"
+                              >{{ item.raw.title }}</VListItemTitle
+                            >
+                            <VListItemSubtitle class="text-caption">{{
+                              item.raw.subtitle
+                            }}</VListItemSubtitle>
+                          </VListItem>
+                        </template>
+                      </VSelect>
+                    </VCol>
+                    <VCol cols="12" sm="6" md="2">
+                      <VBtn
+                        variant="tonal"
+                        color="primary"
+                        prepend-icon="mdi-magnify"
+                        :loading="loadingUndertime"
+                        block
+                        @click="fetchUndertime"
+                      >
+                        Load Data
+                      </VBtn>
+                    </VCol>
+                  </VRow>
+                </VCardText>
+              </VCard>
+            </VCol>
+
+            <VCol v-if="undertimeDivisions.length" cols="12">
+              <div class="d-flex justify-end mb-4">
+                <VBtn
+                  color="error"
+                  variant="outlined"
+                  prepend-icon="mdi-file-pdf-box"
+                  :loading="generatingUndertimePdf"
+                  @click="exportUndertimePdf"
+                >
+                  Export PDF
+                </VBtn>
+              </div>
+
+              <VCard
+                v-for="division in undertimeDivisions"
+                :key="division.name"
+                variant="flat"
+                rounded="lg"
+                class="mb-4"
+              >
+                <VCardText>
+                  <p
+                    class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3"
+                  >
+                    {{ division.name }}
+                  </p>
+                  <VDataTable
+                    :headers="[
+                      {
+                        title: '#',
+                        key: 'index',
+                        sortable: false,
+                        width: '40px',
+                      },
+                      { title: 'Name', key: 'name', sortable: true },
+                      { title: 'Position', key: 'position', sortable: true },
+                      {
+                        title: 'Month',
+                        key: 'month',
+                        sortable: false,
+                        width: '100px',
+                      },
+                      {
+                        title: 'Undertime (mins)',
+                        key: 'minutes',
+                        sortable: true,
+                        width: '140px',
+                      },
+                    ]"
+                    :items="
+                      division.employees.map((e, i) => ({
+                        ...e,
+                        index: i + 1,
+                        month: undertimeLoadedLabel,
+                      }))
+                    "
+                    :items-per-page="-1"
+                    density="compact"
+                    hide-default-footer
+                    class="rounded-lg"
+                  >
+                    <template #item.index="{ item }">
+                      <span class="text-medium-emphasis">{{ item.index }}</span>
+                    </template>
+                    <template #item.minutes="{ item }">
+                      <VChip
+                        :color="
+                          Number(item.minutes) >= 60 ? 'error' : 'warning'
+                        "
+                        size="x-small"
+                        variant="tonal"
+                        label
+                      >
+                        {{ item.minutes }}
+                      </VChip>
+                    </template>
+                  </VDataTable>
+                </VCardText>
+              </VCard>
+            </VCol>
+
+            <VCol v-else-if="!loadingUndertime" cols="12">
+              <VCard variant="tonal" rounded="lg" color="default">
+                <VCardText class="text-center py-8">
+                  <VIcon
+                    icon="mdi-timer-sand"
+                    size="48"
+                    class="mb-3 text-medium-emphasis"
+                  />
+                  <p class="text-body-1 text-medium-emphasis">
+                    Select a period and click <strong>Load Data</strong> to view
+                    undertime records.
+                  </p>
+                  <p class="text-caption text-medium-emphasis mt-2">
+                    Employees with any recorded undertime will appear here,
+                    grouped by division.
                   </p>
                 </VCardText>
               </VCard>

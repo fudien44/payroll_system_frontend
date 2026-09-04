@@ -1,424 +1,553 @@
 <script setup lang="ts">
-import BaseAlert from '@/components/base/BaseAlert.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
-import BaseTable from '@/components/base/BaseTable.vue'
-import axios from '@axios'
-import { useRouter } from 'vue-router'
+import BaseAlert from "@/components/base/BaseAlert.vue";
+import BaseModal from "@/components/base/BaseModal.vue";
+import BaseTable from "@/components/base/BaseTable.vue";
+import axios from "@axios";
+import { useRouter } from "vue-router";
 
 /* ─────────────────────────────────────────
    TYPES
 ───────────────────────────────────────── */
 interface Division {
-  id:          number
-  office:      string
-  description: string
+  id: number;
+  office: string;
+  description: string;
 }
 
 interface Section {
-  id:        number
-  office:    number   // FK to division id
-  shortcode: string
-  station:   string
+  id: number;
+  office: number; // FK to division id
+  shortcode: string;
+  station: string;
 }
 
 interface PayrollRun {
-  id:            number
-  payroll_no:    string
-  period_month:  number
-  period_year:   number
-  division_id:   number
-  division_name: string
-  section_name:  string | null   // NEW: backend already returns this, type was just missing it
-  fund_cluster:  string
-  saa_no:        string | null
-  ors_no:        string | null
-  dv_no:         string | null
-  jev_no:        string | null
-  status:        'draft' | 'finalized'
-  employee_count: number
-  total_net_pay:  number
-  created_at:    string
-  updated_at:    string
+  id: number;
+  payroll_no: string;
+  period_month: number;
+  period_year: number;
+  division_id: number;
+  division_name: string;
+  section_name: string | null; // NEW: backend already returns this, type was just missing it
+  fund_cluster: string;
+  saa_no: string | null;
+  ors_no: string | null;
+  dv_no: string | null;
+  jev_no: string | null;
+  status: "draft" | "finalized";
+  employee_count: number;
+  total_net_pay: number;
+  created_at: string;
+  updated_at: string;
 }
 
-type AlertType = 'success' | 'error' | 'warning' | 'info'
+type AlertType = "success" | "error" | "warning" | "info";
 interface Signatory {
-  id:       number
-  name:     string
-  position: string
-  role:     'approved_by' | 'certified_by'
+  id: number;
+  name: string;
+  position: string;
+  role: "approved_by" | "certified_by";
 }
 
-
-type DocType = 'payroll_sheet' | 'ors' | 'dv'
+type DocType = "payroll_sheet" | "ors" | "dv";
 
 /* ─────────────────────────────────────────
    CONSTANTS
 ───────────────────────────────────────── */
 const MONTH_NAMES = [
-  'January','February','March','April','May','June',
-  'July','August','September','October','November','December',
-]
-
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 
 const TABLE_HEADERS = [
-  { title: 'Payroll No.',   key: 'payroll_no',    sortable: true                         },
-  { title: 'Period',        key: 'period',         sortable: true                         },
-  { title: 'Section / Division', key: 'division_name',  sortable: true                         },
-  { title: 'Fund Cluster',  key: 'fund_cluster',   sortable: false                        },
-  { title: 'Employees',     key: 'employee_count', sortable: true,  align: 'center' as const },
-  { title: 'Total Net Pay', key: 'netPayDisp',     sortable: false, align: 'end'    as const },
-  { title: 'Status',        key: 'status',         sortable: true                         },
-  { title: 'Actions',       key: 'actions',        sortable: false, align: 'center' as const },
-]
+  { title: "Payroll No.", key: "payroll_no", sortable: true },
+  { title: "Period", key: "period", sortable: true },
+  { title: "Section / Division", key: "division_name", sortable: true },
+  { title: "Fund Cluster", key: "fund_cluster", sortable: false },
+  {
+    title: "Employees",
+    key: "employee_count",
+    sortable: true,
+    align: "center" as const,
+  },
+  {
+    title: "Total Net Pay",
+    key: "netPayDisp",
+    sortable: false,
+    align: "end" as const,
+  },
+  { title: "Status", key: "status", sortable: true },
+  {
+    title: "Actions",
+    key: "actions",
+    sortable: false,
+    align: "center" as const,
+  },
+];
 
 const BLANK_FORM = () => ({
   period_month: new Date().getMonth() + 1,
-  period_year:  new Date().getFullYear(),
-  division_id:  null as number | null,
-  section_id:   null as number | null,
-  fund_cluster: '',
-  saa_no:       '',
-  ors_no:       '',
-  dv_no:        '',
-  jev_no:       '',
-})
+  period_year: new Date().getFullYear(),
+  division_id: null as number | null,
+  section_ids: [] as number[],
+  fund_clusters: {} as Record<number, string>,
+  saa_no: "",
+  ors_no: "",
+  dv_no: "",
+  jev_no: "",
+});
 
-const CURRENT_YEAR  = new Date().getFullYear()
-const YEAR_OPTIONS  = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - 2 + i)
-const MONTH_OPTIONS = MONTH_NAMES.map((name, i) => ({ title: name, value: i + 1 }))
+const CURRENT_YEAR = new Date().getFullYear();
+const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - 2 + i);
+const MONTH_OPTIONS = MONTH_NAMES.map((name, i) => ({
+  title: name,
+  value: i + 1,
+}));
 
 /* ─────────────────────────────────────────
    STATE
 ───────────────────────────────────────── */
-const router       = useRouter()
-const runs         = ref<PayrollRun[]>([])
-const divisions    = ref<Division[]>([])
-const sections     = ref<Section[]>([])
-const sectionsLoading = ref(false)
-const loading      = ref(false)
-const modalOpen    = ref(false)
-const modalLoading = ref(false)
-const form         = ref(BLANK_FORM())
-const formErrors   = ref<Record<string, string>>({})
-const filterStatus = ref<'All' | 'draft' | 'finalized'>('All')
+const router = useRouter();
+const runs = ref<PayrollRun[]>([]);
+const divisions = ref<Division[]>([]);
+const sections = ref<Section[]>([]);
+const sectionsLoading = ref(false);
+const loading = ref(false);
+const modalOpen = ref(false);
+const modalLoading = ref(false);
+const form = ref(BLANK_FORM());
+const formErrors = ref<Record<string, string>>({});
+const filterStatus = ref<"All" | "draft" | "finalized">("All");
 
-const alertVisible = ref(false)
-const alertMessage = ref('')
-const alertType    = ref<AlertType>('success')
+const alertVisible = ref(false);
+const alertMessage = ref("");
+const alertType = ref<AlertType>("success");
 
-const confirmDeleteDialog = ref(false)
-const deleteTarget        = ref<PayrollRun | null>(null)
-const deleteLoading       = ref(false)
+const confirmDeleteDialog = ref(false);
+const deleteTarget = ref<PayrollRun | null>(null);
+const deleteLoading = ref(false);
 
 /* ── Document Generation ── */
-const docDialog    = ref(false)
-const docType      = ref<DocType>('payroll_sheet')
-const docTarget    = ref<Record<string, any> | null>(null)
-const docLoading   = ref(false)
-const orsLoading   = ref(false)
-const dvLoading    = ref(false)
-const sigsLoading  = ref(false)
-const payrollSheetLoading = ref(false)
+const docDialog = ref(false);
+const docType = ref<DocType>("payroll_sheet");
+const docTarget = ref<Record<string, any> | null>(null);
+const docLoading = ref(false);
+const orsLoading = ref(false);
+const dvLoading = ref(false);
+const sigsLoading = ref(false);
+const payrollSheetLoading = ref(false);
 
-const approvedBySig       = ref<Signatory | null>(null)
-const certifiedBySlots    = ref<(Signatory | null)[]>([])
-const selectablePool      = ref<Signatory[]>([])
-const slot1Locked         = ref(false)
-const selectedCertifiedBy = ref<(number | null)[]>([])
-const approvedByPool      = ref<Signatory[]>([])
-const selectedApprovedBy  = ref<number | null>(null)
+const approvedBySig = ref<Signatory | null>(null);
+const certifiedBySlots = ref<(Signatory | null)[]>([]);
+const selectablePool = ref<Signatory[]>([]);
+const slot1Locked = ref(false);
+const selectedCertifiedBy = ref<(number | null)[]>([]);
+const approvedByPool = ref<Signatory[]>([]);
+const selectedApprovedBy = ref<number | null>(null);
 
 /* ─────────────────────────────────────────
    COMPUTED
 ───────────────────────────────────────── */
 const filteredItems = computed(() =>
   runs.value
-    .filter(r => filterStatus.value === 'All' || r.status === filterStatus.value)
-    .map(r => ({
+    .filter(
+      (r) => filterStatus.value === "All" || r.status === filterStatus.value,
+    )
+    .map((r) => ({
       ...r,
-      period:     `${MONTH_NAMES[r.period_month - 1]} ${r.period_year}`,
+      period: `${MONTH_NAMES[r.period_month - 1]} ${r.period_year}`,
       netPayDisp: fmt(r.total_net_pay),
-    }))
-)
+    })),
+);
 
-const totalDraft     = computed(() => runs.value.filter(r => r.status === 'draft').length)
-const totalFinalized = computed(() => runs.value.filter(r => r.status === 'finalized').length)
+const totalDraft = computed(
+  () => runs.value.filter((r) => r.status === "draft").length,
+);
+const totalFinalized = computed(
+  () => runs.value.filter((r) => r.status === "finalized").length,
+);
 
 const divisionOptions = computed(() =>
-  divisions.value.map(d => ({ title: d.description, value: d.id }))
-)
+  divisions.value.map((d) => ({ title: d.description, value: d.id })),
+);
 
 const sectionOptions = computed(() =>
-  sections.value.map(s => ({ title: s.station, value: s.id }))
-)
+  sections.value.map((s) => ({ title: s.station, value: s.id })),
+);
+
+const selectedSections = computed(() =>
+  form.value.section_ids
+    .map((id) => sections.value.find((s) => s.id === id))
+    .filter((s): s is Section => !!s),
+);
 
 // When division changes, reset section and reload sections list
-watch(() => form.value.division_id, async (divId) => {
-  form.value.section_id = null
-  sections.value        = []
-  if (!divId) return
-  sectionsLoading.value = true
-  try {
-    const { data } = await axios.get(`/api/divisions/${divId}/sections`)
-    sections.value = data.data ?? []
-  } catch {
-    showAlert('error', 'Failed to load sections.')
-  } finally {
-    sectionsLoading.value = false
-  }
-})
+watch(
+  () => form.value.division_id,
+  async (divId) => {
+    form.value.section_ids = [];
+    sections.value = [];
+    if (!divId) return;
+    sectionsLoading.value = true;
+    try {
+      const { data } = await axios.get(`/api/divisions/${divId}/sections`);
+      sections.value = data.data ?? [];
+    } catch {
+      showAlert("error", "Failed to load sections.");
+    } finally {
+      sectionsLoading.value = false;
+    }
+  },
+);
 
-watch(() => form.value.fund_cluster, (val) => {
-  form.value.saa_no = val
-})
+watch(
+  () => form.value.section_ids,
+  (ids) => {
+    const next: Record<number, string> = {};
+    for (const id of ids) {
+      next[id] = form.value.fund_clusters[id] ?? "";
+    }
+    form.value.fund_clusters = next;
+  },
+);
+
+watch(
+  () => form.value.fund_clusters,
+  (val) => {
+    form.value.saa_no = Object.values(val)
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .join(", ");
+  },
+  { deep: true },
+);
 
 const docTypeLabel = computed(() => {
-  if (docType.value === 'payroll_sheet') return 'Payroll Sheet'
-  if (docType.value === 'ors')           return 'Obligation Request & Status (ORS)'
-  return 'Disbursement Voucher (DV)'
-})
+  if (docType.value === "payroll_sheet") return "Payroll Sheet";
+  if (docType.value === "ors") return "Obligation Request & Status (ORS)";
+  return "Disbursement Voucher (DV)";
+});
 
 function initials(name: string) {
   return name
-    .split(' ')
+    .split(" ")
     .filter(Boolean)
     .slice(0, 2)
-    .map(w => w[0].toUpperCase())
-    .join('')
+    .map((w) => w[0].toUpperCase())
+    .join("");
 }
 
-const AVATAR_COLORS = ['primary', 'teal', 'orange', 'purple', 'pink', 'indigo'] as const
+const AVATAR_COLORS = [
+  "primary",
+  "teal",
+  "orange",
+  "purple",
+  "pink",
+  "indigo",
+] as const;
 
 function avatarColor(id: number | null): string {
-  return AVATAR_COLORS[(id ?? 0) % AVATAR_COLORS.length]
+  return AVATAR_COLORS[(id ?? 0) % AVATAR_COLORS.length];
 }
 
 const certifiedOptions = computed(() =>
-  selectablePool.value.map(s => ({ title: s.name, subtitle: s.position, value: s.id as number | null, vacant: false }))
-)
+  selectablePool.value.map((s) => ({
+    title: s.name,
+    subtitle: s.position,
+    value: s.id as number | null,
+    vacant: false,
+  })),
+);
 
 const approvedByOptions = computed(() => [
-  { title: 'Vacant / No Approving Authority', subtitle: 'Leave blank on the document', value: null as number | null, vacant: true },
-  ...approvedByPool.value.map(s => ({ title: s.name, subtitle: s.position, value: s.id as number | null, vacant: false })),
-])
+  {
+    title: "Vacant / No Approving Authority",
+    subtitle: "Leave blank on the document",
+    value: null as number | null,
+    vacant: true,
+  },
+  ...approvedByPool.value.map((s) => ({
+    title: s.name,
+    subtitle: s.position,
+    value: s.id as number | null,
+    vacant: false,
+  })),
+]);
 
 const certifiedSlotLabels = computed(() => {
-  if (docType.value === 'ors') return ['Certified by - Division Head', 'Certified by - Budget Officer']
-  if (docType.value === 'dv')  return ['Certified by - Division Head', 'Certified by - Accountant Head']
-  return ['Certified by - Division Head', 'Certified by - Accountant Head', 'Certified by - Cashier Head']
-})
+  if (docType.value === "ors")
+    return ["Certified by - Division Head", "Certified by - Budget Officer"];
+  if (docType.value === "dv")
+    return ["Certified by - Division Head", "Certified by - Accountant Head"];
+  return [
+    "Certified by - Division Head",
+    "Certified by - Accountant Head",
+    "Certified by - Cashier Head",
+  ];
+});
 
 const approvedByLabel = computed(() =>
-  docType.value === 'dv' ? 'Approved by' : 'Approved By'
-)
+  docType.value === "dv" ? "Approved by" : "Approved By",
+);
 
- const docGenerateLoading = computed(() => {
-   if (docType.value === 'ors') return orsLoading.value
-   if (docType.value === 'dv')  return dvLoading.value
-   if (docType.value === 'payroll_sheet') return payrollSheetLoading.value
-    return docLoading.value
- })
+const docGenerateLoading = computed(() => {
+  if (docType.value === "ors") return orsLoading.value;
+  if (docType.value === "dv") return dvLoading.value;
+  if (docType.value === "payroll_sheet") return payrollSheetLoading.value;
+  return docLoading.value;
+});
 
 const docPeriodLabel = computed(() => {
-  if (!docTarget.value) return ''
-  return `${MONTH_NAMES[docTarget.value.period_month - 1]} ${docTarget.value.period_year}`
-})
+  if (!docTarget.value) return "";
+  return `${MONTH_NAMES[docTarget.value.period_month - 1]} ${docTarget.value.period_year}`;
+});
 
 /* ─────────────────────────────────────────
    HELPERS
 ───────────────────────────────────────── */
 const fmt = (v: number) =>
-  new Intl.NumberFormat('en-PH', {
-    style: 'currency', currency: 'PHP', minimumFractionDigits: 2,
-  }).format(v ?? 0)
+  new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    minimumFractionDigits: 2,
+  }).format(v ?? 0);
 
 function showAlert(type: AlertType, message: string) {
-  alertType.value    = type
-  alertMessage.value = message
-  alertVisible.value = true
+  alertType.value = type;
+  alertMessage.value = message;
+  alertVisible.value = true;
 }
 
 function validate(): boolean {
-  const errs: Record<string, string> = {}
-  if (!form.value.period_month) errs.period_month = 'Period month is required.'
-  if (!form.value.period_year)  errs.period_year  = 'Period year is required.'
-  if (!form.value.division_id)  errs.division_id  = 'Division is required.'
-  if (!form.value.section_id)   errs.section_id   = 'Section is required.'
-  if (!form.value.fund_cluster?.trim()) errs.fund_cluster = 'Fund cluster is required.'
-  formErrors.value = errs
-  return Object.keys(errs).length === 0
+  const errs: Record<string, string> = {};
+  if (!form.value.period_month) errs.period_month = "Period month is required.";
+  if (!form.value.period_year) errs.period_year = "Period year is required.";
+  if (!form.value.division_id) errs.division_id = "Division is required.";
+  if (!form.value.section_ids.length)
+    errs.section_ids = "Select at least one section.";
+  const missingFundCluster = form.value.section_ids.some(
+    (id) => !form.value.fund_clusters[id]?.trim(),
+  );
+  if (form.value.section_ids.length && missingFundCluster)
+    errs.fund_clusters = "Enter a fund cluster for every selected section.";
+  formErrors.value = errs;
+  return Object.keys(errs).length === 0;
 }
 
 /* ─────────────────────────────────────────
    API
 ───────────────────────────────────────── */
 async function fetchRuns() {
-  loading.value = true
+  loading.value = true;
   try {
-    const { data } = await axios.get('/api/payroll-run')
-    runs.value = data.data ?? []
+    const { data } = await axios.get("/api/payroll-run");
+    runs.value = data.data ?? [];
   } catch {
-    showAlert('error', 'Failed to load payroll runs.')
+    showAlert("error", "Failed to load payroll runs.");
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function fetchDivisions() {
   try {
-    const { data } = await axios.get('/api/divisions')
-    divisions.value = data.data ?? []
+    const { data } = await axios.get("/api/divisions");
+    divisions.value = data.data ?? [];
   } catch {
-    showAlert('error', 'Failed to load divisions.')
+    showAlert("error", "Failed to load divisions.");
   }
 }
 async function fetchSignatories(type: DocType, divisionId: number) {
-  sigsLoading.value = true
+  sigsLoading.value = true;
   try {
-    const { data } = await axios.get('/api/signatories', {
+    const { data } = await axios.get("/api/signatories", {
       params: { division_id: divisionId, doc_type: type },
-    })
-    const payload = data.data
-    approvedBySig.value   = payload.approved_by ?? null
-    selectedApprovedBy.value = approvedBySig.value?.id ?? null
-    approvedByPool.value  = payload.approved_by_pool ?? []
-    certifiedBySlots.value = payload.certified_by
-    selectablePool.value   = payload.selectable_pool
-    slot1Locked.value      = payload.slot1_locked
-    selectedCertifiedBy.value = certifiedBySlots.value.map((s: Signatory | null) => s?.id ?? null)
+    });
+    const payload = data.data;
+    approvedBySig.value = payload.approved_by ?? null;
+    selectedApprovedBy.value = approvedBySig.value?.id ?? null;
+    approvedByPool.value = payload.approved_by_pool ?? [];
+    certifiedBySlots.value = payload.certified_by;
+    selectablePool.value = payload.selectable_pool;
+    slot1Locked.value = payload.slot1_locked;
+    selectedCertifiedBy.value = certifiedBySlots.value.map(
+      (s: Signatory | null) => s?.id ?? null,
+    );
   } catch {
-    showAlert('error', 'Failed to load signatories.')
+    showAlert("error", "Failed to load signatories.");
   } finally {
-    sigsLoading.value = false
+    sigsLoading.value = false;
   }
 }
 
 function openDocDialog(type: DocType, item: Record<string, any>) {
-  docType.value   = type
-  docTarget.value = item
-  docDialog.value = true
-  fetchSignatories(type, item.division_id)
+  docType.value = type;
+  docTarget.value = item;
+  docDialog.value = true;
+  fetchSignatories(type, item.division_id);
 }
 
 async function generateORSFromBackend() {
-  if (!docTarget.value) return
-  orsLoading.value = true
+  if (!docTarget.value) return;
+  orsLoading.value = true;
   try {
     const response = await axios.post(
       `/api/payroll-run/${docTarget.value.id}/generate-ors`,
-      {certified_by: selectedCertifiedBy.value},
-      { responseType: 'blob' }
-    )
-    const filename = `ORS-${docTarget.value.payroll_no}.pdf`
-    const file = new File([response.data], filename, { type: 'application/pdf' })
-    const url  = URL.createObjectURL(file)
-    const tab  = window.open(url, '_blank')
-    if (!tab) showAlert('warning', 'Popup blocked. Please allow popups and try again.')
-    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      { certified_by: selectedCertifiedBy.value },
+      { responseType: "blob" },
+    );
+    const filename = `ORS-${docTarget.value.payroll_no}.pdf`;
+    const file = new File([response.data], filename, {
+      type: "application/pdf",
+    });
+    const url = URL.createObjectURL(file);
+    const tab = window.open(url, "_blank");
+    if (!tab)
+      showAlert("warning", "Popup blocked. Please allow popups and try again.");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   } catch {
-    showAlert('error', 'Failed to generate ORS.')
+    showAlert("error", "Failed to generate ORS.");
   } finally {
-    orsLoading.value = false
+    orsLoading.value = false;
   }
 }
 async function generatePayrollSheetFromBackend() {
-  if (!docTarget.value) return
-  payrollSheetLoading.value = true
+  if (!docTarget.value) return;
+  payrollSheetLoading.value = true;
   try {
     const response = await axios.post(
       `/api/payroll-run/${docTarget.value.id}/generate-payroll-sheet`,
-      {certified_by: selectedCertifiedBy.value, approved_by: selectedApprovedBy.value},
-      { responseType: 'blob' }
-    )
-    const filename = `PAYROLL-${docTarget.value.payroll_no}.pdf`
-    const file = new File([response.data], filename, { type: 'application/pdf' })
-    const url  = URL.createObjectURL(file)
-    const tab  = window.open(url, '_blank')
-    if (!tab) showAlert('warning', 'Popup blocked. Please allow popups and try again.')
-    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      {
+        certified_by: selectedCertifiedBy.value,
+        approved_by: selectedApprovedBy.value,
+      },
+      { responseType: "blob" },
+    );
+    const filename = `PAYROLL-${docTarget.value.payroll_no}.pdf`;
+    const file = new File([response.data], filename, {
+      type: "application/pdf",
+    });
+    const url = URL.createObjectURL(file);
+    const tab = window.open(url, "_blank");
+    if (!tab)
+      showAlert("warning", "Popup blocked. Please allow popups and try again.");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   } catch {
-    showAlert('error', 'Failed to generate Payroll Sheet.')
+    showAlert("error", "Failed to generate Payroll Sheet.");
   } finally {
-    payrollSheetLoading.value = false
+    payrollSheetLoading.value = false;
   }
 }
 async function generateDVFromBackend() {
-  if (!docTarget.value) return
-  dvLoading.value = true
+  if (!docTarget.value) return;
+  dvLoading.value = true;
   try {
     const response = await axios.post(
       `/api/payroll-run/${docTarget.value.id}/generate-dv`,
-      {certified_by: selectedCertifiedBy.value, approved_by: selectedApprovedBy.value},
-      { responseType: 'blob' }
-    )
-    const filename = `DV-${docTarget.value.payroll_no}.pdf`
-    const file = new File([response.data], filename, { type: 'application/pdf' })
-    const url  = URL.createObjectURL(file)
-    const tab  = window.open(url, '_blank')
-    if (!tab) showAlert('warning', 'Popup blocked. Please allow popups and try again.')
-    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      {
+        certified_by: selectedCertifiedBy.value,
+        approved_by: selectedApprovedBy.value,
+      },
+      { responseType: "blob" },
+    );
+    const filename = `DV-${docTarget.value.payroll_no}.pdf`;
+    const file = new File([response.data], filename, {
+      type: "application/pdf",
+    });
+    const url = URL.createObjectURL(file);
+    const tab = window.open(url, "_blank");
+    if (!tab)
+      showAlert("warning", "Popup blocked. Please allow popups and try again.");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   } catch {
-    showAlert('error', 'Failed to generate DV.')
+    showAlert("error", "Failed to generate DV.");
   } finally {
-    dvLoading.value = false
+    dvLoading.value = false;
   }
 }
 
-
-
 async function generateDocument() {
-  if (!docTarget.value) return
-  if (docType.value === 'ors') { await generateORSFromBackend(); docDialog.value = false; return }
-  if (docType.value === 'dv')  { await generateDVFromBackend();  docDialog.value = false; return }
+  if (!docTarget.value) return;
+  if (docType.value === "ors") {
+    await generateORSFromBackend();
+    docDialog.value = false;
+    return;
+  }
+  if (docType.value === "dv") {
+    await generateDVFromBackend();
+    docDialog.value = false;
+    return;
+  }
 
- if (docType.value === 'payroll_sheet') { await generatePayrollSheetFromBackend(); docDialog.value = false; return }
+  if (docType.value === "payroll_sheet") {
+    await generatePayrollSheetFromBackend();
+    docDialog.value = false;
+    return;
+  }
 }
-const dtrNotSavedDialog  = ref(false)
-const dtrNotSavedMessage = ref('')
-const dtrNotSavedPeriod  = ref('')
+const dtrNotSavedDialog = ref(false);
+const dtrNotSavedMessage = ref("");
+const dtrNotSavedPeriod = ref("");
 async function handleCreate() {
-  if (!validate()) return
-  modalLoading.value = true
+  if (!validate()) return;
+  modalLoading.value = true;
   try {
-    const { data } = await axios.post('/api/payroll-run', form.value)
-    if (!data.success) throw new Error(data.message ?? 'Failed to create.')
-    showAlert('success', `Payroll run created: ${data.data.payroll_no}`)
-    modalOpen.value = false
-    router.push({ name: 'payroll-run-detail', params: { id: data.data.id } })
+    const { data } = await axios.post("/api/payroll-run", form.value);
+    if (!data.success) throw new Error(data.message ?? "Failed to create.");
+    showAlert("success", `Payroll run created: ${data.data.payroll_no}`);
+    modalOpen.value = false;
+    router.push({ name: "payroll-run-detail", params: { id: data.data.id } });
   } catch (err: any) {
-    const resData = err.response?.data
+    const resData = err.response?.data;
     if (resData?.dtr_not_saved) {
-      modalOpen.value          = false
-      dtrNotSavedMessage.value = resData.message
-      dtrNotSavedPeriod.value  = `${MONTH_NAMES[form.value.period_month - 1]} ${form.value.period_year}`
-      dtrNotSavedDialog.value  = true
-      return
+      modalOpen.value = false;
+      dtrNotSavedMessage.value = resData.message;
+      dtrNotSavedPeriod.value = `${MONTH_NAMES[form.value.period_month - 1]} ${form.value.period_year}`;
+      dtrNotSavedDialog.value = true;
+      return;
     }
     if (err.response?.data?.errors) {
       formErrors.value = Object.fromEntries(
-        Object.entries(err.response.data.errors).map(([k, v]) => [k, (v as string[])[0]])
-      )
+        Object.entries(err.response.data.errors).map(([k, v]) => [
+          k,
+          (v as string[])[0],
+        ]),
+      );
     }
-    showAlert('error', resData?.message ?? err.message ?? 'Failed to create.')
+    showAlert("error", resData?.message ?? err.message ?? "Failed to create.");
   } finally {
-    modalLoading.value = false
+    modalLoading.value = false;
   }
 }
 
 async function executeDelete() {
-  if (!deleteTarget.value) return
-  deleteLoading.value = true
+  if (!deleteTarget.value) return;
+  deleteLoading.value = true;
   try {
-    const { data } = await axios.post(`/api/payroll-run/delete/${deleteTarget.value.id}`)
-    if (!data.success) throw new Error(data.message ?? 'Failed to delete.')
-    runs.value = runs.value.filter(r => r.id !== deleteTarget.value!.id)
-    showAlert('success', 'Payroll run deleted.')
-    confirmDeleteDialog.value = false
+    const { data } = await axios.post(
+      `/api/payroll-run/delete/${deleteTarget.value.id}`,
+    );
+    if (!data.success) throw new Error(data.message ?? "Failed to delete.");
+    runs.value = runs.value.filter((r) => r.id !== deleteTarget.value!.id);
+    showAlert("success", "Payroll run deleted.");
+    confirmDeleteDialog.value = false;
   } catch (err: any) {
-    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to delete.')
+    showAlert(
+      "error",
+      err.response?.data?.message ?? err.message ?? "Failed to delete.",
+    );
   } finally {
-    deleteLoading.value = false
+    deleteLoading.value = false;
   }
 }
 
@@ -426,45 +555,47 @@ async function executeDelete() {
    HANDLERS
 ───────────────────────────────────────── */
 function openCreate() {
-  form.value       = BLANK_FORM()
-  formErrors.value = {}
-  modalOpen.value  = true
+  form.value = BLANK_FORM();
+  formErrors.value = {};
+  modalOpen.value = true;
 }
 
 function openDetail(item: Record<string, any>) {
-  router.push({ name: 'payroll-run-detail', params: { id: item.id } })
+  router.push({ name: "payroll-run-detail", params: { id: item.id } });
 }
 
 function openDeleteConfirm(item: Record<string, any>) {
-  const run = runs.value.find(r => r.id === item.id)
-  if (!run) return
-  if (run.status === 'finalized') {
-    showAlert('warning', 'Finalized payroll runs cannot be deleted.')
-    return
+  const run = runs.value.find((r) => r.id === item.id);
+  if (!run) return;
+  if (run.status === "finalized") {
+    showAlert("warning", "Finalized payroll runs cannot be deleted.");
+    return;
   }
-  deleteTarget.value        = run
-  confirmDeleteDialog.value = true
+  deleteTarget.value = run;
+  confirmDeleteDialog.value = true;
 }
 
 /* ─────────────────────────────────────────
    INIT
 ───────────────────────────────────────── */
 onMounted(() => {
-  fetchRuns()
-  fetchDivisions()
-})
+  fetchRuns();
+  fetchDivisions();
+});
 </script>
 
 <template>
   <div>
     <VContainer fluid class="pa-6">
-
       <!-- ── Page Header ── -->
-      <div class="d-flex align-center justify-space-between flex-wrap gap-4 mb-2">
+      <div
+        class="d-flex align-center justify-space-between flex-wrap gap-4 mb-2"
+      >
         <div>
           <h4 class="text-h5 font-weight-bold mb-1">Payroll Runs</h4>
           <p class="text-body-2 text-medium-emphasis mb-0">
-            Create and manage monthly payroll runs per division. Generate official payroll documents from finalized runs.
+            Create and manage monthly payroll runs per division. Generate
+            official payroll documents from finalized runs.
           </p>
         </div>
         <VBtn color="primary" prepend-icon="mdi-plus" @click="openCreate">
@@ -521,22 +652,24 @@ onMounted(() => {
       <div class="d-flex gap-2 mb-3 flex-wrap">
         <VChip
           v-for="opt in [
-            { label: 'All',       value: 'All'       },
-            { label: 'Draft',     value: 'draft'     },
+            { label: 'All', value: 'All' },
+            { label: 'Draft', value: 'draft' },
             { label: 'Finalized', value: 'finalized' },
           ]"
           :key="opt.value"
           :color="
             filterStatus === opt.value
-              ? opt.value === 'finalized' ? 'success'
-              : opt.value === 'draft'     ? 'warning'
-              : 'primary'
+              ? opt.value === 'finalized'
+                ? 'success'
+                : opt.value === 'draft'
+                  ? 'warning'
+                  : 'primary'
               : undefined
           "
           :variant="filterStatus === opt.value ? 'tonal' : 'outlined'"
           size="small"
           label
-          style="cursor:pointer"
+          style="cursor: pointer"
           @click="filterStatus = opt.value as typeof filterStatus"
         >
           {{ opt.label }}
@@ -551,19 +684,32 @@ onMounted(() => {
         :loading="loading"
         :items-per-page="10"
         searchable
-        :filter-keys="['payroll_no', 'period', 'division_name', 'section_name', 'fund_cluster', 'status']"
+        :filter-keys="[
+          'payroll_no',
+          'period',
+          'division_name',
+          'section_name',
+          'fund_cluster',
+          'status',
+        ]"
         @edit="openDetail"
         @delete="openDeleteConfirm"
       >
         <!-- Payroll No -->
         <template #item.payroll_no="{ item }">
-          <span class="text-body-2 font-weight-medium font-monospace">{{ item.payroll_no }}</span>
+          <span class="text-body-2 font-weight-medium font-monospace">{{
+            item.payroll_no
+          }}</span>
         </template>
 
         <!-- Period -->
         <template #item.period="{ item }">
           <div class="d-flex align-center gap-2">
-            <VIcon icon="mdi-calendar-month-outline" size="15" class="text-medium-emphasis" />
+            <VIcon
+              icon="mdi-calendar-month-outline"
+              size="15"
+              class="text-medium-emphasis"
+            />
             <span class="text-body-2">{{ item.period }}</span>
           </div>
         </template>
@@ -573,9 +719,18 @@ onMounted(() => {
           <div class="d-flex align-center gap-2">
             <VIcon icon="mdi-domain" size="15" class="text-medium-emphasis" />
             <div>
-              <div v-if="item.section_name" class="text-body-2">{{ item.section_name }}</div>
-              <div class="d-flex align-center gap-1 text-caption text-medium-emphasis" :class="{ 'text-body-2': !item.section_name }">
-                <VIcon v-if="item.section_name" icon="mdi-subdirectory-arrow-right" size="11" />
+              <div v-if="item.section_name" class="text-body-2">
+                {{ item.section_name }}
+              </div>
+              <div
+                class="d-flex align-center gap-1 text-caption text-medium-emphasis"
+                :class="{ 'text-body-2': !item.section_name }"
+              >
+                <VIcon
+                  v-if="item.section_name"
+                  icon="mdi-subdirectory-arrow-right"
+                  size="11"
+                />
                 {{ item.division_name }}
               </div>
             </div>
@@ -599,45 +754,90 @@ onMounted(() => {
           >
             <VIcon
               start
-              :icon="item.status === 'finalized' ? 'mdi-check-circle-outline' : 'mdi-pencil-outline'"
+              :icon="
+                item.status === 'finalized'
+                  ? 'mdi-check-circle-outline'
+                  : 'mdi-pencil-outline'
+              "
               size="14"
             />
-            {{ item.status === 'finalized' ? 'Finalized' : 'Draft' }}
+            {{ item.status === "finalized" ? "Finalized" : "Draft" }}
           </VChip>
         </template>
 
         <!-- Actions -->
         <template #item.actions="{ item }">
           <div class="d-flex align-center justify-center gap-1">
-            <VBtn icon size="small" variant="text" color="primary" @click.stop="openDetail(item)">
+            <VBtn
+              icon
+              size="small"
+              variant="text"
+              color="primary"
+              @click.stop="openDetail(item)"
+            >
               <VIcon size="18">mdi-eye-outline</VIcon>
-              <VTooltip activator="parent" location="top">View Details</VTooltip>
+              <VTooltip activator="parent" location="top"
+                >View Details</VTooltip
+              >
             </VBtn>
-              <VMenu v-if="item.status === 'finalized'">
+            <VMenu v-if="item.status === 'finalized'">
               <template #activator="{ props }">
-                <VBtn icon size="small" variant="text" color="indigo" v-bind="props" @click.stop>
+                <VBtn
+                  icon
+                  size="small"
+                  variant="text"
+                  color="indigo"
+                  v-bind="props"
+                  @click.stop
+                >
                   <VIcon size="18">mdi-file-pdf-box</VIcon>
-                  <VTooltip activator="parent" location="top">Generate Documents</VTooltip>
+                  <VTooltip activator="parent" location="top"
+                    >Generate Documents</VTooltip
+                  >
                 </VBtn>
               </template>
               <VList density="compact">
-                <VListItem v-if="item.employee_count > 1" @click="openDocDialog('payroll_sheet', item)">
-                  <template #prepend><VIcon size="16" class="mr-2">mdi-file-table-outline</VIcon></template>
-                  <VListItemTitle class="text-body-2">Payroll Sheet</VListItemTitle>
+                <VListItem
+                  v-if="item.employee_count > 1"
+                  @click="openDocDialog('payroll_sheet', item)"
+                >
+                  <template #prepend
+                    ><VIcon size="16" class="mr-2"
+                      >mdi-file-table-outline</VIcon
+                    ></template
+                  >
+                  <VListItemTitle class="text-body-2"
+                    >Payroll Sheet</VListItemTitle
+                  >
                 </VListItem>
                 <VListItem @click="openDocDialog('ors', item)">
-                  <template #prepend><VIcon size="16" class="mr-2">mdi-file-document-outline</VIcon></template>
-                  <VListItemTitle class="text-body-2">Obligation Request & Status</VListItemTitle>
+                  <template #prepend
+                    ><VIcon size="16" class="mr-2"
+                      >mdi-file-document-outline</VIcon
+                    ></template
+                  >
+                  <VListItemTitle class="text-body-2"
+                    >Obligation Request & Status</VListItemTitle
+                  >
                 </VListItem>
                 <VListItem @click="openDocDialog('dv', item)">
-                  <template #prepend><VIcon size="16" class="mr-2">mdi-receipt-text-outline</VIcon></template>
-                  <VListItemTitle class="text-body-2">Disbursement Voucher</VListItemTitle>
+                  <template #prepend
+                    ><VIcon size="16" class="mr-2"
+                      >mdi-receipt-text-outline</VIcon
+                    ></template
+                  >
+                  <VListItemTitle class="text-body-2"
+                    >Disbursement Voucher</VListItemTitle
+                  >
                 </VListItem>
               </VList>
             </VMenu>
             <VBtn
               v-if="item.status === 'draft'"
-              icon size="small" variant="text" color="error"
+              icon
+              size="small"
+              variant="text"
+              color="error"
               @click.stop="openDeleteConfirm(item)"
             >
               <VIcon size="18">mdi-delete-outline</VIcon>
@@ -646,7 +846,6 @@ onMounted(() => {
           </div>
         </template>
       </BaseTable>
-
     </VContainer>
 
     <!-- ── Create Modal ── -->
@@ -662,18 +861,29 @@ onMounted(() => {
       @cancel="modalOpen = false"
     >
       <VRow dense>
-
         <!-- Info -->
         <VCol cols="12">
-          <VAlert type="info" variant="tonal" density="compact" icon="mdi-information-outline" class="mb-2">
-            A payroll run covers <strong>one division</strong> for <strong>one month</strong>.
-            You can add more details (SAA No., ORS No., etc.) after creation.
+          <VAlert
+            type="info"
+            variant="tonal"
+            density="compact"
+            icon="mdi-information-outline"
+            class="mb-2"
+          >
+            A payroll run covers <strong>one division</strong> for
+            <strong>one month</strong>, and can span
+            <strong>one or more sections</strong> within that division. You can
+            add more details (SAA No., ORS No., etc.) after creation.
           </VAlert>
         </VCol>
 
         <!-- Period -->
         <VCol cols="12" class="mt-1">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Period Covered</p>
+          <p
+            class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
+          >
+            Period Covered
+          </p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
@@ -705,7 +915,11 @@ onMounted(() => {
 
         <!-- Division -->
         <VCol cols="12" class="mt-2">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Division</p>
+          <p
+            class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
+          >
+            Division
+          </p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
@@ -727,46 +941,78 @@ onMounted(() => {
 
         <VCol cols="12">
           <VSelect
-            v-model="form.section_id"
-            label="Section"
+            v-model="form.section_ids"
+            label="Sections"
             :items="sectionOptions"
             item-title="title"
             item-value="value"
             variant="outlined"
             density="compact"
             prepend-inner-icon="mdi-account-group-outline"
+            multiple
+            chips
+            closable-chips
             :loading="sectionsLoading"
             :disabled="!form.division_id || sectionsLoading"
-            :error-messages="formErrors.section_id"
-            hint="Select the specific section for this payroll run."
+            :error-messages="formErrors.section_ids"
+            hint="Select one or more sections for this payroll run."
             persistent-hint
-            :no-data-text="form.division_id ? 'No sections found for this division.' : 'Select a division first.'"
+            :no-data-text="
+              form.division_id
+                ? 'No sections found for this division.'
+                : 'Select a division first.'
+            "
           />
         </VCol>
 
-        <!-- Fund Cluster -->
+        <!-- Fund Cluster per Section -->
         <VCol cols="12" class="mt-3">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Budget Information</p>
+          <p
+            class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
+          >
+            Budget Information
+          </p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
-        <VCol cols="12">
+        <VCol v-for="sec in selectedSections" :key="sec.id" cols="12">
           <VTextField
-            v-model="form.fund_cluster"
-            label="Fund Cluster"
+            v-model="form.fund_clusters[sec.id]"
+            :label="`Fund Cluster — ${sec.station}`"
             variant="outlined"
             density="compact"
             prepend-inner-icon="mdi-bank-outline"
-            :error-messages="formErrors.fund_cluster"
             hint="e.g. 01, 02, 03"
             persistent-hint
           />
         </VCol>
 
+        <VCol cols="12" v-if="!selectedSections.length">
+          <p class="text-caption text-medium-emphasis">
+            Select at least one section above to enter its fund cluster.
+          </p>
+        </VCol>
+
+        <VCol cols="12" v-if="formErrors.fund_clusters">
+          <VAlert
+            type="error"
+            variant="tonal"
+            density="compact"
+            class="text-body-2"
+          >
+            {{ formErrors.fund_clusters }}
+          </VAlert>
+        </VCol>
+
         <!-- Optional reference numbers -->
         <VCol cols="12" class="mt-3">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
-            Reference Numbers <span class="text-lowercase font-weight-regular">(optional — can be filled later)</span>
+          <p
+            class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
+          >
+            Reference Numbers
+            <span class="text-lowercase font-weight-regular"
+              >(optional — can be filled later)</span
+            >
           </p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
@@ -778,7 +1024,7 @@ onMounted(() => {
             variant="outlined"
             density="compact"
             prepend-inner-icon="mdi-pound"
-            hint="Mirrors Fund Cluster"
+            hint="Mirrors Fund Cluster(s)"
             persistent-hint
             readonly
           />
@@ -819,7 +1065,6 @@ onMounted(() => {
             persistent-hint
           />
         </VCol>
-
       </VRow>
     </BaseModal>
 
@@ -832,53 +1077,97 @@ onMounted(() => {
               <VIcon icon="mdi-delete-outline" size="22" />
             </VAvatar>
             <div>
-              <div class="text-body-1 font-weight-medium">Delete Payroll Run?</div>
-              <div class="text-caption text-medium-emphasis">This action cannot be undone.</div>
+              <div class="text-body-1 font-weight-medium">
+                Delete Payroll Run?
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                This action cannot be undone.
+              </div>
             </div>
           </div>
           <p class="text-body-2 text-medium-emphasis mb-0">
             You are about to delete payroll run
-            <strong class="text-high-emphasis">{{ deleteTarget?.payroll_no }}</strong>
-            for <strong class="text-high-emphasis">{{ deleteTarget?.division_name }}</strong>
-            — {{ deleteTarget ? MONTH_NAMES[deleteTarget.period_month - 1] : '' }} {{ deleteTarget?.period_year }}.
-            All associated data will be permanently removed.
+            <strong class="text-high-emphasis">{{
+              deleteTarget?.payroll_no
+            }}</strong>
+            for
+            <strong class="text-high-emphasis">{{
+              deleteTarget?.division_name
+            }}</strong>
+            —
+            {{ deleteTarget ? MONTH_NAMES[deleteTarget.period_month - 1] : "" }}
+            {{ deleteTarget?.period_year }}. All associated data will be
+            permanently removed.
           </p>
         </VCardText>
         <VDivider />
         <VCardActions class="justify-end pa-4 gap-2">
-          <VBtn variant="text" :disabled="deleteLoading" @click="confirmDeleteDialog = false">Cancel</VBtn>
-          <VBtn color="error" variant="tonal" :loading="deleteLoading" @click="executeDelete">
+          <VBtn
+            variant="text"
+            :disabled="deleteLoading"
+            @click="confirmDeleteDialog = false"
+            >Cancel</VBtn
+          >
+          <VBtn
+            color="error"
+            variant="tonal"
+            :loading="deleteLoading"
+            @click="executeDelete"
+          >
             <VIcon start size="16">mdi-delete-outline</VIcon>
             Yes, Delete
           </VBtn>
         </VCardActions>
       </VCard>
     </VDialog>
- <!-- ── Document Generation Dialog ── -->
+    <!-- ── Document Generation Dialog ── -->
     <VDialog v-model="docDialog" max-width="500" persistent>
       <VCard rounded="lg">
         <VCardText class="pa-6">
           <div class="d-flex align-center gap-3 mb-4">
             <VAvatar
-              :color="docType === 'payroll_sheet' ? 'primary' : docType === 'ors' ? 'indigo' : 'deep-purple'"
-              variant="tonal" size="44" rounded="lg"
+              :color="
+                docType === 'payroll_sheet'
+                  ? 'primary'
+                  : docType === 'ors'
+                    ? 'indigo'
+                    : 'deep-purple'
+              "
+              variant="tonal"
+              size="44"
+              rounded="lg"
             >
               <VIcon
-                :icon="docType === 'payroll_sheet' ? 'mdi-file-table-outline' : docType === 'ors' ? 'mdi-file-document-outline' : 'mdi-receipt-text-outline'"
+                :icon="
+                  docType === 'payroll_sheet'
+                    ? 'mdi-file-table-outline'
+                    : docType === 'ors'
+                      ? 'mdi-file-document-outline'
+                      : 'mdi-receipt-text-outline'
+                "
                 size="22"
               />
             </VAvatar>
             <div>
-              <div class="text-body-1 font-weight-medium">Generate {{ docTypeLabel }}</div>
-              <div class="text-caption text-medium-emphasis">{{ docTarget?.payroll_no }} — {{ docPeriodLabel }}</div>
+              <div class="text-body-1 font-weight-medium">
+                Generate {{ docTypeLabel }}
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                {{ docTarget?.payroll_no }} — {{ docPeriodLabel }}
+              </div>
             </div>
           </div>
 
-          <VSkeletonLoader v-if="sigsLoading" type="list-item-two-line, list-item-two-line" />
+          <VSkeletonLoader
+            v-if="sigsLoading"
+            type="list-item-two-line, list-item-two-line"
+          />
 
           <template v-else>
-             <template v-if="docType !== 'ors'">
-              <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-1">
+            <template v-if="docType !== 'ors'">
+              <p
+                class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-1"
+              >
                 {{ approvedByLabel }}
               </p>
               <VAutocomplete
@@ -895,50 +1184,95 @@ onMounted(() => {
               >
                 <template #selection="{ item }">
                   <div class="d-flex align-center gap-2 py-1">
-                    <VAvatar v-if="!item.raw.vacant" :color="avatarColor(item.raw.value)" variant="tonal" size="24">
-                      <span style="font-size: 10px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                    <VAvatar
+                      v-if="!item.raw.vacant"
+                      :color="avatarColor(item.raw.value)"
+                      variant="tonal"
+                      size="24"
+                    >
+                      <span style="font-size: 10px; font-weight: 600">{{
+                        initials(item.raw.title)
+                      }}</span>
                     </VAvatar>
                     <VAvatar v-else color="default" variant="tonal" size="24">
                       <VIcon size="14">mdi-account-off-outline</VIcon>
                     </VAvatar>
                     <div>
-                      <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
-                      <span v-if="item.raw.subtitle" class="text-caption text-medium-emphasis ml-2">{{ item.raw.subtitle }}</span>
+                      <span class="text-body-2 font-weight-medium">{{
+                        item.raw.title
+                      }}</span>
+                      <span
+                        v-if="item.raw.subtitle"
+                        class="text-caption text-medium-emphasis ml-2"
+                        >{{ item.raw.subtitle }}</span
+                      >
                     </div>
                   </div>
                 </template>
                 <template #item="{ item, props }">
                   <VListItem v-bind="props" :title="undefined" class="py-2">
                     <template #prepend>
-                      <VAvatar v-if="!item.raw.vacant" :color="avatarColor(item.raw.value)" variant="tonal" size="36" class="mr-3">
-                        <span style="font-size: 12px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                      <VAvatar
+                        v-if="!item.raw.vacant"
+                        :color="avatarColor(item.raw.value)"
+                        variant="tonal"
+                        size="36"
+                        class="mr-3"
+                      >
+                        <span style="font-size: 12px; font-weight: 600">{{
+                          initials(item.raw.title)
+                        }}</span>
                       </VAvatar>
-                      <VAvatar v-else color="default" variant="tonal" size="36" class="mr-3">
+                      <VAvatar
+                        v-else
+                        color="default"
+                        variant="tonal"
+                        size="36"
+                        class="mr-3"
+                      >
                         <VIcon size="18">mdi-account-off-outline</VIcon>
                       </VAvatar>
                     </template>
-                    <VListItemTitle class="text-body-2 font-weight-medium">{{ item.raw.title }}</VListItemTitle>
-                    <VListItemSubtitle v-if="item.raw.subtitle" class="text-caption">{{ item.raw.subtitle }}</VListItemSubtitle>
+                    <VListItemTitle class="text-body-2 font-weight-medium">{{
+                      item.raw.title
+                    }}</VListItemTitle>
+                    <VListItemSubtitle
+                      v-if="item.raw.subtitle"
+                      class="text-caption"
+                      >{{ item.raw.subtitle }}</VListItemSubtitle
+                    >
                   </VListItem>
                 </template>
               </VAutocomplete>
               <VAlert
                 v-if="selectedApprovedBy === null"
-                type="warning" variant="tonal" density="compact"
-                icon="mdi-account-off-outline" class="mb-4 text-body-2"
+                type="warning"
+                variant="tonal"
+                density="compact"
+                icon="mdi-account-off-outline"
+                class="mb-4 text-body-2"
               >
-                No Approving Authority selected — the document will generate with a blank signature line.
+                No Approving Authority selected — the document will generate
+                with a blank signature line.
               </VAlert>
               <div v-else class="mb-4" />
             </template>
 
-            <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-2">
+            <p
+              class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-2"
+            >
               Certified By
             </p>
 
             <div class="d-flex flex-column gap-3">
-              <div v-for="(label, i) in certifiedSlotLabels" :key="i" class="d-flex flex-column gap-1">
-                <span class="text-caption text-medium-emphasis">{{ label }}</span>
+              <div
+                v-for="(label, i) in certifiedSlotLabels"
+                :key="i"
+                class="d-flex flex-column gap-1"
+              >
+                <span class="text-caption text-medium-emphasis">{{
+                  label
+                }}</span>
                 <VAutocomplete
                   v-model="selectedCertifiedBy[i]"
                   :items="certifiedOptions"
@@ -953,24 +1287,45 @@ onMounted(() => {
                 >
                   <template #selection="{ item }">
                     <div class="d-flex align-center gap-2 py-1">
-                      <VAvatar :color="avatarColor(item.raw.value)" variant="tonal" size="24">
-                        <span style="font-size: 10px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                      <VAvatar
+                        :color="avatarColor(item.raw.value)"
+                        variant="tonal"
+                        size="24"
+                      >
+                        <span style="font-size: 10px; font-weight: 600">{{
+                          initials(item.raw.title)
+                        }}</span>
                       </VAvatar>
                       <div>
-                        <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
-                        <span class="text-caption text-medium-emphasis ml-2">{{ item.raw.subtitle }}</span>
+                        <span class="text-body-2 font-weight-medium">{{
+                          item.raw.title
+                        }}</span>
+                        <span class="text-caption text-medium-emphasis ml-2">{{
+                          item.raw.subtitle
+                        }}</span>
                       </div>
                     </div>
                   </template>
                   <template #item="{ item, props }">
                     <VListItem v-bind="props" :title="undefined" class="py-2">
                       <template #prepend>
-                        <VAvatar :color="avatarColor(item.raw.value)" variant="tonal" size="36" class="mr-3">
-                          <span style="font-size: 12px; font-weight: 600;">{{ initials(item.raw.title) }}</span>
+                        <VAvatar
+                          :color="avatarColor(item.raw.value)"
+                          variant="tonal"
+                          size="36"
+                          class="mr-3"
+                        >
+                          <span style="font-size: 12px; font-weight: 600">{{
+                            initials(item.raw.title)
+                          }}</span>
                         </VAvatar>
                       </template>
-                      <VListItemTitle class="text-body-2 font-weight-medium">{{ item.raw.title }}</VListItemTitle>
-                      <VListItemSubtitle class="text-caption">{{ item.raw.subtitle }}</VListItemSubtitle>
+                      <VListItemTitle class="text-body-2 font-weight-medium">{{
+                        item.raw.title
+                      }}</VListItemTitle>
+                      <VListItemSubtitle class="text-caption">{{
+                        item.raw.subtitle
+                      }}</VListItemSubtitle>
                     </VListItem>
                   </template>
                 </VAutocomplete>
@@ -981,10 +1336,23 @@ onMounted(() => {
 
         <VDivider />
         <VCardActions class="justify-end pa-4 gap-2">
-          <VBtn variant="text" :disabled="docGenerateLoading" @click="docDialog = false">Cancel</VBtn>
           <VBtn
-            :color="docType === 'payroll_sheet' ? 'primary' : docType === 'ors' ? 'indigo' : 'deep-purple'"
-            variant="tonal" prepend-icon="mdi-file-pdf-box" :loading="docGenerateLoading"
+            variant="text"
+            :disabled="docGenerateLoading"
+            @click="docDialog = false"
+            >Cancel</VBtn
+          >
+          <VBtn
+            :color="
+              docType === 'payroll_sheet'
+                ? 'primary'
+                : docType === 'ors'
+                  ? 'indigo'
+                  : 'deep-purple'
+            "
+            variant="tonal"
+            prepend-icon="mdi-file-pdf-box"
+            :loading="docGenerateLoading"
             @click="generateDocument"
           >
             Generate PDF
@@ -1000,42 +1368,54 @@ onMounted(() => {
       :timeout="3500"
     />
     <!-- ── DTR Not Saved Dialog ── -->
-<VDialog v-model="dtrNotSavedDialog" max-width="460" persistent>
-  <VCard rounded="lg">
-    <VCardText class="pa-6">
-      <div class="d-flex align-center gap-3 mb-4">
-        <VAvatar color="warning" variant="tonal" size="44" rounded="lg">
-          <VIcon icon="mdi-calendar-alert-outline" size="22" />
-        </VAvatar>
-        <div>
-          <div class="text-body-1 font-weight-medium">DTR Not Yet Saved</div>
-          <div class="text-caption text-medium-emphasis">{{ dtrNotSavedPeriod }}</div>
-        </div>
-      </div>
-      <VAlert type="warning" variant="tonal" density="compact" icon="mdi-alert-outline" class="mb-4 text-body-2">
-        {{ dtrNotSavedMessage }}
-      </VAlert>
-      <p class="text-body-2 text-medium-emphasis mb-0">
-        Go to the <strong class="text-high-emphasis">DTR module</strong> and click
-        <strong class="text-high-emphasis">Save DTR</strong> for
-        <strong class="text-high-emphasis">{{ dtrNotSavedPeriod }}</strong> first,
-        then come back to create this payroll run.
-      </p>
-    </VCardText>
-    <VDivider />
-    <VCardActions class="justify-end pa-4 gap-2">
-      <VBtn variant="text" @click="dtrNotSavedDialog = false">Cancel</VBtn>
-      <VBtn
-        color="warning"
-        variant="tonal"
-        prepend-icon="mdi-clock-outline"
-        @click="dtrNotSavedDialog = false; router.push('/dtr')"
-
-      >
-        Go to DTR Module
-      </VBtn>
-    </VCardActions>
-  </VCard>
-</VDialog>
+    <VDialog v-model="dtrNotSavedDialog" max-width="460" persistent>
+      <VCard rounded="lg">
+        <VCardText class="pa-6">
+          <div class="d-flex align-center gap-3 mb-4">
+            <VAvatar color="warning" variant="tonal" size="44" rounded="lg">
+              <VIcon icon="mdi-calendar-alert-outline" size="22" />
+            </VAvatar>
+            <div>
+              <div class="text-body-1 font-weight-medium">
+                DTR Not Yet Saved
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                {{ dtrNotSavedPeriod }}
+              </div>
+            </div>
+          </div>
+          <VAlert
+            type="warning"
+            variant="tonal"
+            density="compact"
+            icon="mdi-alert-outline"
+            class="mb-4 text-body-2"
+          >
+            {{ dtrNotSavedMessage }}
+          </VAlert>
+          <p class="text-body-2 text-medium-emphasis mb-0">
+            Go to the <strong class="text-high-emphasis">DTR module</strong> and
+            click <strong class="text-high-emphasis">Save DTR</strong> for
+            <strong class="text-high-emphasis">{{ dtrNotSavedPeriod }}</strong>
+            first, then come back to create this payroll run.
+          </p>
+        </VCardText>
+        <VDivider />
+        <VCardActions class="justify-end pa-4 gap-2">
+          <VBtn variant="text" @click="dtrNotSavedDialog = false">Cancel</VBtn>
+          <VBtn
+            color="warning"
+            variant="tonal"
+            prepend-icon="mdi-clock-outline"
+            @click="
+              dtrNotSavedDialog = false;
+              router.push('/dtr');
+            "
+          >
+            Go to DTR Module
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
   </div>
 </template>
