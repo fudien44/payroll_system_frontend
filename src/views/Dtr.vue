@@ -381,7 +381,7 @@ const alertMessage = ref("");
 const alertType = ref<AlertType>("success");
 const userStore = useUserStore();
 const realtimeConnectionError = ref(false);
-const { startTour, maybeAutoStartTour } = useDtrTour();
+const { startTour } = useDtrTour();
 
 /* ─────────────────────────────────────────
    COMPUTED
@@ -811,7 +811,6 @@ function cancelSaveDtr() {
 onMounted(() => {
   fetchData();
   resumeCooldownIfAny();
-  // maybeAutoStartTour();
 
   const userId = userStore.user?.id;
   if (!userId) return;

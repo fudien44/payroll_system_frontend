@@ -1,304 +1,383 @@
 <script setup lang="ts">
-import BaseAlert from '@/components/base/BaseAlert.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
-import BaseTable from '@/components/base/BaseTable.vue'
-import { ensurePhotosLoaded, getPhoto } from '@/composable/useEmployeePhotos'
-import axios from '@axios'
-import * as XLSX from 'xlsx'
+import BaseAlert from "@/components/base/BaseAlert.vue";
+import BaseModal from "@/components/base/BaseModal.vue";
+import BaseTable from "@/components/base/BaseTable.vue";
+import { ensurePhotosLoaded, getPhoto } from "@/composable/useEmployeePhotos";
+import axios from "@axios";
+import * as XLSX from "xlsx";
 
 /* ─────────────────────────────────────────
    TYPES
 ───────────────────────────────────────── */
 interface Deductions {
-  wage:            number
-  premium_percent: number
-  premium:         number
-  philhealth:      number
-  pag_ibig:        number
-  sss:             number
-  ewt_rate:        number
-  updated_at?:     string
+  wage: number;
+  premium_percent: number;
+  premium: number;
+  philhealth: number;
+  pag_ibig: number;
+  sss: number;
+  ewt_rate: number;
+  updated_at?: string;
 }
 
 interface Employee {
-  emp_id:          number
-  name:            string
-  position:        string
-  salary_grade:    number
-  philhealth_mode: 'fixed' | 'percentage'
-  philhealth_min:  number
-  has_deductions:  boolean
-  hrmis_wage:      number | null
-  has_hrmis_wage:  boolean
-  deductions:      Deductions | null
-  wage_history_count?: number
+  emp_id: number;
+  name: string;
+  position: string;
+  salary_grade: number;
+  philhealth_mode: "fixed" | "percentage";
+  philhealth_min: number;
+  has_deductions: boolean;
+  hrmis_wage: number | null;
+  has_hrmis_wage: boolean;
+  deductions: Deductions | null;
+  wage_history_count?: number;
 }
 
 interface PayrollRun {
-  id:            number
-  period_month:  number   // PayrollRun uses period_month / period_year
-  period_year:   number
-  status:        'draft' | 'finalized'
-  payroll_no?:   string
-  division_name?: string
-  section_name?:  string
+  id: number;
+  period_month: number; // PayrollRun uses period_month / period_year
+  period_year: number;
+  status: "draft" | "finalized";
+  payroll_no?: string;
+  division_name?: string;
+  section_name?: string;
 }
 
-type AlertType = 'success' | 'error' | 'warning' | 'info'
+type AlertType = "success" | "error" | "warning" | "info";
 
 /* ─────────────────────────────────────────
    CONSTANTS
 ───────────────────────────────────────── */
-const PAGIBIG_MIN = 400
-const SSS_MIN     = 750
-const SG_CUTOFF   = 16
+const PAGIBIG_MIN = 400;
+const SSS_MIN = 750;
+const SG_CUTOFF = 16;
 
 const PREMIUM_OPTIONS = [
-  { title: '5%',  value: 0.05 },
-  { title: '10%', value: 0.10 },
-  { title: '15%', value: 0.15 },
-  { title: '20%', value: 0.20 },
-]
+  { title: "5%", value: 0.05 },
+  { title: "10%", value: 0.1 },
+  { title: "15%", value: 0.15 },
+  { title: "20%", value: 0.2 },
+];
 
 const MONTH_NAMES = [
-  'January','February','March','April','May','June',
-  'July','August','September','October','November','December',
-]
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 
 const TABLE_HEADERS = [
-  { title: 'Employee',   key: 'name',          sortable: true                        },
-  { title: 'SG',         key: 'salary_grade',  sortable: true,  align: 'center' as const },
-  { title: 'Wage',       key: 'wageDisp',      sortable: false, align: 'end'    as const },
-  { title: 'Premium',    key: 'premiumDisp',   sortable: false, align: 'end'    as const },
-  { title: 'PhilHealth', key: 'philhealthDisp',sortable: false, align: 'end'    as const },
-  { title: 'Pag-IBIG',   key: 'pagibigDisp',   sortable: false, align: 'end'    as const },
-  { title: 'SSS',        key: 'sssDisp',       sortable: false, align: 'end'    as const },
-  { title: 'EWT Rate',   key: 'ewtDisp',       sortable: false, align: 'center' as const },
-  { title: 'Status',     key: 'status',        sortable: true                        },
-  { title: 'Actions',    key: 'actions',       sortable: false, align: 'center' as const },
-]
+  { title: "Employee", key: "name", sortable: true },
+  {
+    title: "SG",
+    key: "salary_grade",
+    sortable: true,
+    align: "center" as const,
+  },
+  { title: "Wage", key: "wageDisp", sortable: false, align: "end" as const },
+  {
+    title: "Premium",
+    key: "premiumDisp",
+    sortable: false,
+    align: "end" as const,
+  },
+  {
+    title: "PhilHealth",
+    key: "philhealthDisp",
+    sortable: false,
+    align: "end" as const,
+  },
+  {
+    title: "Pag-IBIG",
+    key: "pagibigDisp",
+    sortable: false,
+    align: "end" as const,
+  },
+  { title: "SSS", key: "sssDisp", sortable: false, align: "end" as const },
+  {
+    title: "EWT Rate",
+    key: "ewtDisp",
+    sortable: false,
+    align: "center" as const,
+  },
+  { title: "Status", key: "status", sortable: true },
+  {
+    title: "Actions",
+    key: "actions",
+    sortable: false,
+    align: "center" as const,
+  },
+];
 
-const BLANK_FORM = (): Omit<Deductions, 'premium' | 'updated_at'> & { effective_date: string } => ({
-  wage:            0,
+const BLANK_FORM = (): Omit<Deductions, "premium" | "updated_at"> & {
+  effective_date: string;
+} => ({
+  wage: 0,
   premium_percent: 0.05,
-  philhealth:      500,
-  pag_ibig:        PAGIBIG_MIN,
-  sss:             SSS_MIN,
-  ewt_rate:        5,
-  effective_date:  new Date().toISOString().slice(0, 10), // NEW
-})
+  philhealth: 500,
+  pag_ibig: PAGIBIG_MIN,
+  sss: SSS_MIN,
+  ewt_rate: 5,
+  effective_date: new Date().toISOString().slice(0, 10), // NEW
+});
 
 /* ─────────────────────────────────────────
    STATE
 ───────────────────────────────────────── */
-const employees    = ref<Employee[]>([])
-const loading      = ref(false)
-const modalOpen    = ref(false)
-const modalLoading = ref(false)
-const selectedEmp  = ref<Employee | null>(null)
-const form         = ref(BLANK_FORM())
-const formErrors = ref<Partial<Record<keyof Deductions | 'effective_date', string>>>({})
-const filterStatus = ref<'All' | 'Set' | 'Not Set'>('All')
-const isEditing    = ref(false)
-const sssOptIn     = ref(false)
+const employees = ref<Employee[]>([]);
+const loading = ref(false);
+const modalOpen = ref(false);
+const modalLoading = ref(false);
+const selectedEmp = ref<Employee | null>(null);
+const form = ref(BLANK_FORM());
+const formErrors = ref<
+  Partial<Record<keyof Deductions | "effective_date", string>>
+>({});
+const filterStatus = ref<"All" | "Set" | "Not Set">("All");
+const isEditing = ref(false);
+const sssOptIn = ref(false);
+const philhealthOptIn = ref(false);
 
-const historyRows          = ref<any[]>([])
-const historyLoading       = ref(false)
-const editingHistoryId     = ref<number | null>(null)   // null = "add new entry" mode
-const confirmHistoryEditDialog   = ref(false)
-const confirmHistoryDeleteDialog = ref(false)
-const selectedHistoryRow   = ref<any | null>(null)
-const historyDeleteLoading = ref(false)
+const historyRows = ref<any[]>([]);
+const historyLoading = ref(false);
+const editingHistoryId = ref<number | null>(null); // null = "add new entry" mode
+const confirmHistoryEditDialog = ref(false);
+const confirmHistoryDeleteDialog = ref(false);
+const selectedHistoryRow = ref<any | null>(null);
+const historyDeleteLoading = ref(false);
 
-const alertVisible = ref(false)
-const alertMessage = ref('')
-const alertType    = ref<AlertType>('success')
+const alertVisible = ref(false);
+const alertMessage = ref("");
+const alertType = ref<AlertType>("success");
 
-const confirmSaveDialog  = ref(false)
-const confirmResetDialog = ref(false)
-const resetLoading       = ref(false)
+const confirmSaveDialog = ref(false);
+const confirmResetDialog = ref(false);
+const resetLoading = ref(false);
 
-const exportDialog    = ref(false)
-const exportFormat    = ref<'excel' | 'pdf'>('excel')
-const exportLoading   = ref(false)
-const payrollRuns     = ref<PayrollRun[]>([])
-const batchesLoading  = ref(false)
-const selectedRunId   = ref<number | null>(null)
+const exportDialog = ref(false);
+const exportFormat = ref<"excel" | "pdf">("excel");
+const exportLoading = ref(false);
+const payrollRuns = ref<PayrollRun[]>([]);
+const batchesLoading = ref(false);
+const selectedRunId = ref<number | null>(null);
 
 /* ─────────────────────────────────────────
    COMPUTED
 ───────────────────────────────────────── */
 const philhealthMin = computed(() => {
-  if (!selectedEmp.value) return 500
+  if (!selectedEmp.value) return 500;
   return selectedEmp.value.salary_grade >= SG_CUTOFF
     ? Math.round(form.value.wage * 0.05 * 100) / 100
-    : 500
-})
+    : 500;
+});
 
 const philhealthHint = computed(() => {
-  if (!selectedEmp.value) return 'Stored monthly amount. Deducted ×3 on Jan/Apr/Jul/Oct.'
+  if (!selectedEmp.value)
+    return "Stored monthly amount. Deducted ×3 on Jan/Apr/Jul/Oct.";
   return selectedEmp.value.salary_grade >= SG_CUTOFF
     ? `SG ${selectedEmp.value.salary_grade} — 5% of wage (${fmt(philhealthMin.value)}) deducted monthly`
-    : `Stored monthly amount (min ₱500). Deducted ×3 = ${fmt((form.value.philhealth || 500) * 3)} on Jan/Apr/Jul/Oct only.`
-})
+    : `Stored monthly amount (min ₱500). Deducted ×3 = ${fmt((form.value.philhealth || 500) * 3)} on Jan/Apr/Jul/Oct only.`;
+});
 
 const filteredItems = computed(() =>
   employees.value
-    .filter(e => {
-      if (filterStatus.value === 'Set')     return e.has_deductions
-      if (filterStatus.value === 'Not Set') return !e.has_deductions
-      return true
+    .filter((e) => {
+      if (filterStatus.value === "Set") return e.has_deductions;
+      if (filterStatus.value === "Not Set") return !e.has_deductions;
+      return true;
     })
-    .map(e => ({
+    .map((e) => ({
       ...e,
       wageDisp: e.deductions
         ? fmt(e.deductions.wage)
         : e.has_hrmis_wage
           ? `${fmt(e.hrmis_wage!)} *`
-          : '—',
+          : "—",
       premiumDisp: e.deductions
         ? `${fmt(e.deductions.premium)} (${Math.round(Number(e.deductions.premium_percent) * 100)}%)`
-        : '—',
-      philhealthDisp: e.deductions ? fmt(e.deductions.philhealth) : '—',
-      pagibigDisp:    e.deductions ? fmt(e.deductions.pag_ibig)   : '—',
-      sssDisp:        e.deductions
-        ? (e.deductions.sss > 0 ? fmt(e.deductions.sss) : 'Opted out')
-        : '—',
-      ewtDisp: e.deductions ? `${e.deductions.ewt_rate}%` : '—',
-      status:  e.has_deductions ? 'Set' : 'Not Set',
-    }))
-)
+        : "—",
+      philhealthDisp: e.deductions
+        ? Number(e.deductions.philhealth) > 0
+          ? fmt(e.deductions.philhealth)
+          : "Opted out"
+        : "—",
+      pagibigDisp: e.deductions ? fmt(e.deductions.pag_ibig) : "—",
+      sssDisp: e.deductions
+        ? e.deductions.sss > 0
+          ? fmt(e.deductions.sss)
+          : "Opted out"
+        : "—",
+      ewtDisp: e.deductions ? `${e.deductions.ewt_rate}%` : "—",
+      status: e.has_deductions ? "Set" : "Not Set",
+    })),
+);
 
-const totalSet    = computed(() => employees.value.filter(e =>  e.has_deductions).length)
-const totalNotSet = computed(() => employees.value.filter(e => !e.has_deductions).length)
+const totalSet = computed(
+  () => employees.value.filter((e) => e.has_deductions).length,
+);
+const totalNotSet = computed(
+  () => employees.value.filter((e) => !e.has_deductions).length,
+);
 
 const hasAnyHrmisOnly = computed(() =>
-  employees.value.some(e => e.has_hrmis_wage && !e.has_deductions)
-)
+  employees.value.some((e) => e.has_hrmis_wage && !e.has_deductions),
+);
 
-const computedPremium = computed(() =>
-  Math.round(Number(form.value.wage) * Number(form.value.premium_percent) * 100) / 100
-)
+const computedPremium = computed(
+  () =>
+    Math.round(
+      Number(form.value.wage) * Number(form.value.premium_percent) * 100,
+    ) / 100,
+);
 
 const preview = computed(() => {
-  if (!selectedEmp.value || !form.value.wage) return null
-  const wage       = Number(form.value.wage)       || 0
-  const philhealth = Number(form.value.philhealth) || 0
-  const pag_ibig   = Number(form.value.pag_ibig)   || 0
-  const sss        = Number(form.value.sss)        || 0
-  const premium    = computedPremium.value
-  const gross      = wage + premium
-  const totalDeduct = philhealth + pag_ibig + sss
+  if (!selectedEmp.value || !form.value.wage) return null;
+  const wage = Number(form.value.wage) || 0;
+  const philhealth = Number(form.value.philhealth) || 0;
+  const pag_ibig = Number(form.value.pag_ibig) || 0;
+  const sss = Number(form.value.sss) || 0;
+  const premium = computedPremium.value;
+  const gross = wage + premium;
+  const totalDeduct = philhealth + pag_ibig + sss;
   return {
-    gross:           fmt(gross),
-    premium:         fmt(premium),
+    gross: fmt(gross),
+    premium: fmt(premium),
     totalDeductions: fmt(totalDeduct),
-    estimatedNet:    fmt(gross - totalDeduct),
-  }
-})
+    estimatedNet: fmt(gross - totalDeduct),
+  };
+});
 
 const runOptions = computed(() =>
-  payrollRuns.value.map(r => ({
-    title:    `${MONTH_NAMES[r.period_month - 1]} ${r.period_year}  ${r.status === 'finalized' ? '✓' : '●'}`,
-    subtitle: `${r.payroll_no ?? '—'}  ·  ${r.division_name ?? ''}${r.section_name ? ` · ${r.section_name}` : ''}`,
-    value:    r.id,
-  }))
-)
- 
-const selectedRun = computed(() =>
-  payrollRuns.value.find(r => r.id === selectedRunId.value) ?? null
-)
- 
+  payrollRuns.value.map((r) => ({
+    title: `${MONTH_NAMES[r.period_month - 1]} ${r.period_year}  ${r.status === "finalized" ? "✓" : "●"}`,
+    subtitle: `${r.payroll_no ?? "—"}  ·  ${r.division_name ?? ""}${r.section_name ? ` · ${r.section_name}` : ""}`,
+    value: r.id,
+  })),
+);
+
+const selectedRun = computed(
+  () => payrollRuns.value.find((r) => r.id === selectedRunId.value) ?? null,
+);
+
 const exportPeriodLabel = computed(() => {
-  if (!selectedRun.value) return ''
-  const { period_month, period_year } = selectedRun.value
-  return `${MONTH_NAMES[period_month - 1]} ${period_year}`
-})
+  if (!selectedRun.value) return "";
+  const { period_month, period_year } = selectedRun.value;
+  return `${MONTH_NAMES[period_month - 1]} ${period_year}`;
+});
 
 /* ─────────────────────────────────────────
    WATCHERS
 ───────────────────────────────────────── */
-watch(() => form.value.wage, newWage => {
-  if ((selectedEmp.value?.salary_grade ?? 0) >= SG_CUTOFF) {
-    form.value.philhealth = Math.round(newWage * 0.05 * 100) / 100
-  }
-})
+watch(
+  () => form.value.wage,
+  (newWage) => {
+    if (
+      philhealthOptIn.value &&
+      (selectedEmp.value?.salary_grade ?? 0) >= SG_CUTOFF
+    ) {
+      form.value.philhealth = Math.round(newWage * 0.05 * 100) / 100;
+    }
+  },
+);
 function onVisibleItemsChange(items: Record<string, any>[]) {
-  ensurePhotosLoaded(items.map(i => photoUrl(i.emp_id)))
+  ensurePhotosLoaded(items.map((i) => photoUrl(i.emp_id)));
 }
 
 /* ─────────────────────────────────────────
    HELPERS
 ───────────────────────────────────────── */
 const fmt = (v: number) =>
-  new Intl.NumberFormat('en-PH', {
-    style: 'currency', currency: 'PHP', minimumFractionDigits: 2,
-  }).format(v)
+  new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    minimumFractionDigits: 2,
+  }).format(v);
 
 const fmtNum = (v: number) =>
-  new Intl.NumberFormat('en-PH', {
+  new Intl.NumberFormat("en-PH", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(v)
+  }).format(v);
 
-  const fmtDate = (v?: string | null) => {
-  if (!v) return '—'
-  const [year, month, day] = v.slice(0, 10).split('-').map(Number)
-  return new Date(year, month - 1, day).toLocaleDateString('en-US', {
-    month: 'short', day: '2-digit', year: 'numeric',
-  })
-}
+const fmtDate = (v?: string | null) => {
+  if (!v) return "—";
+  const [year, month, day] = v.slice(0, 10).split("-").map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString("en-US", {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+  });
+};
 
 function showAlert(type: AlertType, message: string) {
-  alertType.value    = type
-  alertMessage.value = message
-  alertVisible.value = true
+  alertType.value = type;
+  alertMessage.value = message;
+  alertVisible.value = true;
 }
 
 function initials(name: string) {
   return name
-    .split(' ')
+    .split(" ")
     .filter(Boolean)
     .slice(0, 2)
-    .map(w => w[0].toUpperCase())
-    .join('')
+    .map((w) => w[0].toUpperCase())
+    .join("");
 }
 
-const AVATAR_COLORS = ['primary', 'teal', 'orange', 'purple', 'pink', 'indigo'] as const
+const AVATAR_COLORS = [
+  "primary",
+  "teal",
+  "orange",
+  "purple",
+  "pink",
+  "indigo",
+] as const;
 
 function avatarColor(id: number): string {
-  return AVATAR_COLORS[id % AVATAR_COLORS.length]
+  return AVATAR_COLORS[id % AVATAR_COLORS.length];
 }
 function photoUrl(empId: number): string {
-  return `/api/employee/${empId}/photo`
+  return `/api/employee/${empId}/photo`;
 }
 
 function validate(): boolean {
-  const errs: Partial<Record<keyof Deductions | 'effective_date', string>> = {}
+  const errs: Partial<Record<keyof Deductions | "effective_date", string>> = {};
 
   if (!form.value.wage || Number(form.value.wage) <= 0)
-    errs.wage = 'Monthly wage is required and must be greater than ₱0.'
+    errs.wage = "Monthly wage is required and must be greater than ₱0.";
 
   if (!form.value.effective_date)
-    errs.effective_date = 'Effective date is required.'
+    errs.effective_date = "Effective date is required.";
 
   if (!form.value.premium_percent)
-    errs.premium_percent = 'Premium percent is required.'
+    errs.premium_percent = "Premium percent is required.";
 
-  if (Number(form.value.philhealth) < philhealthMin.value)
-    errs.philhealth = `PhilHealth must be at least ${fmt(philhealthMin.value)}.`
+  if (
+    philhealthOptIn.value &&
+    Number(form.value.philhealth) < philhealthMin.value
+  )
+    errs.philhealth = `PhilHealth must be at least ${fmt(philhealthMin.value)}.`;
 
   if (Number(form.value.pag_ibig) < PAGIBIG_MIN)
-    errs.pag_ibig = `Pag-IBIG must be at least ${fmt(PAGIBIG_MIN)}.`
+    errs.pag_ibig = `Pag-IBIG must be at least ${fmt(PAGIBIG_MIN)}.`;
 
   if (sssOptIn.value && Number(form.value.sss) < SSS_MIN)
-    errs.sss = `SSS must be at least ${fmt(SSS_MIN)} if deducting.`
+    errs.sss = `SSS must be at least ${fmt(SSS_MIN)} if deducting.`;
 
   if (Number(form.value.ewt_rate) < 0 || Number(form.value.ewt_rate) > 100)
-    errs.ewt_rate = 'EWT rate must be between 0% and 100%.'
+    errs.ewt_rate = "EWT rate must be between 0% and 100%.";
 
-  formErrors.value = errs
-  return Object.keys(errs).length === 0
+  formErrors.value = errs;
+  return Object.keys(errs).length === 0;
 }
 
 /* ─────────────────────────────────────────
@@ -307,186 +386,451 @@ function validate(): boolean {
 async function fetchExportData(): Promise<Employee[]> {
   if (selectedRunId.value) {
     // Filter to employees actually in this payroll run's batch items
-    const { data } = await axios.get(`/api/wage/export-run/${selectedRunId.value}`)
-    return (data.data ?? []) as Employee[]
+    const { data } = await axios.get(
+      `/api/wage/export-run/${selectedRunId.value}`,
+    );
+    return (data.data ?? []) as Employee[];
   }
   // No run selected — fall back to all employees with deductions set
-  const { data } = await axios.get('/api/wage', { params: { export: true } })
-  return (data.data ?? []) as Employee[]
+  const { data } = await axios.get("/api/wage", { params: { export: true } });
+  return (data.data ?? []) as Employee[];
 }
 
 function buildExportRows(data: Employee[]) {
   return data
-    .filter(e => e.has_deductions && e.deductions)
-    .map(e => {
-      const d           = e.deductions!
-      const wage        = Number(d.wage)
-      const premium     = Number(d.premium)
-      const philhealth  = Number(d.philhealth)
-      const pagibig     = Number(d.pag_ibig)
-      const sss         = Number(d.sss)
-      const gross       = wage + premium
-      const totalDeduct = philhealth + pagibig + sss
-      const netPay      = gross - totalDeduct
+    .filter((e) => e.has_deductions && e.deductions)
+    .map((e) => {
+      const d = e.deductions!;
+      const wage = Number(d.wage);
+      const premium = Number(d.premium);
+      const philhealth = Number(d.philhealth);
+      const pagibig = Number(d.pag_ibig);
+      const sss = Number(d.sss);
+      const gross = wage + premium;
+      const totalDeduct = philhealth + pagibig + sss;
+      const netPay = gross - totalDeduct;
       return {
-        name: e.name, position: e.position, sg: e.salary_grade || '—',
-        wage, premiumPercent: `${Math.round(Number(d.premium_percent) * 100)}%`,
-        premium, gross, philhealth, pagibig, sss,
-        sssLabel:   sss > 0 ? fmtNum(sss) : 'Opted out',
-        ewtRate:    `${d.ewt_rate}%`,
-        totalDeduct, netPay,
-      }
-    })
+        name: e.name,
+        position: e.position,
+        sg: e.salary_grade || "—",
+        wage,
+        premiumPercent: `${Math.round(Number(d.premium_percent) * 100)}%`,
+        premium,
+        gross,
+        philhealth,
+        pagibig,
+        sss,
+        philhealthLabel: philhealth > 0 ? fmtNum(philhealth) : "Opted out",
+        sssLabel: sss > 0 ? fmtNum(sss) : "Opted out",
+        ewtRate: `${d.ewt_rate}%`,
+        totalDeduct,
+        netPay,
+      };
+    });
 }
 
 async function handleExportExcel() {
-  exportLoading.value = true
+  exportLoading.value = true;
   try {
-    const raw  = await fetchExportData()
-    const rows = buildExportRows(raw)
-    if (!rows.length) { showAlert('warning', 'No employees with deductions found.'); return }
+    const raw = await fetchExportData();
+    const rows = buildExportRows(raw);
+    if (!rows.length) {
+      showAlert("warning", "No employees with deductions found.");
+      return;
+    }
 
-    const periodLabel = exportPeriodLabel.value || 'All Periods'
+    const periodLabel = exportPeriodLabel.value || "All Periods";
     const headerRows = [
-      ['DEPARTMENT OF HEALTH — REGION XII (SOCCSKSARGEN)'],
-      ['JO Employee Government Remittances'],
+      ["DEPARTMENT OF HEALTH — REGION XII (SOCCSKSARGEN)"],
+      ["JO Employee Government Remittances"],
       [`Period Covered: ${periodLabel}`],
-      [`Generated: ${new Date().toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })}`],
+      [
+        `Generated: ${new Date().toLocaleDateString("en-PH", { month: "long", day: "numeric", year: "numeric" })}`,
+      ],
       [],
-      ['Name','Position','SG','Monthly Wage','Premium Rate','Premium Amount','Gross Pay','PhilHealth','Pag-IBIG','SSS','EWT Rate','Total Deductions','Est. Net Pay'],
-    ]
-    const dataRows  = rows.map(r => [r.name,r.position,r.sg,r.wage,r.premiumPercent,r.premium,r.gross,r.philhealth,r.pagibig,r.sss,r.ewtRate,r.totalDeduct,r.netPay])
-    const totalsRow = ['TOTAL','','',rows.reduce((s,r)=>s+r.wage,0),'',rows.reduce((s,r)=>s+r.premium,0),rows.reduce((s,r)=>s+r.gross,0),rows.reduce((s,r)=>s+r.philhealth,0),rows.reduce((s,r)=>s+r.pagibig,0),rows.reduce((s,r)=>s+r.sss,0),'',rows.reduce((s,r)=>s+r.totalDeduct,0),rows.reduce((s,r)=>s+r.netPay,0)]
+      [
+        "Name",
+        "Position",
+        "SG",
+        "Monthly Wage",
+        "Premium Rate",
+        "Premium Amount",
+        "Gross Pay",
+        "PhilHealth",
+        "Pag-IBIG",
+        "SSS",
+        "EWT Rate",
+        "Total Deductions",
+        "Est. Net Pay",
+      ],
+    ];
+    const dataRows = rows.map((r) => [
+      r.name,
+      r.position,
+      r.sg,
+      r.wage,
+      r.premiumPercent,
+      r.premium,
+      r.gross,
+      r.philhealth,
+      r.pagibig,
+      r.sss,
+      r.ewtRate,
+      r.totalDeduct,
+      r.netPay,
+    ]);
+    const totalsRow = [
+      "TOTAL",
+      "",
+      "",
+      rows.reduce((s, r) => s + r.wage, 0),
+      "",
+      rows.reduce((s, r) => s + r.premium, 0),
+      rows.reduce((s, r) => s + r.gross, 0),
+      rows.reduce((s, r) => s + r.philhealth, 0),
+      rows.reduce((s, r) => s + r.pagibig, 0),
+      rows.reduce((s, r) => s + r.sss, 0),
+      "",
+      rows.reduce((s, r) => s + r.totalDeduct, 0),
+      rows.reduce((s, r) => s + r.netPay, 0),
+    ];
 
-    const ws = XLSX.utils.aoa_to_sheet([...headerRows,...dataRows,[],totalsRow])
-    ws['!cols'] = [{wch:36},{wch:28},{wch:6},{wch:16},{wch:14},{wch:16},{wch:16},{wch:14},{wch:12},{wch:14},{wch:10},{wch:18},{wch:16}]
-    ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:12}},{s:{r:1,c:0},e:{r:1,c:12}},{s:{r:2,c:0},e:{r:2,c:12}},{s:{r:3,c:0},e:{r:3,c:12}}]
+    const ws = XLSX.utils.aoa_to_sheet([
+      ...headerRows,
+      ...dataRows,
+      [],
+      totalsRow,
+    ]);
+    ws["!cols"] = [
+      { wch: 36 },
+      { wch: 28 },
+      { wch: 6 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 10 },
+      { wch: 18 },
+      { wch: 16 },
+    ];
+    ws["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 12 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 12 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 12 } },
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 12 } },
+    ];
 
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Remittances')
-    const batchSuffix = selectedRun.value ? `${MONTH_NAMES[selectedRun.value.period_month-1]}_${selectedRun.value.period_year}` : 'All'
-    XLSX.writeFile(wb, `DOH_R12_Remittances_${batchSuffix}.xlsx`)
-    showAlert('success', 'Excel exported successfully.')
-    exportDialog.value = false
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Remittances");
+    const batchSuffix = selectedRun.value
+      ? `${MONTH_NAMES[selectedRun.value.period_month - 1]}_${selectedRun.value.period_year}`
+      : "All";
+    XLSX.writeFile(wb, `DOH_R12_Remittances_${batchSuffix}.xlsx`);
+    showAlert("success", "Excel exported successfully.");
+    exportDialog.value = false;
   } catch (err: any) {
-    showAlert('error', err.message ?? 'Export failed.')
+    showAlert("error", err.message ?? "Export failed.");
   } finally {
-    exportLoading.value = false
+    exportLoading.value = false;
   }
 }
 
 async function handleExportPdf() {
-  exportLoading.value = true
+  exportLoading.value = true;
   try {
-    const raw  = await fetchExportData()
-    const rows = buildExportRows(raw)
-    if (!rows.length) { showAlert('warning', 'No employees with deductions found.'); return }
+    const raw = await fetchExportData();
+    const rows = buildExportRows(raw);
+    if (!rows.length) {
+      showAlert("warning", "No employees with deductions found.");
+      return;
+    }
 
     if (!(window as any).jspdf) {
       await new Promise<void>((resolve, reject) => {
-        const s = document.createElement('script')
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
-        s.onload = () => resolve(); s.onerror = () => reject(new Error('Failed to load jsPDF.'))
-        document.head.appendChild(s)
-      })
+        const s = document.createElement("script");
+        s.src =
+          "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error("Failed to load jsPDF."));
+        document.head.appendChild(s);
+      });
     }
     if (!(window as any).jspdfAutotable) {
       await new Promise<void>((resolve, reject) => {
-        const s = document.createElement('script')
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'
-        s.onload = () => resolve(); s.onerror = () => reject(new Error('Failed to load AutoTable.'))
-        document.head.appendChild(s); (window as any).jspdfAutotable = true
-      })
+        const s = document.createElement("script");
+        s.src =
+          "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js";
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error("Failed to load AutoTable."));
+        document.head.appendChild(s);
+        (window as any).jspdfAutotable = true;
+      });
     }
 
-    const { jsPDF } = (window as any).jspdf
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
-    const periodLabel = exportPeriodLabel.value || 'All Periods'
-    const generated   = new Date().toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })
+    const { jsPDF } = (window as any).jspdf;
+    const doc = new jsPDF({
+      orientation: "landscape",
+      unit: "mm",
+      format: "a4",
+    });
+    const periodLabel = exportPeriodLabel.value || "All Periods";
+    const generated = new Date().toLocaleDateString("en-PH", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    });
     const totals = {
-      wage: rows.reduce((s,r)=>s+r.wage,0), premium: rows.reduce((s,r)=>s+r.premium,0),
-      gross: rows.reduce((s,r)=>s+r.gross,0), philhealth: rows.reduce((s,r)=>s+r.philhealth,0),
-      pagibig: rows.reduce((s,r)=>s+r.pagibig,0), sss: rows.reduce((s,r)=>s+r.sss,0),
-      totalDeduct: rows.reduce((s,r)=>s+r.totalDeduct,0), netPay: rows.reduce((s,r)=>s+r.netPay,0),
-    }
-    const pageW = doc.internal.pageSize.getWidth()
-    const pageH = doc.internal.pageSize.getHeight()
-    const DEEP_NAVY=[31,42,69] as [number,number,number], CHARCOAL_GRAY=[51,51,51] as [number,number,number]
-    const MINT_CREAM=[238,250,246] as [number,number,number], HONEYDEW=[222,240,233] as [number,number,number]
-    const FROSTED_MINT=[230,246,216] as [number,number,number], SOFT_NAVY=[54,81,117] as [number,number,number]
-    const HERITAGE_YELLOW=[255,215,0] as [number,number,number], WHITE=[255,255,255] as [number,number,number]
-    const LIGHT_GRAY=[140,140,140] as [number,number,number]
+      wage: rows.reduce((s, r) => s + r.wage, 0),
+      premium: rows.reduce((s, r) => s + r.premium, 0),
+      gross: rows.reduce((s, r) => s + r.gross, 0),
+      philhealth: rows.reduce((s, r) => s + r.philhealth, 0),
+      pagibig: rows.reduce((s, r) => s + r.pagibig, 0),
+      sss: rows.reduce((s, r) => s + r.sss, 0),
+      totalDeduct: rows.reduce((s, r) => s + r.totalDeduct, 0),
+      netPay: rows.reduce((s, r) => s + r.netPay, 0),
+    };
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const DEEP_NAVY = [31, 42, 69] as [number, number, number],
+      CHARCOAL_GRAY = [51, 51, 51] as [number, number, number];
+    const MINT_CREAM = [238, 250, 246] as [number, number, number],
+      HONEYDEW = [222, 240, 233] as [number, number, number];
+    const FROSTED_MINT = [230, 246, 216] as [number, number, number],
+      SOFT_NAVY = [54, 81, 117] as [number, number, number];
+    const HERITAGE_YELLOW = [255, 215, 0] as [number, number, number],
+      WHITE = [255, 255, 255] as [number, number, number];
+    const LIGHT_GRAY = [140, 140, 140] as [number, number, number];
 
-    doc.setFillColor(...DEEP_NAVY); doc.rect(0,0,pageW,32,'F')
-    doc.setFillColor(...HERITAGE_YELLOW); doc.rect(0,32,pageW,2,'F')
-    doc.setFillColor(...SOFT_NAVY); doc.rect(0,0,3,34,'F')
-    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(...WHITE)
-    doc.text('DEPARTMENT OF HEALTH — REGION XII (SOCCSKSARGEN)',pageW/2,11,{align:'center'})
-    doc.setFontSize(13.5); doc.text('JO Employee Government Remittances',pageW/2,20,{align:'center'})
-    doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(196,214,230)
-    doc.text(`Period Covered: ${periodLabel}   ·   Generated: ${generated}   ·   Total Employees: ${rows.length}`,pageW/2,28,{align:'center'})
+    doc.setFillColor(...DEEP_NAVY);
+    doc.rect(0, 0, pageW, 32, "F");
+    doc.setFillColor(...HERITAGE_YELLOW);
+    doc.rect(0, 32, pageW, 2, "F");
+    doc.setFillColor(...SOFT_NAVY);
+    doc.rect(0, 0, 3, 34, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(...WHITE);
+    doc.text(
+      "DEPARTMENT OF HEALTH — REGION XII (SOCCSKSARGEN)",
+      pageW / 2,
+      11,
+      { align: "center" },
+    );
+    doc.setFontSize(13.5);
+    doc.text("JO Employee Government Remittances", pageW / 2, 20, {
+      align: "center",
+    });
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(196, 214, 230);
+    doc.text(
+      `Period Covered: ${periodLabel}   ·   Generated: ${generated}   ·   Total Employees: ${rows.length}`,
+      pageW / 2,
+      28,
+      { align: "center" },
+    );
 
-    const summaryY = 43
+    const summaryY = 43;
     const summaries = [
-      {label:'Total Wage',value:`PHP ${fmtNum(totals.wage)}`,accent:false},
-      {label:'Premium',value:`PHP ${fmtNum(totals.premium)}`,accent:false},
-      {label:'Gross Pay',value:`PHP ${fmtNum(totals.gross)}`,accent:false},
-      {label:'PhilHealth',value:`PHP ${fmtNum(totals.philhealth)}`,accent:false},
-      {label:'Pag-IBIG',value:`PHP ${fmtNum(totals.pagibig)}`,accent:false},
-      {label:'SSS',value:`PHP ${fmtNum(totals.sss)}`,accent:false},
-      {label:'Total Deductions',value:`PHP ${fmtNum(totals.totalDeduct)}`,accent:false},
-      {label:'Est. Net Pay',value:`PHP ${fmtNum(totals.netPay)}`,accent:true},
-    ]
-    const chipW = (pageW - 28) / summaries.length
-    summaries.forEach(({label,value,accent},i) => {
-      const x = 14 + i * chipW
-      doc.setFillColor(...(accent ? [255,248,200] as [number,number,number] : MINT_CREAM))
-      doc.setDrawColor(...(accent ? HERITAGE_YELLOW : HONEYDEW)); doc.setLineWidth(0.4)
-      doc.roundedRect(x,summaryY-5,chipW-2,11,1.5,1.5,'FD')
-      doc.setFont('helvetica','normal'); doc.setFontSize(6); doc.setTextColor(...LIGHT_GRAY)
-      doc.text(label,x+(chipW-2)/2,summaryY-0.8,{align:'center'})
-      doc.setFont('helvetica','bold'); doc.setFontSize(7.5)
-      doc.setTextColor(...(accent ? DEEP_NAVY : SOFT_NAVY))
-      doc.text(value,x+(chipW-2)/2,summaryY+3.8,{align:'center'})
-    })
+      {
+        label: "Total Wage",
+        value: `PHP ${fmtNum(totals.wage)}`,
+        accent: false,
+      },
+      {
+        label: "Premium",
+        value: `PHP ${fmtNum(totals.premium)}`,
+        accent: false,
+      },
+      {
+        label: "Gross Pay",
+        value: `PHP ${fmtNum(totals.gross)}`,
+        accent: false,
+      },
+      {
+        label: "PhilHealth",
+        value: `PHP ${fmtNum(totals.philhealth)}`,
+        accent: false,
+      },
+      {
+        label: "Pag-IBIG",
+        value: `PHP ${fmtNum(totals.pagibig)}`,
+        accent: false,
+      },
+      { label: "SSS", value: `PHP ${fmtNum(totals.sss)}`, accent: false },
+      {
+        label: "Total Deductions",
+        value: `PHP ${fmtNum(totals.totalDeduct)}`,
+        accent: false,
+      },
+      {
+        label: "Est. Net Pay",
+        value: `PHP ${fmtNum(totals.netPay)}`,
+        accent: true,
+      },
+    ];
+    const chipW = (pageW - 28) / summaries.length;
+    summaries.forEach(({ label, value, accent }, i) => {
+      const x = 14 + i * chipW;
+      doc.setFillColor(
+        ...(accent
+          ? ([255, 248, 200] as [number, number, number])
+          : MINT_CREAM),
+      );
+      doc.setDrawColor(...(accent ? HERITAGE_YELLOW : HONEYDEW));
+      doc.setLineWidth(0.4);
+      doc.roundedRect(x, summaryY - 5, chipW - 2, 11, 1.5, 1.5, "FD");
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(6);
+      doc.setTextColor(...LIGHT_GRAY);
+      doc.text(label, x + (chipW - 2) / 2, summaryY - 0.8, { align: "center" });
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(7.5);
+      doc.setTextColor(...(accent ? DEEP_NAVY : SOFT_NAVY));
+      doc.text(value, x + (chipW - 2) / 2, summaryY + 3.8, { align: "center" });
+    });
 
-    const tableBody = rows.map((r,i) => [i+1,r.name,r.position,r.sg,`PHP ${fmtNum(r.wage)}`,r.premiumPercent,`PHP ${fmtNum(r.premium)}`,`PHP ${fmtNum(r.gross)}`,`PHP ${fmtNum(r.philhealth)}`,`PHP ${fmtNum(r.pagibig)}`,r.sssLabel==='Opted out'?'Opted out':`PHP ${r.sssLabel}`,r.ewtRate,`PHP ${fmtNum(r.totalDeduct)}`,`PHP ${fmtNum(r.netPay)}`])
-    const totalsRow = [{content:'TOTAL',colSpan:4,styles:{fontStyle:'bold' as const,halign:'left' as const}},`PHP ${fmtNum(totals.wage)}`,'',`PHP ${fmtNum(totals.premium)}`,`PHP ${fmtNum(totals.gross)}`,`PHP ${fmtNum(totals.philhealth)}`,`PHP ${fmtNum(totals.pagibig)}`,`PHP ${fmtNum(totals.sss)}`,'',`PHP ${fmtNum(totals.totalDeduct)}`,`PHP ${fmtNum(totals.netPay)}`]
-    ;(doc as any).autoTable({
-      startY: summaryY+9,
-      head: [['#','Name','Position','SG','Monthly Wage','Premium %','Premium Amt','Gross Pay','PhilHealth','Pag-IBIG','SSS','EWT Rate','Total Deductions','Est. Net Pay']],
-      body: tableBody, foot: [totalsRow], showFoot: 'lastPage', theme: 'grid',
-      styles: { fontSize:7.5, cellPadding:2.5, valign:'middle', overflow:'linebreak', textColor:CHARCOAL_GRAY, lineColor:[210,220,230], lineWidth:0.2 },
-      headStyles: { fillColor:SOFT_NAVY, textColor:WHITE, fontStyle:'bold', halign:'center', fontSize:7.5, lineColor:DEEP_NAVY, lineWidth:0.3 },
-      footStyles: { fillColor:HONEYDEW, textColor:DEEP_NAVY, fontStyle:'bold', lineColor:[180,210,195], lineWidth:0.3 },
-      alternateRowStyles: { fillColor:FROSTED_MINT },
-      columnStyles: { 0:{halign:'center',cellWidth:7}, 1:{cellWidth:38}, 2:{cellWidth:30}, 3:{halign:'center',cellWidth:9}, 4:{halign:'right',cellWidth:20}, 5:{halign:'center',cellWidth:13}, 6:{halign:'right',cellWidth:18}, 7:{halign:'right',cellWidth:18}, 8:{halign:'right',cellWidth:18}, 9:{halign:'right',cellWidth:16}, 10:{halign:'right',cellWidth:18}, 11:{halign:'center',cellWidth:13}, 12:{halign:'right',cellWidth:22}, 13:{halign:'right',cellWidth:20} },
-      margin: { left:14, right:14 },
-    })
+    const tableBody = rows.map((r, i) => [
+      i + 1,
+      r.name,
+      r.position,
+      r.sg,
+      `PHP ${fmtNum(r.wage)}`,
+      r.premiumPercent,
+      `PHP ${fmtNum(r.premium)}`,
+      `PHP ${fmtNum(r.gross)}`,
+      `PHP ${fmtNum(r.philhealth)}`,
+      `PHP ${fmtNum(r.pagibig)}`,
+      r.sssLabel === "Opted out" ? "Opted out" : `PHP ${r.sssLabel}`,
+      r.ewtRate,
+      `PHP ${fmtNum(r.totalDeduct)}`,
+      `PHP ${fmtNum(r.netPay)}`,
+    ]);
+    const totalsRow = [
+      {
+        content: "TOTAL",
+        colSpan: 4,
+        styles: { fontStyle: "bold" as const, halign: "left" as const },
+      },
+      `PHP ${fmtNum(totals.wage)}`,
+      "",
+      `PHP ${fmtNum(totals.premium)}`,
+      `PHP ${fmtNum(totals.gross)}`,
+      `PHP ${fmtNum(totals.philhealth)}`,
+      `PHP ${fmtNum(totals.pagibig)}`,
+      `PHP ${fmtNum(totals.sss)}`,
+      "",
+      `PHP ${fmtNum(totals.totalDeduct)}`,
+      `PHP ${fmtNum(totals.netPay)}`,
+    ];
+    (doc as any).autoTable({
+      startY: summaryY + 9,
+      head: [
+        [
+          "#",
+          "Name",
+          "Position",
+          "SG",
+          "Monthly Wage",
+          "Premium %",
+          "Premium Amt",
+          "Gross Pay",
+          "PhilHealth",
+          "Pag-IBIG",
+          "SSS",
+          "EWT Rate",
+          "Total Deductions",
+          "Est. Net Pay",
+        ],
+      ],
+      body: tableBody,
+      foot: [totalsRow],
+      showFoot: "lastPage",
+      theme: "grid",
+      styles: {
+        fontSize: 7.5,
+        cellPadding: 2.5,
+        valign: "middle",
+        overflow: "linebreak",
+        textColor: CHARCOAL_GRAY,
+        lineColor: [210, 220, 230],
+        lineWidth: 0.2,
+      },
+      headStyles: {
+        fillColor: SOFT_NAVY,
+        textColor: WHITE,
+        fontStyle: "bold",
+        halign: "center",
+        fontSize: 7.5,
+        lineColor: DEEP_NAVY,
+        lineWidth: 0.3,
+      },
+      footStyles: {
+        fillColor: HONEYDEW,
+        textColor: DEEP_NAVY,
+        fontStyle: "bold",
+        lineColor: [180, 210, 195],
+        lineWidth: 0.3,
+      },
+      alternateRowStyles: { fillColor: FROSTED_MINT },
+      columnStyles: {
+        0: { halign: "center", cellWidth: 7 },
+        1: { cellWidth: 38 },
+        2: { cellWidth: 30 },
+        3: { halign: "center", cellWidth: 9 },
+        4: { halign: "right", cellWidth: 20 },
+        5: { halign: "center", cellWidth: 13 },
+        6: { halign: "right", cellWidth: 18 },
+        7: { halign: "right", cellWidth: 18 },
+        8: { halign: "right", cellWidth: 18 },
+        9: { halign: "right", cellWidth: 16 },
+        10: { halign: "right", cellWidth: 18 },
+        11: { halign: "center", cellWidth: 13 },
+        12: { halign: "right", cellWidth: 22 },
+        13: { halign: "right", cellWidth: 20 },
+      },
+      margin: { left: 14, right: 14 },
+    });
 
-    doc.setFillColor(...HERITAGE_YELLOW); doc.rect(0,pageH-7,pageW,2,'F')
-    doc.setFillColor(...DEEP_NAVY); doc.rect(0,pageH-5,pageW,5,'F')
-    const finalY = (doc as any).lastAutoTable.finalY + 5
-    doc.setFont('helvetica','italic'); doc.setFontSize(7); doc.setTextColor(...LIGHT_GRAY)
-    doc.text('This report is system-generated. Employee share only. EWT applied after PHP 250,000 annual gross threshold.',pageW-14,finalY,{align:'right'})
+    doc.setFillColor(...HERITAGE_YELLOW);
+    doc.rect(0, pageH - 7, pageW, 2, "F");
+    doc.setFillColor(...DEEP_NAVY);
+    doc.rect(0, pageH - 5, pageW, 5, "F");
+    const finalY = (doc as any).lastAutoTable.finalY + 5;
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(7);
+    doc.setTextColor(...LIGHT_GRAY);
+    doc.text(
+      "This report is system-generated. Employee share only. EWT applied after PHP 250,000 annual gross threshold.",
+      pageW - 14,
+      finalY,
+      { align: "right" },
+    );
 
-    const pdfBlob = doc.output('blob')
-    const url = URL.createObjectURL(pdfBlob)
-    const tab = window.open(url,'_blank')
-    if (!tab) { showAlert('error','Popup blocked. Please allow popups for this site.'); URL.revokeObjectURL(url); return }
-    setTimeout(() => URL.revokeObjectURL(url), 60_000)
-    showAlert('success','PDF opened in a new tab.')
-    exportDialog.value = false
+    const pdfBlob = doc.output("blob");
+    const url = URL.createObjectURL(pdfBlob);
+    const tab = window.open(url, "_blank");
+    if (!tab) {
+      showAlert("error", "Popup blocked. Please allow popups for this site.");
+      URL.revokeObjectURL(url);
+      return;
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    showAlert("success", "PDF opened in a new tab.");
+    exportDialog.value = false;
   } catch (err: any) {
-    showAlert('error', err.message ?? 'PDF export failed.')
+    showAlert("error", err.message ?? "PDF export failed.");
   } finally {
-    exportLoading.value = false
+    exportLoading.value = false;
   }
 }
 
 async function handleExport() {
-  if (exportFormat.value === 'excel') await handleExportExcel()
-  else await handleExportPdf()
+  if (exportFormat.value === "excel") await handleExportExcel();
+  else await handleExportPdf();
 }
 
 /* ─────────────────────────────────────────
@@ -494,170 +838,236 @@ async function handleExport() {
 ───────────────────────────────────────── */
 
 async function fetchHistory(empId: number) {
-  historyLoading.value = true
+  historyLoading.value = true;
   try {
-    const { data } = await axios.get(`/api/wage/history/${empId}`)
-    historyRows.value = data.data ?? []
+    const { data } = await axios.get(`/api/wage/history/${empId}`);
+    historyRows.value = data.data ?? [];
   } catch {
-    historyRows.value = []
+    historyRows.value = [];
   } finally {
-    historyLoading.value = false
+    historyLoading.value = false;
   }
 }
 
 function startEditHistoryRow(row: any) {
-  editingHistoryId.value = row.id
-  sssOptIn.value = Number(row.sss) > 0
+  editingHistoryId.value = row.id;
+  sssOptIn.value = Number(row.sss) > 0;
+  philhealthOptIn.value = Number(row.philhealth) > 0;
   form.value = {
-    wage:            Number(row.wage),
+    wage: Number(row.wage),
     premium_percent: Number(row.premium_percent),
-    philhealth:      Number(row.philhealth),
-    pag_ibig:        Number(row.pag_ibig),
-    sss:             Number(row.sss),
-    ewt_rate:        Number(row.ewt_rate),
-    effective_date:  row.effective_date.slice(0, 10),
-  }
-  formErrors.value = {}
+    philhealth: Number(row.philhealth),
+    pag_ibig: Number(row.pag_ibig),
+    sss: Number(row.sss),
+    ewt_rate: Number(row.ewt_rate),
+    effective_date: row.effective_date.slice(0, 10),
+  };
+  formErrors.value = {};
 }
 
 function resetToAddMode() {
-  editingHistoryId.value = null
+  editingHistoryId.value = null;
   sssOptIn.value = selectedEmp.value?.has_deductions
     ? Number(selectedEmp.value.deductions?.sss ?? 0) > 0
-    : false
+    : false;
+  philhealthOptIn.value = selectedEmp.value?.has_deductions
+    ? Number(selectedEmp.value.deductions?.philhealth ?? 0) > 0
+    : false;
   form.value = selectedEmp.value?.deductions
     ? {
-        wage:            Number(selectedEmp.value.deductions.wage),
+        wage: Number(selectedEmp.value.deductions.wage),
         premium_percent: Number(selectedEmp.value.deductions.premium_percent),
-        philhealth:      Number(selectedEmp.value.deductions.philhealth),
-        pag_ibig:        Number(selectedEmp.value.deductions.pag_ibig),
-        sss:             Number(selectedEmp.value.deductions.sss),
-        ewt_rate:        Number(selectedEmp.value.deductions.ewt_rate),
-        effective_date:  new Date().toISOString().slice(0, 10),
+        philhealth: Number(selectedEmp.value.deductions.philhealth),
+        pag_ibig: Number(selectedEmp.value.deductions.pag_ibig),
+        sss: Number(selectedEmp.value.deductions.sss),
+        ewt_rate: Number(selectedEmp.value.deductions.ewt_rate),
+        effective_date: new Date().toISOString().slice(0, 10),
       }
-    : { ...BLANK_FORM(), ...(selectedEmp.value?.has_hrmis_wage && selectedEmp.value.hrmis_wage ? { wage: selectedEmp.value.hrmis_wage } : {}) }
-  formErrors.value = {}
+    : {
+        ...BLANK_FORM(),
+        ...(selectedEmp.value?.has_hrmis_wage && selectedEmp.value.hrmis_wage
+          ? { wage: selectedEmp.value.hrmis_wage }
+          : {}),
+      };
+  formErrors.value = {};
 }
 
 function openHistoryDeleteConfirm(row: any) {
-  selectedHistoryRow.value = row
-  confirmHistoryDeleteDialog.value = true
+  selectedHistoryRow.value = row;
+  confirmHistoryDeleteDialog.value = true;
 }
 
 async function executeUpdateHistoryRow() {
-  if (!selectedEmp.value || !editingHistoryId.value) return
-  confirmHistoryEditDialog.value = false
-  modalLoading.value = true
-  const payload = { ...form.value, sss: sssOptIn.value ? form.value.sss : 0 }
+  if (!selectedEmp.value || !editingHistoryId.value) return;
+  confirmHistoryEditDialog.value = false;
+  modalLoading.value = true;
+  const payload = {
+    ...form.value,
+    philhealth: philhealthOptIn.value ? form.value.philhealth : 0,
+    sss: sssOptIn.value ? form.value.sss : 0,
+  };
   try {
-    const { data } = await axios.post(`/api/wage/history/update/${editingHistoryId.value}`, payload)
-    if (!data.success) throw new Error(data.message ?? 'Update failed.')
-    showAlert('success', `Wage history entry updated for ${selectedEmp.value.name}.`)
-    await fetchHistory(selectedEmp.value.emp_id)
-    await fetchEmployees()
-    modalOpen.value = false
+    const { data } = await axios.post(
+      `/api/wage/history/update/${editingHistoryId.value}`,
+      payload,
+    );
+    if (!data.success) throw new Error(data.message ?? "Update failed.");
+    showAlert(
+      "success",
+      `Wage history entry updated for ${selectedEmp.value.name}.`,
+    );
+    await fetchHistory(selectedEmp.value.emp_id);
+    await fetchEmployees();
+    modalOpen.value = false;
   } catch (err: any) {
     if (err.response?.data?.errors) {
-      formErrors.value = Object.fromEntries(Object.entries(err.response.data.errors).map(([k, v]) => [k, (v as string[])[0]]))
+      formErrors.value = Object.fromEntries(
+        Object.entries(err.response.data.errors).map(([k, v]) => [
+          k,
+          (v as string[])[0],
+        ]),
+      );
     }
-    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to update entry.')
+    showAlert(
+      "error",
+      err.response?.data?.message ?? err.message ?? "Failed to update entry.",
+    );
   } finally {
-    modalLoading.value = false
+    modalLoading.value = false;
   }
 }
 
 async function executeDeleteHistoryRow() {
-  if (!selectedHistoryRow.value || !selectedEmp.value) return
-  confirmHistoryDeleteDialog.value = false
-  historyDeleteLoading.value = true
+  if (!selectedHistoryRow.value || !selectedEmp.value) return;
+  confirmHistoryDeleteDialog.value = false;
+  historyDeleteLoading.value = true;
   try {
-    const { data } = await axios.post(`/api/wage/history/delete/${selectedHistoryRow.value.id}`)
-    if (!data.success) throw new Error(data.message ?? 'Delete failed.')
-    showAlert('success', 'Wage history entry deleted.')
-    if (editingHistoryId.value === selectedHistoryRow.value.id) resetToAddMode()
-    await fetchHistory(selectedEmp.value.emp_id)
-    await fetchEmployees()
+    const { data } = await axios.post(
+      `/api/wage/history/delete/${selectedHistoryRow.value.id}`,
+    );
+    if (!data.success) throw new Error(data.message ?? "Delete failed.");
+    showAlert("success", "Wage history entry deleted.");
+    if (editingHistoryId.value === selectedHistoryRow.value.id)
+      resetToAddMode();
+    await fetchHistory(selectedEmp.value.emp_id);
+    await fetchEmployees();
   } catch (err: any) {
-    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to delete entry.')
+    showAlert(
+      "error",
+      err.response?.data?.message ?? err.message ?? "Failed to delete entry.",
+    );
   } finally {
-    historyDeleteLoading.value = false
-    selectedHistoryRow.value = null
+    historyDeleteLoading.value = false;
+    selectedHistoryRow.value = null;
   }
 }
 
 async function fetchEmployees() {
-  loading.value = true
+  loading.value = true;
   try {
-    const { data } = await axios.get('/api/wage')
-    employees.value = data.data ?? []
+    const { data } = await axios.get("/api/wage");
+    employees.value = data.data ?? [];
   } catch {
-    showAlert('error', 'Failed to load employees.')
+    showAlert("error", "Failed to load employees.");
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function fetchRuns() {
-  batchesLoading.value = true
+  batchesLoading.value = true;
   try {
-    const { data } = await axios.get('/api/payroll-run')
-    payrollRuns.value = data.data ?? []
+    const { data } = await axios.get("/api/payroll-run");
+    payrollRuns.value = data.data ?? [];
   } catch {
-    showAlert('error', 'Failed to load payroll runs.')
+    showAlert("error", "Failed to load payroll runs.");
   } finally {
-    batchesLoading.value = false
+    batchesLoading.value = false;
   }
 }
 
 async function handleSave() {
-  if (!validate() || !selectedEmp.value) return
-  if (editingHistoryId.value) confirmHistoryEditDialog.value = true   // NEW branch
-  else confirmSaveDialog.value = true
+  if (!validate() || !selectedEmp.value) return;
+  if (editingHistoryId.value)
+    confirmHistoryEditDialog.value = true; // NEW branch
+  else confirmSaveDialog.value = true;
 }
 
 async function executeSave() {
-  if (!selectedEmp.value) return
-  confirmSaveDialog.value = false
-  modalLoading.value      = true
-  const payload = { ...form.value, sss: sssOptIn.value ? form.value.sss : 0 }
+  if (!selectedEmp.value) return;
+  confirmSaveDialog.value = false;
+  modalLoading.value = true;
+  const payload = {
+    ...form.value,
+    philhealth: philhealthOptIn.value ? form.value.philhealth : 0,
+    sss: sssOptIn.value ? form.value.sss : 0,
+  };
   try {
-    const { data } = await axios.post(`/api/wage/upsert/${selectedEmp.value.emp_id}`, payload)
-    if (!data.success) throw new Error(data.message ?? 'Save failed.')
-    const idx = employees.value.findIndex(e => e.emp_id === selectedEmp.value!.emp_id)
+    const { data } = await axios.post(
+      `/api/wage/upsert/${selectedEmp.value.emp_id}`,
+      payload,
+    );
+    if (!data.success) throw new Error(data.message ?? "Save failed.");
+    const idx = employees.value.findIndex(
+      (e) => e.emp_id === selectedEmp.value!.emp_id,
+    );
     if (idx !== -1) {
-      const { effective_date, ...deductionFields } = payload // NEW — drop before caching
-      employees.value[idx].deductions    = { ...deductionFields, premium: Math.round(payload.wage * payload.premium_percent * 100) / 100 }
-      employees.value[idx].has_deductions = true
-      employees.value[idx].hrmis_wage     = payload.wage
-      employees.value[idx].has_hrmis_wage = true
+      const { effective_date, ...deductionFields } = payload; // NEW — drop before caching
+      employees.value[idx].deductions = {
+        ...deductionFields,
+        premium: Math.round(payload.wage * payload.premium_percent * 100) / 100,
+      };
+      employees.value[idx].has_deductions = true;
+      employees.value[idx].hrmis_wage = payload.wage;
+      employees.value[idx].has_hrmis_wage = true;
     }
-    showAlert('success', `Deductions saved for ${selectedEmp.value.name}.`)
-    modalOpen.value = false
+    showAlert("success", `Deductions saved for ${selectedEmp.value.name}.`);
+    modalOpen.value = false;
   } catch (err: any) {
     if (err.response?.data?.errors) {
-      formErrors.value = Object.fromEntries(Object.entries(err.response.data.errors).map(([k,v]) => [k,(v as string[])[0]]))
+      formErrors.value = Object.fromEntries(
+        Object.entries(err.response.data.errors).map(([k, v]) => [
+          k,
+          (v as string[])[0],
+        ]),
+      );
     }
-    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to save.')
+    showAlert(
+      "error",
+      err.response?.data?.message ?? err.message ?? "Failed to save.",
+    );
   } finally {
-    modalLoading.value = false
+    modalLoading.value = false;
   }
 }
 
 async function executeReset() {
-  if (!selectedEmp.value) return
-  confirmResetDialog.value = false
-  resetLoading.value       = true
+  if (!selectedEmp.value) return;
+  confirmResetDialog.value = false;
+  resetLoading.value = true;
   try {
-    const { data } = await axios.post(`/api/wage/delete/${selectedEmp.value.emp_id}`)
-    if (!data.success) throw new Error(data.message ?? 'Reset failed.')
-    const idx = employees.value.findIndex(e => e.emp_id === selectedEmp.value!.emp_id)
-    if (idx !== -1) { employees.value[idx].deductions = null; employees.value[idx].has_deductions = false }
-    showAlert('success', `Deductions cleared for ${selectedEmp.value.name}.`)
-    modalOpen.value = false
+    const { data } = await axios.post(
+      `/api/wage/delete/${selectedEmp.value.emp_id}`,
+    );
+    if (!data.success) throw new Error(data.message ?? "Reset failed.");
+    const idx = employees.value.findIndex(
+      (e) => e.emp_id === selectedEmp.value!.emp_id,
+    );
+    if (idx !== -1) {
+      employees.value[idx].deductions = null;
+      employees.value[idx].has_deductions = false;
+    }
+    showAlert("success", `Deductions cleared for ${selectedEmp.value.name}.`);
+    modalOpen.value = false;
   } catch (err: any) {
-    showAlert('error', err.response?.data?.message ?? err.message ?? 'Failed to clear deductions.')
+    showAlert(
+      "error",
+      err.response?.data?.message ??
+        err.message ??
+        "Failed to clear deductions.",
+    );
   } finally {
-    resetLoading.value = false
+    resetLoading.value = false;
   }
 }
 
@@ -665,55 +1075,63 @@ async function executeReset() {
    HANDLERS
 ───────────────────────────────────────── */
 function openEdit(item: Record<string, any>) {
-  const emp = employees.value.find(e => e.emp_id === item.emp_id)
-  if (!emp) return
-  selectedEmp.value = emp
-  isEditing.value   = emp.has_deductions
-  sssOptIn.value    = emp.has_deductions && (emp.deductions?.sss ?? 0) > 0
-  editingHistoryId.value = null                    // NEW — always opens in "add new" mode
+  const emp = employees.value.find((e) => e.emp_id === item.emp_id);
+  if (!emp) return;
+  selectedEmp.value = emp;
+  isEditing.value = emp.has_deductions;
+  sssOptIn.value = emp.has_deductions && (emp.deductions?.sss ?? 0) > 0;
+  philhealthOptIn.value =
+    emp.has_deductions && Number(emp.deductions?.philhealth ?? 0) > 0;
+  editingHistoryId.value = null; // NEW — always opens in "add new" mode
   form.value = emp.deductions
     ? {
-        wage:            Number(emp.deductions.wage),
+        wage: Number(emp.deductions.wage),
         premium_percent: Number(emp.deductions.premium_percent),
-        philhealth:      Number(emp.deductions.philhealth),
-        pag_ibig:        Number(emp.deductions.pag_ibig),
-        sss:             Number(emp.deductions.sss),
-        ewt_rate:        Number(emp.deductions.ewt_rate),
-        effective_date:  new Date().toISOString().slice(0, 10),
+        philhealth: Number(emp.deductions.philhealth),
+        pag_ibig: Number(emp.deductions.pag_ibig),
+        sss: Number(emp.deductions.sss),
+        ewt_rate: Number(emp.deductions.ewt_rate),
+        effective_date: new Date().toISOString().slice(0, 10),
       }
-    : { ...BLANK_FORM(), ...(emp.has_hrmis_wage && emp.hrmis_wage ? { wage: emp.hrmis_wage } : {}) }
-  formErrors.value  = {}
-  historyRows.value = []                            // NEW
-  fetchHistory(emp.emp_id)                           // NEW
-  modalOpen.value   = true
+    : {
+        ...BLANK_FORM(),
+        ...(emp.has_hrmis_wage && emp.hrmis_wage
+          ? { wage: emp.hrmis_wage }
+          : {}),
+      };
+  formErrors.value = {};
+  historyRows.value = []; // NEW
+  fetchHistory(emp.emp_id); // NEW
+  modalOpen.value = true;
 }
 
 function openDeleteConfirm(item: Record<string, any>) {
-  const emp = employees.value.find(e => e.emp_id === item.emp_id)
-  if (!emp || !emp.has_deductions) return
-  selectedEmp.value        = emp
-  confirmResetDialog.value = true
+  const emp = employees.value.find((e) => e.emp_id === item.emp_id);
+  if (!emp || !emp.has_deductions) return;
+  selectedEmp.value = emp;
+  confirmResetDialog.value = true;
 }
 
-function openExportDialog(format: 'excel' | 'pdf') {
-  exportFormat.value  = format
-  selectedRunId.value = null
-  exportDialog.value  = true
-  fetchRuns()
+function openExportDialog(format: "excel" | "pdf") {
+  exportFormat.value = format;
+  selectedRunId.value = null;
+  exportDialog.value = true;
+  fetchRuns();
 }
 
 /* ─────────────────────────────────────────
    INIT
 ───────────────────────────────────────── */
-onMounted(fetchEmployees)
+onMounted(fetchEmployees);
 </script>
 
 <template>
   <div>
     <VContainer fluid class="pa-6">
-
       <!-- ── Page Header ── -->
-      <div class="d-flex align-center justify-space-between flex-wrap gap-4 mb-2">
+      <div
+        class="d-flex align-center justify-space-between flex-wrap gap-4 mb-2"
+      >
         <div>
           <h4 class="text-h5 font-weight-bold mb-1">Employee Deductions</h4>
           <p class="text-body-2 text-medium-emphasis mb-0">
@@ -721,25 +1139,45 @@ onMounted(fetchEmployees)
           </p>
         </div>
         <div class="d-flex gap-2">
-          <VBtn variant="outlined" color="success" prepend-icon="mdi-microsoft-excel" size="small" @click="openExportDialog('excel')">
+          <VBtn
+            variant="outlined"
+            color="success"
+            prepend-icon="mdi-microsoft-excel"
+            size="small"
+            @click="openExportDialog('excel')"
+          >
             Export Excel
           </VBtn>
-          <VBtn variant="outlined" color="error" prepend-icon="mdi-file-pdf-box" size="small" @click="openExportDialog('pdf')">
+          <VBtn
+            variant="outlined"
+            color="error"
+            prepend-icon="mdi-file-pdf-box"
+            size="small"
+            @click="openExportDialog('pdf')"
+          >
             Export PDF
           </VBtn>
         </div>
       </div>
 
       <!-- ── Info Banner ── -->
-      <VAlert type="info" variant="tonal" density="compact" icon="mdi-information-outline" class="mb-5 mt-4" closable>
+      <VAlert
+        type="info"
+        variant="tonal"
+        density="compact"
+        icon="mdi-information-outline"
+        class="mb-5 mt-4"
+        closable
+      >
         <strong>PhilHealth (SG 15 and below):</strong>
         Quarterly — enter monthly amount (min ₱500), deducted as
-        <strong>×3 on Jan, Apr, Jul, Oct</strong> (min ₱1,500/quarter). Zero on other months. &nbsp;·&nbsp;
-        <strong>PhilHealth (SG 16 and above):</strong> 5% of monthly wage, deducted every month &nbsp;·&nbsp;
-        <strong>Pag-IBIG</strong> min ₱400 (mandatory) &nbsp;·&nbsp;
-        <strong>SSS</strong> voluntary — min ₱760 if deducting &nbsp;·&nbsp;
-        <strong>Premium</strong> 5/10/15/20% of wage &nbsp;·&nbsp;
-        <strong>EWT</strong> 5% after ₱250,000 annual gross
+        <strong>×3 on Jan, Apr, Jul, Oct</strong> (min ₱1,500/quarter). Zero on
+        other months. &nbsp;·&nbsp;
+        <strong>PhilHealth (SG 16 and above):</strong> 5% of monthly wage,
+        deducted every month &nbsp;·&nbsp; <strong>Pag-IBIG</strong> min ₱400
+        (mandatory) &nbsp;·&nbsp; <strong>SSS</strong> voluntary — min ₱760 if
+        deducting &nbsp;·&nbsp; <strong>Premium</strong> 5/10/15/20% of wage
+        &nbsp;·&nbsp; <strong>EWT</strong> 5% after ₱250,000 annual gross
       </VAlert>
 
       <!-- ── Summary Cards ── -->
@@ -751,8 +1189,12 @@ onMounted(fetchEmployees)
                 <VIcon icon="mdi-account-group-outline" size="22" />
               </VAvatar>
               <div>
-                <div class="text-h5 font-weight-bold">{{ employees.length }}</div>
-                <div class="text-body-2 text-medium-emphasis">Total JO Employees</div>
+                <div class="text-h5 font-weight-bold">
+                  {{ employees.length }}
+                </div>
+                <div class="text-body-2 text-medium-emphasis">
+                  Total JO Employees
+                </div>
               </div>
             </VCardText>
           </VCard>
@@ -766,7 +1208,9 @@ onMounted(fetchEmployees)
               </VAvatar>
               <div>
                 <div class="text-h5 font-weight-bold">{{ totalSet }}</div>
-                <div class="text-body-2 text-medium-emphasis">Deductions Set</div>
+                <div class="text-body-2 text-medium-emphasis">
+                  Deductions Set
+                </div>
               </div>
             </VCardText>
           </VCard>
@@ -780,7 +1224,9 @@ onMounted(fetchEmployees)
               </VAvatar>
               <div>
                 <div class="text-h5 font-weight-bold">{{ totalNotSet }}</div>
-                <div class="text-body-2 text-medium-emphasis">Deductions Not Set</div>
+                <div class="text-body-2 text-medium-emphasis">
+                  Deductions Not Set
+                </div>
               </div>
             </VCardText>
           </VCard>
@@ -792,32 +1238,36 @@ onMounted(fetchEmployees)
         <div class="d-flex gap-2">
           <VChip
             v-for="opt in [
-              { label: 'All',     value: 'All'     },
-              { label: 'Set',     value: 'Set'     },
+              { label: 'All', value: 'All' },
+              { label: 'Set', value: 'Set' },
               { label: 'Not Set', value: 'Not Set' },
             ]"
             :key="opt.value"
             :color="
               filterStatus === opt.value
-                ? opt.value === 'Set'     ? 'success'
-                : opt.value === 'Not Set' ? 'warning'
-                : 'primary'
+                ? opt.value === 'Set'
+                  ? 'success'
+                  : opt.value === 'Not Set'
+                    ? 'warning'
+                    : 'primary'
                 : undefined
             "
             :variant="filterStatus === opt.value ? 'tonal' : 'outlined'"
             size="small"
             label
-            style="cursor: pointer;"
+            style="cursor: pointer"
             @click="filterStatus = opt.value as typeof filterStatus"
           >
             <VIcon
               v-if="opt.value === 'Set'"
-              start size="13"
+              start
+              size="13"
               icon="mdi-check-circle-outline"
             />
             <VIcon
               v-else-if="opt.value === 'Not Set'"
-              start size="13"
+              start
+              size="13"
               icon="mdi-alert-circle-outline"
             />
             {{ opt.label }}
@@ -851,16 +1301,20 @@ onMounted(fetchEmployees)
               variant="tonal"
               size="36"
             >
-                <VImg
+              <VImg
                 v-if="getPhoto(photoUrl(item.emp_id))"
                 :src="getPhoto(photoUrl(item.emp_id))!"
                 cover
               />
-              <span v-else class="text-caption font-weight-medium">{{ initials(item.name) }}</span>
+              <span v-else class="text-caption font-weight-medium">{{
+                initials(item.name)
+              }}</span>
             </VAvatar>
             <div>
               <div class="text-body-2 font-weight-medium">{{ item.name }}</div>
-              <div class="text-caption text-medium-emphasis">{{ item.position }}</div>
+              <div class="text-caption text-medium-emphasis">
+                {{ item.position }}
+              </div>
             </div>
           </div>
         </template>
@@ -873,7 +1327,7 @@ onMounted(fetchEmployees)
             variant="tonal"
             label
           >
-            SG {{ item.salary_grade || '—' }}
+            SG {{ item.salary_grade || "—" }}
           </VChip>
         </template>
 
@@ -887,7 +1341,11 @@ onMounted(fetchEmployees)
           >
             <VIcon
               start
-              :icon="item.status === 'Set' ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'"
+              :icon="
+                item.status === 'Set'
+                  ? 'mdi-check-circle-outline'
+                  : 'mdi-alert-circle-outline'
+              "
               size="14"
             />
             {{ item.status }}
@@ -896,7 +1354,13 @@ onMounted(fetchEmployees)
 
         <!-- EWT chip -->
         <template #item.ewtDisp="{ item }">
-          <VChip v-if="item.deductions" color="secondary" size="small" variant="tonal" label>
+          <VChip
+            v-if="item.deductions"
+            color="secondary"
+            size="small"
+            variant="tonal"
+            label
+          >
             {{ item.ewtDisp }}
           </VChip>
           <span v-else class="text-medium-emphasis">—</span>
@@ -904,93 +1368,114 @@ onMounted(fetchEmployees)
 
         <!-- Actions -->
         <template #item.actions="{ item }">
-        <div class="d-flex align-center justify-center gap-1">
-          <VTooltip v-if="(item.wage_history_count ?? 0) > 1" location="top">
-            <template #activator="{ props }">
-              <VBtn
-                v-bind="props"
-                icon size="small" variant="text" color="primary"
-                style="position: relative;"
-                @click.stop="openEdit(item)"
-              >
-                <VIcon size="18">mdi-pencil-outline</VIcon>
-                <VBadge
-                  :content="item.wage_history_count"
-                  color="secondary"
-                  offset-x="-2"
-                  offset-y="-2"
-                  style="position: absolute;"
-                />
-              </VBtn>
-            </template>
-            <span>{{ item.wage_history_count }} wage history entries</span>
-          </VTooltip>
-          <VBtn v-else icon size="small" variant="text" color="primary" @click.stop="openEdit(item)">
-            <VIcon size="18">mdi-pencil-outline</VIcon>
-          </VBtn>
-          <VBtn
-            v-if="item.status === 'Set'"
-            icon size="small" variant="text" color="error"
-            @click.stop="openDeleteConfirm(item)"
-          >
-            <VIcon size="18">mdi-delete-outline</VIcon>
-          </VBtn>
-        </div>
-      </template>
+          <div class="d-flex align-center justify-center gap-1">
+            <VTooltip v-if="(item.wage_history_count ?? 0) > 1" location="top">
+              <template #activator="{ props }">
+                <VBtn
+                  v-bind="props"
+                  icon
+                  size="small"
+                  variant="text"
+                  color="primary"
+                  style="position: relative"
+                  @click.stop="openEdit(item)"
+                >
+                  <VIcon size="18">mdi-pencil-outline</VIcon>
+                  <VBadge
+                    :content="item.wage_history_count"
+                    color="secondary"
+                    offset-x="-2"
+                    offset-y="-2"
+                    style="position: absolute"
+                  />
+                </VBtn>
+              </template>
+              <span>{{ item.wage_history_count }} wage history entries</span>
+            </VTooltip>
+            <VBtn
+              v-else
+              icon
+              size="small"
+              variant="text"
+              color="primary"
+              @click.stop="openEdit(item)"
+            >
+              <VIcon size="18">mdi-pencil-outline</VIcon>
+            </VBtn>
+            <VBtn
+              v-if="item.status === 'Set'"
+              icon
+              size="small"
+              variant="text"
+              color="error"
+              @click.stop="openDeleteConfirm(item)"
+            >
+              <VIcon size="18">mdi-delete-outline</VIcon>
+            </VBtn>
+          </div>
+        </template>
       </BaseTable>
-
     </VContainer>
 
     <!-- ── Edit Modal ── -->
     <BaseModal
       v-model="modalOpen"
-  :title="`${editingHistoryId ? 'Edit Wage History Entry' : (isEditing ? 'Add' : 'Set') + ' Deductions'} — ${selectedEmp?.name ?? ''}`"
-  width="640"
-  :persistent="true"
-  :loading="modalLoading || resetLoading"
-  :confirm-text="editingHistoryId ? 'Update Entry' : 'Save Deductions'"
-  cancel-text="Cancel"
-  @confirm="handleSave"
-  @cancel="modalOpen = false"
+      :title="`${editingHistoryId ? 'Edit Wage History Entry' : (isEditing ? 'Add' : 'Set') + ' Deductions'} — ${selectedEmp?.name ?? ''}`"
+      width="640"
+      :persistent="true"
+      :loading="modalLoading || resetLoading"
+      :confirm-text="editingHistoryId ? 'Update Entry' : 'Save Deductions'"
+      cancel-text="Cancel"
+      @confirm="handleSave"
+      @cancel="modalOpen = false"
     >
       <VRow dense>
-
         <!-- ── Employee Info Card ── -->
         <VCol cols="12">
           <VCard variant="tonal" color="default" rounded="lg" flat class="mb-1">
             <VCardText class="py-3 px-4">
               <div class="d-flex align-center gap-3">
                 <VAvatar
-                  :color="selectedEmp ? avatarColor(selectedEmp.emp_id) : 'primary'"
+                  :color="
+                    selectedEmp ? avatarColor(selectedEmp.emp_id) : 'primary'
+                  "
                   variant="tonal"
                   size="40"
                   rounded="lg"
                 >
-                 <VImg
+                  <VImg
                     v-if="selectedEmp && getPhoto(photoUrl(selectedEmp.emp_id))"
                     :src="getPhoto(photoUrl(selectedEmp.emp_id))!"
                     cover
                   />
                   <span v-else class="text-body-2 font-weight-medium">
-                    {{ selectedEmp ? initials(selectedEmp.name) : '?' }}
+                    {{ selectedEmp ? initials(selectedEmp.name) : "?" }}
                   </span>
                 </VAvatar>
                 <div class="flex-grow-1">
-                  <div class="text-body-2 font-weight-medium">{{ selectedEmp?.position ?? '—' }}</div>
+                  <div class="text-body-2 font-weight-medium">
+                    {{ selectedEmp?.position ?? "—" }}
+                  </div>
                   <div class="d-flex align-center gap-2 mt-1">
                     <VChip
-                      :color="(selectedEmp?.salary_grade ?? 0) >= SG_CUTOFF ? 'purple' : 'default'"
+                      :color="
+                        (selectedEmp?.salary_grade ?? 0) >= SG_CUTOFF
+                          ? 'purple'
+                          : 'default'
+                      "
                       size="x-small"
                       variant="tonal"
                       label
                     >
-                      SG {{ selectedEmp?.salary_grade ?? '—' }}
+                      SG {{ selectedEmp?.salary_grade ?? "—" }}
                     </VChip>
                     <span class="text-caption text-medium-emphasis">
                       PhilHealth:
-                      {{ (selectedEmp?.salary_grade ?? 0) >= SG_CUTOFF
-                          ? '5% of wage — monthly'
-                          : 'Quarterly lump-sum (×3 on Jan/Apr/Jul/Oct)' }}
+                      {{
+                        (selectedEmp?.salary_grade ?? 0) >= SG_CUTOFF
+                          ? "5% of wage — monthly"
+                          : "Quarterly lump-sum (×3 on Jan/Apr/Jul/Oct)"
+                      }}
                     </span>
                   </div>
                 </div>
@@ -1000,99 +1485,173 @@ onMounted(fetchEmployees)
         </VCol>
 
         <!-- ── Wage History (collapsible) ── -->
-          <VCol v-if="isEditing" cols="12">
-            <VExpansionPanels variant="accordion" class="mb-1">
-              <VExpansionPanel>
-                <VExpansionPanelTitle>
-                  <div class="d-flex align-center gap-2">
-                    <VIcon icon="mdi-history" size="18" />
-                    <span class="text-body-2 font-weight-medium">Wage History</span>
-                    <VChip size="x-small" variant="tonal" color="primary">{{ historyRows.length }}</VChip>
-                  </div>
-                </VExpansionPanelTitle>
-                <VExpansionPanelText>
-                  <VProgressLinear v-if="historyLoading" indeterminate color="primary" class="mb-2" />
-                  <VTable v-else density="compact">
-                    <thead>
-                      <tr>
-                        <th>Effective</th>
-                        <th class="text-right">Wage</th>
-                        <th class="text-right">Premium</th>
-                        <th class="text-right">PhilHealth</th>
-                        <th class="text-right">Pag-IBIG</th>
-                        <th class="text-right">SSS</th>
-                        <th class="text-center">EWT</th>
-                        <th class="text-center">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        v-for="row in historyRows"
-                        :key="row.id"
-                        :class="{ 'bg-primary-lighten-5': editingHistoryId === row.id }"
-                      >
-                        <td>{{ fmtDate(row.effective_date) }}</td>
-                        <td class="text-right">{{ fmt(Number(row.wage)) }}</td>
-                        <td class="text-right">{{ fmt(Number(row.premium)) }} ({{ Math.round(Number(row.premium_percent) * 100) }}%)</td>
-                        <td class="text-right">{{ fmt(Number(row.philhealth)) }}</td>
-                        <td class="text-right">{{ fmt(Number(row.pag_ibig)) }}</td>
-                        <td class="text-right">{{ Number(row.sss) > 0 ? fmt(Number(row.sss)) : 'Opted out' }}</td>
-                        <td class="text-center">{{ row.ewt_rate }}%</td>
-                        <td class="text-center">
-                          <div class="d-flex align-center justify-center gap-1">
-                            <VBtn icon size="x-small" variant="text" color="primary" @click="startEditHistoryRow(row)">
-                              <VIcon size="15">mdi-pencil-outline</VIcon>
-                            </VBtn>
-                            <VBtn icon size="x-small" variant="text" color="error" @click="openHistoryDeleteConfirm(row)">
-                              <VIcon size="15">mdi-delete-outline</VIcon>
-                            </VBtn>
-                          </div>
-                        </td>
-                      </tr>
-                      <tr v-if="!historyRows.length">
-                        <td colspan="8" class="text-center text-medium-emphasis py-3">No wage history entries yet.</td>
-                      </tr>
-                    </tbody>
-                  </VTable>
-                  <div class="d-flex justify-end mt-2">
-                    <VBtn
-                      size="small" variant="text" color="primary" prepend-icon="mdi-plus"
-                      :disabled="!editingHistoryId"
-                      @click="resetToAddMode"
+        <VCol v-if="isEditing" cols="12">
+          <VExpansionPanels variant="accordion" class="mb-1">
+            <VExpansionPanel>
+              <VExpansionPanelTitle>
+                <div class="d-flex align-center gap-2">
+                  <VIcon icon="mdi-history" size="18" />
+                  <span class="text-body-2 font-weight-medium"
+                    >Wage History</span
+                  >
+                  <VChip size="x-small" variant="tonal" color="primary">{{
+                    historyRows.length
+                  }}</VChip>
+                </div>
+              </VExpansionPanelTitle>
+              <VExpansionPanelText>
+                <VProgressLinear
+                  v-if="historyLoading"
+                  indeterminate
+                  color="primary"
+                  class="mb-2"
+                />
+                <VTable v-else density="compact">
+                  <thead>
+                    <tr>
+                      <th>Effective</th>
+                      <th class="text-right">Wage</th>
+                      <th class="text-right">Premium</th>
+                      <th class="text-right">PhilHealth</th>
+                      <th class="text-right">Pag-IBIG</th>
+                      <th class="text-right">SSS</th>
+                      <th class="text-center">EWT</th>
+                      <th class="text-center">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="row in historyRows"
+                      :key="row.id"
+                      :class="{
+                        'bg-primary-lighten-5': editingHistoryId === row.id,
+                      }"
                     >
-                      New Entry
-                    </VBtn>
-                  </div>
-                </VExpansionPanelText>
-              </VExpansionPanel>
-            </VExpansionPanels>
-          </VCol>
+                      <td>{{ fmtDate(row.effective_date) }}</td>
+                      <td class="text-right">{{ fmt(Number(row.wage)) }}</td>
+                      <td class="text-right">
+                        {{ fmt(Number(row.premium)) }} ({{
+                          Math.round(Number(row.premium_percent) * 100)
+                        }}%)
+                      </td>
+                      <td class="text-right">
+                        {{
+                          Number(row.philhealth) > 0
+                            ? fmt(Number(row.philhealth))
+                            : "Opted out"
+                        }}
+                      </td>
+                      <td class="text-right">
+                        {{ fmt(Number(row.pag_ibig)) }}
+                      </td>
+                      <td class="text-right">
+                        {{
+                          Number(row.sss) > 0
+                            ? fmt(Number(row.sss))
+                            : "Opted out"
+                        }}
+                      </td>
+                      <td class="text-center">{{ row.ewt_rate }}%</td>
+                      <td class="text-center">
+                        <div class="d-flex align-center justify-center gap-1">
+                          <VBtn
+                            icon
+                            size="x-small"
+                            variant="text"
+                            color="primary"
+                            @click="startEditHistoryRow(row)"
+                          >
+                            <VIcon size="15">mdi-pencil-outline</VIcon>
+                          </VBtn>
+                          <VBtn
+                            icon
+                            size="x-small"
+                            variant="text"
+                            color="error"
+                            @click="openHistoryDeleteConfirm(row)"
+                          >
+                            <VIcon size="15">mdi-delete-outline</VIcon>
+                          </VBtn>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr v-if="!historyRows.length">
+                      <td
+                        colspan="8"
+                        class="text-center text-medium-emphasis py-3"
+                      >
+                        No wage history entries yet.
+                      </td>
+                    </tr>
+                  </tbody>
+                </VTable>
+                <div class="d-flex justify-end mt-2">
+                  <VBtn
+                    size="small"
+                    variant="text"
+                    color="primary"
+                    prepend-icon="mdi-plus"
+                    :disabled="!editingHistoryId"
+                    @click="resetToAddMode"
+                  >
+                    New Entry
+                  </VBtn>
+                </div>
+              </VExpansionPanelText>
+            </VExpansionPanel>
+          </VExpansionPanels>
+        </VCol>
 
-          <VCol v-if="editingHistoryId" cols="12">
-            <VAlert type="warning" variant="tonal" density="compact" icon="mdi-pencil-outline" class="mb-1">
-              Editing existing entry effective <strong>{{ fmtDate(form.effective_date) }}</strong>.
-              This may change past payroll figures that used this rate.
-            </VAlert>
-          </VCol>
+        <VCol v-if="editingHistoryId" cols="12">
+          <VAlert
+            type="warning"
+            variant="tonal"
+            density="compact"
+            icon="mdi-pencil-outline"
+            class="mb-1"
+          >
+            Editing existing entry effective
+            <strong>{{ fmtDate(form.effective_date) }}</strong
+            >. This may change past payroll figures that used this rate.
+          </VAlert>
+        </VCol>
 
         <!-- HRMIS pre-fill notice -->
         <VCol v-if="selectedEmp?.has_hrmis_wage && !isEditing" cols="12">
-          <VAlert type="info" variant="tonal" density="compact" icon="mdi-database-sync-outline" class="mb-1">
+          <VAlert
+            type="info"
+            variant="tonal"
+            density="compact"
+            icon="mdi-database-sync-outline"
+            class="mb-1"
+          >
             <span class="text-body-2">
-              Wage pre-filled from HRMIS
-              (<strong>{{ fmt(selectedEmp.hrmis_wage!) }}</strong>).
-              Saving will also update the HRMIS record.
+              Wage pre-filled from HRMIS (<strong>{{
+                fmt(selectedEmp.hrmis_wage!)
+              }}</strong
+              >). Saving will also update the HRMIS record.
             </span>
           </VAlert>
         </VCol>
 
         <!-- Reset warning -->
         <VCol v-if="isEditing" cols="12">
-          <VAlert type="warning" variant="tonal" density="compact" icon="mdi-alert-outline">
-            <div class="d-flex align-center justify-space-between flex-wrap gap-2">
-              <span class="text-body-2">Existing deductions are set for this employee.</span>
+          <VAlert
+            type="warning"
+            variant="tonal"
+            density="compact"
+            icon="mdi-alert-outline"
+          >
+            <div
+              class="d-flex align-center justify-space-between flex-wrap gap-2"
+            >
+              <span class="text-body-2"
+                >Existing deductions are set for this employee.</span
+              >
               <VBtn
-                size="small" color="error" variant="outlined"
+                size="small"
+                color="error"
+                variant="outlined"
                 prepend-icon="mdi-delete-outline"
                 :loading="resetLoading"
                 @click="confirmResetDialog = true"
@@ -1105,7 +1664,11 @@ onMounted(fetchEmployees)
 
         <!-- ── Wage & Premium ── -->
         <VCol cols="12" class="mt-2">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Monthly Wage & Premium</p>
+          <p
+            class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
+          >
+            Monthly Wage & Premium
+          </p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
@@ -1163,32 +1726,83 @@ onMounted(fetchEmployees)
             density="compact"
             prepend-inner-icon="mdi-calendar-outline"
             :error-messages="formErrors.effective_date"
-            :hint="isEditing ? 'When the new rate takes effect' : 'When this rate takes effect'"
+            :hint="
+              isEditing
+                ? 'When the new rate takes effect'
+                : 'When this rate takes effect'
+            "
             persistent-hint
           />
         </VCol>
 
         <!-- ── Government Contributions ── -->
         <VCol cols="12" class="mt-2">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Government Contributions</p>
+          <p
+            class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
+          >
+            Government Contributions
+          </p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
         <VCol cols="12" sm="4">
-          <VTextField
-            v-model.number="form.philhealth"
-            label="PhilHealth"
-            type="number"
-            prefix="₱"
-            variant="outlined"
-            density="compact"
-            prepend-inner-icon="mdi-hospital-box-outline"
-            :error-messages="formErrors.philhealth"
-            :hint="philhealthHint"
-            persistent-hint
-            :min="philhealthMin"
-            :readonly="(selectedEmp?.salary_grade ?? 0) >= SG_CUTOFF"
-          />
+          <VCard
+            :variant="philhealthOptIn ? 'tonal' : 'outlined'"
+            :color="philhealthOptIn ? 'primary' : undefined"
+            rounded="lg"
+            flat
+          >
+            <VCardText class="pa-3">
+              <div class="d-flex align-center justify-space-between mb-1">
+                <div class="d-flex align-center gap-2">
+                  <VIcon
+                    icon="mdi-hospital-box-outline"
+                    size="16"
+                    :color="philhealthOptIn ? 'primary' : 'medium-emphasis'"
+                  />
+                  <span class="text-body-2 font-weight-medium">PhilHealth</span>
+                </div>
+
+                <VSwitch
+                  v-model="philhealthOptIn"
+                  color="primary"
+                  density="compact"
+                  hide-details
+                  inset
+                  @update:model-value="
+                    (val) => {
+                      if (!val) {
+                        form.philhealth = 0;
+                      } else if (Number(form.philhealth) === 0) {
+                        form.philhealth = philhealthMin;
+                      }
+                    }
+                  "
+                />
+              </div>
+
+              <VTextField
+                v-if="philhealthOptIn"
+                v-model.number="form.philhealth"
+                label="PhilHealth Amount"
+                type="number"
+                prefix="₱"
+                variant="outlined"
+                density="compact"
+                prepend-inner-icon="mdi-hospital-box-outline"
+                :error-messages="formErrors.philhealth"
+                :hint="philhealthHint"
+                persistent-hint
+                :min="philhealthMin"
+                :readonly="(selectedEmp?.salary_grade ?? 0) >= SG_CUTOFF"
+                class="mt-2"
+              />
+
+              <p v-else class="text-caption text-medium-emphasis mb-0">
+                Opted out — recorded as ₱0.
+              </p>
+            </VCardText>
+          </VCard>
         </VCol>
 
         <VCol cols="12" sm="4">
@@ -1218,8 +1832,11 @@ onMounted(fetchEmployees)
             <VCardText class="pa-3">
               <div class="d-flex align-center justify-space-between mb-1">
                 <div class="d-flex align-center gap-2">
-                  <VIcon icon="mdi-shield-check-outline" size="16"
-                    :color="sssOptIn ? 'primary' : 'medium-emphasis'" />
+                  <VIcon
+                    icon="mdi-shield-check-outline"
+                    size="16"
+                    :color="sssOptIn ? 'primary' : 'medium-emphasis'"
+                  />
                   <span class="text-body-2 font-weight-medium">SSS</span>
                 </div>
                 <VSwitch
@@ -1228,7 +1845,12 @@ onMounted(fetchEmployees)
                   density="compact"
                   hide-details
                   inset
-                  @update:model-value="val => { if (!val) form.sss = 0; else if (form.sss === 0) form.sss = SSS_MIN }"
+                  @update:model-value="
+                    (val) => {
+                      if (!val) form.sss = 0;
+                      else if (form.sss === 0) form.sss = SSS_MIN;
+                    }
+                  "
                 />
               </div>
               <VTextField
@@ -1254,7 +1876,11 @@ onMounted(fetchEmployees)
 
         <!-- ── EWT ── -->
         <VCol cols="12" class="mt-2">
-          <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">Expanded Withholding Tax (EWT)</p>
+          <p
+            class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
+          >
+            Expanded Withholding Tax (EWT)
+          </p>
           <VDivider class="mt-1 mb-3" />
         </VCol>
 
@@ -1277,9 +1903,16 @@ onMounted(fetchEmployees)
         </VCol>
 
         <VCol cols="12" sm="7" class="d-flex align-center">
-          <VAlert type="info" variant="tonal" density="compact" icon="mdi-information-outline" class="text-body-2 w-100">
-            EWT applies only after cumulative annual gross exceeds <strong>₱250,000</strong>.
-            Only the excess is taxed in the crossing month.
+          <VAlert
+            type="info"
+            variant="tonal"
+            density="compact"
+            icon="mdi-information-outline"
+            class="text-body-2 w-100"
+          >
+            EWT applies only after cumulative annual gross exceeds
+            <strong>₱250,000</strong>. Only the excess is taxed in the crossing
+            month.
           </VAlert>
         </VCol>
 
@@ -1287,42 +1920,71 @@ onMounted(fetchEmployees)
         <VCol v-if="preview" cols="12" class="mt-2">
           <VCard variant="tonal" color="success" rounded="lg" flat>
             <VCardText class="py-3">
-              <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
+              <p
+                class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3"
+              >
                 Estimated Monthly Summary
               </p>
               <VRow dense>
                 <VCol cols="6" sm="3">
                   <div class="text-caption text-medium-emphasis">Wage</div>
-                  <div class="text-body-1 font-weight-bold">{{ fmt(form.wage) }}</div>
+                  <div class="text-body-1 font-weight-bold">
+                    {{ fmt(form.wage) }}
+                  </div>
                 </VCol>
                 <VCol cols="6" sm="3">
                   <div class="text-caption text-medium-emphasis">Premium</div>
-                  <div class="text-body-1 font-weight-bold">{{ preview.premium }}</div>
+                  <div class="text-body-1 font-weight-bold">
+                    {{ preview.premium }}
+                  </div>
                 </VCol>
                 <VCol cols="6" sm="3">
                   <div class="text-caption text-medium-emphasis">Gross Pay</div>
-                  <div class="text-body-1 font-weight-bold text-primary">{{ preview.gross }}</div>
+                  <div class="text-body-1 font-weight-bold text-primary">
+                    {{ preview.gross }}
+                  </div>
                 </VCol>
                 <VCol cols="6" sm="3">
-                  <div class="text-caption text-medium-emphasis">Total Deductions</div>
-                  <div class="text-body-1 font-weight-bold text-error">{{ preview.totalDeductions }}</div>
+                  <div class="text-caption text-medium-emphasis">
+                    Total Deductions
+                  </div>
+                  <div class="text-body-1 font-weight-bold text-error">
+                    {{ preview.totalDeductions }}
+                  </div>
                 </VCol>
               </VRow>
               <VDivider class="my-2" />
-              <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+              <div
+                class="d-flex align-center justify-space-between flex-wrap gap-2"
+              >
                 <div>
-                  <div class="text-caption text-medium-emphasis">Est. Net Pay (excl. EWT)</div>
-                  <div class="text-h6 font-weight-bold text-success">{{ preview.estimatedNet }}</div>
+                  <div class="text-caption text-medium-emphasis">
+                    Est. Net Pay (excl. EWT)
+                  </div>
+                  <div class="text-h6 font-weight-bold text-success">
+                    {{ preview.estimatedNet }}
+                  </div>
                 </div>
                 <div class="text-caption text-medium-emphasis text-right">
-                  <div><VIcon icon="mdi-information-outline" size="12" class="mr-1" />EWT computed per payroll period, not included here.</div>
-                  <div class="mt-1"><VIcon icon="mdi-alert-circle-outline" size="12" class="mr-1" />Lates and absences not reflected in this estimate.</div>
+                  <div>
+                    <VIcon
+                      icon="mdi-information-outline"
+                      size="12"
+                      class="mr-1"
+                    />EWT computed per payroll period, not included here.
+                  </div>
+                  <div class="mt-1">
+                    <VIcon
+                      icon="mdi-alert-circle-outline"
+                      size="12"
+                      class="mr-1"
+                    />Lates and absences not reflected in this estimate.
+                  </div>
                 </div>
               </div>
             </VCardText>
           </VCard>
         </VCol>
-
       </VRow>
     </BaseModal>
 
@@ -1336,30 +1998,43 @@ onMounted(fetchEmployees)
             </VAvatar>
             <div>
               <div class="text-body-1 font-weight-medium">
-                {{ isEditing ? 'Overwrite Deductions?' : 'Save Deductions?' }}
+                {{ isEditing ? "Overwrite Deductions?" : "Save Deductions?" }}
               </div>
-              <div class="text-caption text-medium-emphasis">{{ selectedEmp?.name }}</div>
+              <div class="text-caption text-medium-emphasis">
+                {{ selectedEmp?.name }}
+              </div>
             </div>
           </div>
           <p class="text-body-2 text-medium-emphasis mb-0">
             <span v-if="isEditing">
-              You are about to set a <strong class="text-high-emphasis">new wage rate</strong>
-              for <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong>, effective
-              <strong class="text-high-emphasis">{{ form.effective_date }}</strong>.
-              Past payroll runs are not affected — only payroll periods on or after this date will use the new rate.
+              You are about to set a
+              <strong class="text-high-emphasis">new wage rate</strong> for
+              <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong
+              >, effective
+              <strong class="text-high-emphasis">{{
+                form.effective_date
+              }}</strong
+              >. Past payroll runs are not affected — only payroll periods on or
+              after this date will use the new rate.
             </span>
             <span v-else>
-              Save deductions for <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong>?
-              You can edit or clear them later.
+              Save deductions for
+              <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong
+              >? You can edit or clear them later.
             </span>
           </p>
         </VCardText>
         <VDivider />
         <VCardActions class="justify-end pa-4 gap-2">
           <VBtn variant="text" @click="confirmSaveDialog = false">Cancel</VBtn>
-          <VBtn color="primary" variant="tonal" :loading="modalLoading" @click="executeSave">
+          <VBtn
+            color="primary"
+            variant="tonal"
+            :loading="modalLoading"
+            @click="executeSave"
+          >
             <VIcon start size="16">mdi-content-save-outline</VIcon>
-            {{ isEditing ? 'Yes, Overwrite' : 'Yes, Save' }}
+            {{ isEditing ? "Yes, Overwrite" : "Yes, Save" }}
           </VBtn>
         </VCardActions>
       </VCard>
@@ -1374,21 +2049,35 @@ onMounted(fetchEmployees)
               <VIcon icon="mdi-alert-outline" size="22" />
             </VAvatar>
             <div>
-              <div class="text-body-1 font-weight-medium">Edit Wage History Entry?</div>
-              <div class="text-caption text-medium-emphasis">{{ selectedEmp?.name }}</div>
+              <div class="text-body-1 font-weight-medium">
+                Edit Wage History Entry?
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                {{ selectedEmp?.name }}
+              </div>
             </div>
           </div>
           <p class="text-body-2 text-medium-emphasis mb-0">
-            You are editing an <strong class="text-high-emphasis">existing</strong> wage history entry
-            effective <strong class="text-high-emphasis">{{ form.effective_date }}</strong>. If any payroll
-            runs already used this rate, their computed figures may no longer match this record. This does
-            not automatically recompute finalized runs.
+            You are editing an
+            <strong class="text-high-emphasis">existing</strong> wage history
+            entry effective
+            <strong class="text-high-emphasis">{{ form.effective_date }}</strong
+            >. If any payroll runs already used this rate, their computed
+            figures may no longer match this record. This does not automatically
+            recompute finalized runs.
           </p>
         </VCardText>
         <VDivider />
         <VCardActions class="justify-end pa-4 gap-2">
-          <VBtn variant="text" @click="confirmHistoryEditDialog = false">Cancel</VBtn>
-          <VBtn color="warning" variant="tonal" :loading="modalLoading" @click="executeUpdateHistoryRow">
+          <VBtn variant="text" @click="confirmHistoryEditDialog = false"
+            >Cancel</VBtn
+          >
+          <VBtn
+            color="warning"
+            variant="tonal"
+            :loading="modalLoading"
+            @click="executeUpdateHistoryRow"
+          >
             <VIcon start size="16">mdi-content-save-outline</VIcon>
             Yes, Update Entry
           </VBtn>
@@ -1405,24 +2094,41 @@ onMounted(fetchEmployees)
               <VIcon icon="mdi-delete-outline" size="22" />
             </VAvatar>
             <div>
-              <div class="text-body-1 font-weight-medium">Delete Wage History Entry?</div>
-              <div class="text-caption text-medium-emphasis">This action cannot be undone.</div>
+              <div class="text-body-1 font-weight-medium">
+                Delete Wage History Entry?
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                This action cannot be undone.
+              </div>
             </div>
           </div>
           <p class="text-body-2 text-medium-emphasis mb-0">
             Delete the entry effective
-            <strong class="text-high-emphasis">{{ fmtDate(selectedHistoryRow?.effective_date) }}</strong>
-            for <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong>?
+            <strong class="text-high-emphasis">{{
+              fmtDate(selectedHistoryRow?.effective_date)
+            }}</strong>
+            for
+            <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong
+            >?
             <span v-if="historyRows.length === 1">
-              This is the <strong class="text-error">only remaining entry</strong> — deleting it will also
-              clear this employee's current wage record and HRMIS basic salary.
+              This is the
+              <strong class="text-error">only remaining entry</strong> —
+              deleting it will also clear this employee's current wage record
+              and HRMIS basic salary.
             </span>
           </p>
         </VCardText>
         <VDivider />
         <VCardActions class="justify-end pa-4 gap-2">
-          <VBtn variant="text" @click="confirmHistoryDeleteDialog = false">Cancel</VBtn>
-          <VBtn color="error" variant="tonal" :loading="historyDeleteLoading" @click="executeDeleteHistoryRow">
+          <VBtn variant="text" @click="confirmHistoryDeleteDialog = false"
+            >Cancel</VBtn
+          >
+          <VBtn
+            color="error"
+            variant="tonal"
+            :loading="historyDeleteLoading"
+            @click="executeDeleteHistoryRow"
+          >
             <VIcon start size="16">mdi-delete-outline</VIcon>
             Yes, Delete
           </VBtn>
@@ -1439,20 +2145,31 @@ onMounted(fetchEmployees)
               <VIcon icon="mdi-delete-outline" size="22" />
             </VAvatar>
             <div>
-              <div class="text-body-1 font-weight-medium">Clear Deductions?</div>
-              <div class="text-caption text-medium-emphasis">This action cannot be undone.</div>
+              <div class="text-body-1 font-weight-medium">
+                Clear Deductions?
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                This action cannot be undone.
+              </div>
             </div>
           </div>
           <p class="text-body-2 text-medium-emphasis mb-0">
-            This will <strong class="text-high-emphasis">permanently delete</strong> all deduction
-            records for <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong>, including
-            wage, premium, PhilHealth, Pag-IBIG, SSS, and EWT rate.
+            This will
+            <strong class="text-high-emphasis">permanently delete</strong> all
+            deduction records for
+            <strong class="text-high-emphasis">{{ selectedEmp?.name }}</strong
+            >, including wage, premium, PhilHealth, Pag-IBIG, SSS, and EWT rate.
           </p>
         </VCardText>
         <VDivider />
         <VCardActions class="justify-end pa-4 gap-2">
           <VBtn variant="text" @click="confirmResetDialog = false">Cancel</VBtn>
-          <VBtn color="error" variant="tonal" :loading="resetLoading" @click="executeReset">
+          <VBtn
+            color="error"
+            variant="tonal"
+            :loading="resetLoading"
+            @click="executeReset"
+          >
             <VIcon start size="16">mdi-delete-outline</VIcon>
             Yes, Clear Deductions
           </VBtn>
@@ -1472,13 +2189,17 @@ onMounted(fetchEmployees)
               rounded="lg"
             >
               <VIcon
-                :icon="exportFormat === 'excel' ? 'mdi-microsoft-excel' : 'mdi-file-pdf-box'"
+                :icon="
+                  exportFormat === 'excel'
+                    ? 'mdi-microsoft-excel'
+                    : 'mdi-file-pdf-box'
+                "
                 size="22"
               />
             </VAvatar>
             <div>
               <div class="text-body-1 font-weight-medium">
-                Export {{ exportFormat === 'excel' ? 'Excel' : 'PDF' }} Report
+                Export {{ exportFormat === "excel" ? "Excel" : "PDF" }} Report
               </div>
               <div class="text-caption text-medium-emphasis">
                 Government Remittances Summary
@@ -1486,9 +2207,17 @@ onMounted(fetchEmployees)
             </div>
           </div>
 
-          <VAlert type="info" variant="tonal" density="compact" icon="mdi-information-outline" class="mb-4">
-            Select a payroll run to export only its batch employees and use it as the
-            <strong>period label</strong>. Leave blank to export all employees with deductions set.
+          <VAlert
+            type="info"
+            variant="tonal"
+            density="compact"
+            icon="mdi-information-outline"
+            class="mb-4"
+          >
+            Select a payroll run to export only its batch employees and use it
+            as the
+            <strong>period label</strong>. Leave blank to export all employees
+            with deductions set.
           </VAlert>
 
           <VSelect
@@ -1503,50 +2232,73 @@ onMounted(fetchEmployees)
             :loading="batchesLoading"
             clearable
             hide-details
-            :no-data-text="batchesLoading ? 'Loading...' : 'No payroll runs found'"
+            :no-data-text="
+              batchesLoading ? 'Loading...' : 'No payroll runs found'
+            "
           >
             <template #item="{ props, item }">
               <VListItem v-bind="props" :title="item.raw.title">
                 <template #title>
                   <div class="d-flex align-center justify-space-between gap-2">
-                    <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
+                    <span class="text-body-2 font-weight-medium">{{
+                      item.raw.title
+                    }}</span>
                   </div>
                 </template>
                 <template #subtitle>
-                  <span class="text-caption text-medium-emphasis">{{ item.raw.subtitle }}</span>
+                  <span class="text-caption text-medium-emphasis">{{
+                    item.raw.subtitle
+                  }}</span>
                 </template>
               </VListItem>
             </template>
             <template #selection="{ item }">
-              <div class="d-flex flex-column" style="line-height: 1.3; padding: 4px 0;">
-                <span class="text-body-2 font-weight-medium">{{ item.raw.title }}</span>
-                <span class="text-caption text-medium-emphasis">{{ item.raw.subtitle }}</span>
+              <div
+                class="d-flex flex-column"
+                style="line-height: 1.3; padding: 4px 0"
+              >
+                <span class="text-body-2 font-weight-medium">{{
+                  item.raw.title
+                }}</span>
+                <span class="text-caption text-medium-emphasis">{{
+                  item.raw.subtitle
+                }}</span>
               </div>
             </template>
           </VSelect>
-        
-        <p v-if="selectedRun" class="text-caption text-medium-emphasis mt-3 mb-0">
-          <VIcon icon="mdi-account-group-outline" size="13" class="mr-1" />
-          Exports only employees in this run's batch.
-          Period label: <strong>{{ exportPeriodLabel }}</strong>
-        </p>
-        <p v-else class="text-caption text-medium-emphasis mt-3 mb-0">
-          <VIcon icon="mdi-information-outline" size="13" class="mr-1" />
-          No run selected — exports all employees with deductions set.
-        </p>
+
+          <p
+            v-if="selectedRun"
+            class="text-caption text-medium-emphasis mt-3 mb-0"
+          >
+            <VIcon icon="mdi-account-group-outline" size="13" class="mr-1" />
+            Exports only employees in this run's batch. Period label:
+            <strong>{{ exportPeriodLabel }}</strong>
+          </p>
+          <p v-else class="text-caption text-medium-emphasis mt-3 mb-0">
+            <VIcon icon="mdi-information-outline" size="13" class="mr-1" />
+            No run selected — exports all employees with deductions set.
+          </p>
         </VCardText>
 
         <VDivider />
         <VCardActions class="justify-end pa-4 gap-2">
-          <VBtn variant="text" :disabled="exportLoading" @click="exportDialog = false">Cancel</VBtn>
+          <VBtn
+            variant="text"
+            :disabled="exportLoading"
+            @click="exportDialog = false"
+            >Cancel</VBtn
+          >
           <VBtn
             :color="exportFormat === 'excel' ? 'success' : 'error'"
             variant="tonal"
-            :prepend-icon="exportFormat === 'excel' ? 'mdi-download' : 'mdi-file-pdf-box'"
+            :prepend-icon="
+              exportFormat === 'excel' ? 'mdi-download' : 'mdi-file-pdf-box'
+            "
             :loading="exportLoading"
             @click="handleExport"
           >
-            {{ exportFormat === 'excel' ? 'Download Excel' : 'Open PDF' }}
+            {{ exportFormat === "excel" ? "Download Excel" : "Open PDF" }}
           </VBtn>
         </VCardActions>
       </VCard>

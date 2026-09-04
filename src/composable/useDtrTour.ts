@@ -99,16 +99,9 @@ export function useDtrTour() {
     getDriver().drive()
   }
 
-  function maybeAutoStartTour() {
-    if (!localStorage.getItem(TOUR_STORAGE_KEY)) {
-      // wait for table/cards to render before measuring positions
-      setTimeout(() => startTour(), 500)
-    }
-  }
-
   function resetTourFlag() {
     localStorage.removeItem(TOUR_STORAGE_KEY)
   }
 
-  return { startTour, maybeAutoStartTour, resetTourFlag }
+  return { startTour, resetTourFlag }
 }

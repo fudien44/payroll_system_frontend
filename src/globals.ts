@@ -22,7 +22,7 @@ export const globals: Globals = {
     host: 'dbms.doh12.com',
     port: 443,
     key: 'hu882a2okihcyczisf6y',
-    scheme: 'https',
+    scheme: 'http',
   },
 
 }
