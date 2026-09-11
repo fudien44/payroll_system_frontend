@@ -177,8 +177,10 @@ const recomputeConfirmData = ref<{
 } | null>(null);
 const recomputeNeedsDoubleConfirm = ref(false);
 
-const route = useRoute();
-const router = useRouter();
+const excelLoading = ref(false)
+
+const route  = useRoute()
+const router = useRouter()
 
 const run = ref<PayrollRunDetail | null>(null);
 const loading = ref(false);
@@ -545,6 +547,37 @@ async function generatePayrollSheetFromBackend() {
     showAlert("error", "Failed to generate Payroll Sheet.");
   } finally {
     payrollSheetLoading.value = false;
+  }
+}
+async function generateExcelDocument() {
+  if (!run.value) return
+  excelLoading.value = true
+  try {
+    const endpointMap = {
+      payroll_sheet: 'generate-payroll-sheet-excel',
+      ors: 'generate-ors-excel',
+      dv: 'generate-dv-excel',
+    }
+    const prefixMap = { payroll_sheet: 'PAYROLL', ors: 'ORS', dv: 'DV' }
+    const response = await axios.post(
+      `/api/payroll-run/${run.value.id}/${endpointMap[docType.value]}`,
+      { certified_by: selectedCertifiedBy.value, approved_by: selectedApprovedBy.value },
+      { responseType: 'blob' }
+    )
+    const filename = `${prefixMap[docType.value]}-${run.value.payroll_no}.xlsx`
+    const file = new File([response.data], filename, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const url = URL.createObjectURL(file)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch {
+    showAlert('error', 'Failed to export Excel.')
+  } finally {
+    excelLoading.value = false
   }
 }
 
@@ -4110,23 +4143,17 @@ onMounted(async () => {
 
         <VDivider />
         <VCardActions class="justify-end pa-4 gap-2">
+          <VBtn variant="text" :disabled="docGenerateLoading || excelLoading" @click="docDialog = false">Cancel</VBtn>
           <VBtn
-            variant="text"
-            :disabled="docGenerateLoading"
-            @click="docDialog = false"
-            >Cancel</VBtn
+            color="success" variant="tonal" prepend-icon="mdi-file-excel-box"
+            :loading="excelLoading" :disabled="docGenerateLoading"
+            @click="generateExcelDocument"
           >
+            Export Excel
+          </VBtn>
           <VBtn
-            :color="
-              docType === 'payroll_sheet'
-                ? 'primary'
-                : docType === 'ors'
-                  ? 'indigo'
-                  : 'deep-purple'
-            "
-            variant="tonal"
-            prepend-icon="mdi-file-pdf-box"
-            :loading="docGenerateLoading"
+            :color="docType === 'payroll_sheet' ? 'primary' : docType === 'ors' ? 'indigo' : 'deep-purple'"
+            variant="tonal" prepend-icon="mdi-file-pdf-box" :loading="docGenerateLoading" :disabled="excelLoading"
             @click="generateDocument"
           >
             Generate PDF

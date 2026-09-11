@@ -1171,13 +1171,12 @@ onMounted(fetchEmployees);
       >
         <strong>PhilHealth (SG 15 and below):</strong>
         Quarterly — enter monthly amount (min ₱500), deducted as
-        <strong>×3 on Jan, Apr, Jul, Oct</strong> (min ₱1,500/quarter). Zero on
-        other months. &nbsp;·&nbsp;
-        <strong>PhilHealth (SG 16 and above):</strong> 5% of monthly wage,
-        deducted every month &nbsp;·&nbsp; <strong>Pag-IBIG</strong> min ₱400
-        (mandatory) &nbsp;·&nbsp; <strong>SSS</strong> voluntary — min ₱760 if
-        deducting &nbsp;·&nbsp; <strong>Premium</strong> 5/10/15/20% of wage
-        &nbsp;·&nbsp; <strong>EWT</strong> 5% after ₱250,000 annual gross
+        <strong>×3 on Jan, Apr, Jul, Oct</strong> (min ₱1,500/quarter). Zero on other months. &nbsp;·&nbsp;
+        <strong>PhilHealth (SG 16 and above):</strong> 5% of monthly wage, deducted every month &nbsp;·&nbsp;
+        <strong>Pag-IBIG</strong> min ₱400 (mandatory) &nbsp;·&nbsp;
+        <strong>SSS</strong> voluntary — min ₱750 if deducting &nbsp;·&nbsp;
+        <strong>Premium</strong> 5/10/15/20% of wage &nbsp;·&nbsp;
+        <strong>EWT</strong> 5% after ₱250,000 annual gross
       </VAlert>
 
       <!-- ── Summary Cards ── -->

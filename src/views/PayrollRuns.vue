@@ -138,22 +138,22 @@ const deleteTarget = ref<PayrollRun | null>(null);
 const deleteLoading = ref(false);
 
 /* ── Document Generation ── */
-const docDialog = ref(false);
-const docType = ref<DocType>("payroll_sheet");
-const docTarget = ref<Record<string, any> | null>(null);
-const docLoading = ref(false);
-const orsLoading = ref(false);
-const dvLoading = ref(false);
-const sigsLoading = ref(false);
-const payrollSheetLoading = ref(false);
-
-const approvedBySig = ref<Signatory | null>(null);
-const certifiedBySlots = ref<(Signatory | null)[]>([]);
-const selectablePool = ref<Signatory[]>([]);
-const slot1Locked = ref(false);
-const selectedCertifiedBy = ref<(number | null)[]>([]);
-const approvedByPool = ref<Signatory[]>([]);
-const selectedApprovedBy = ref<number | null>(null);
+const docDialog    = ref(false)
+const docType      = ref<DocType>('payroll_sheet')
+const docTarget    = ref<Record<string, any> | null>(null)
+const docLoading   = ref(false)
+const orsLoading   = ref(false)
+const dvLoading    = ref(false)
+const sigsLoading  = ref(false)
+const payrollSheetLoading = ref(false)
+const excelLoading = ref(false)
+const approvedBySig       = ref<Signatory | null>(null)
+const certifiedBySlots    = ref<(Signatory | null)[]>([])
+const selectablePool      = ref<Signatory[]>([])
+const slot1Locked         = ref(false)
+const selectedCertifiedBy = ref<(number | null)[]>([])
+const approvedByPool      = ref<Signatory[]>([])
+const selectedApprovedBy  = ref<number | null>(null)
 
 /* ─────────────────────────────────────────
    COMPUTED
@@ -495,9 +495,40 @@ async function generateDocument() {
     return;
   }
 }
-const dtrNotSavedDialog = ref(false);
-const dtrNotSavedMessage = ref("");
-const dtrNotSavedPeriod = ref("");
+async function generateExcelDocument() {
+  if (!docTarget.value) return
+  excelLoading.value = true
+  try {
+    const endpointMap = {
+      payroll_sheet: 'generate-payroll-sheet-excel',
+      ors: 'generate-ors-excel',
+      dv: 'generate-dv-excel',
+    }
+    const prefixMap = { payroll_sheet: 'PAYROLL', ors: 'ORS', dv: 'DV' }
+    const response = await axios.post(
+      `/api/payroll-run/${docTarget.value.id}/${endpointMap[docType.value]}`,
+      { certified_by: selectedCertifiedBy.value, approved_by: selectedApprovedBy.value },
+      { responseType: 'blob' }
+    )
+    const filename = `${prefixMap[docType.value]}-${docTarget.value.payroll_no}.xlsx`
+    const file = new File([response.data], filename, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const url = URL.createObjectURL(file)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch {
+    showAlert('error', 'Failed to export Excel.')
+  } finally {
+    excelLoading.value = false
+  }
+}
+const dtrNotSavedDialog  = ref(false)
+const dtrNotSavedMessage = ref('')
+const dtrNotSavedPeriod  = ref('')
 async function handleCreate() {
   if (!validate()) return;
   modalLoading.value = true;
@@ -1335,29 +1366,23 @@ onMounted(() => {
         </VCardText>
 
         <VDivider />
-        <VCardActions class="justify-end pa-4 gap-2">
-          <VBtn
-            variant="text"
-            :disabled="docGenerateLoading"
-            @click="docDialog = false"
-            >Cancel</VBtn
-          >
-          <VBtn
-            :color="
-              docType === 'payroll_sheet'
-                ? 'primary'
-                : docType === 'ors'
-                  ? 'indigo'
-                  : 'deep-purple'
-            "
-            variant="tonal"
-            prepend-icon="mdi-file-pdf-box"
-            :loading="docGenerateLoading"
-            @click="generateDocument"
-          >
-            Generate PDF
-          </VBtn>
-        </VCardActions>
+       <VCardActions class="justify-end pa-4 gap-2">
+        <VBtn variant="text" :disabled="docGenerateLoading || excelLoading" @click="docDialog = false">Cancel</VBtn>
+        <VBtn
+          color="success" variant="tonal" prepend-icon="mdi-file-excel-box"
+          :loading="excelLoading" :disabled="docGenerateLoading"
+          @click="generateExcelDocument"
+        >
+          Export Excel
+        </VBtn>
+        <VBtn
+          :color="docType === 'payroll_sheet' ? 'primary' : docType === 'ors' ? 'indigo' : 'deep-purple'"
+          variant="tonal" prepend-icon="mdi-file-pdf-box" :loading="docGenerateLoading" :disabled="excelLoading"
+          @click="generateDocument"
+        >
+          Generate PDF
+        </VBtn>
+      </VCardActions>
       </VCard>
     </VDialog>
     <!-- ── Alert ── -->
