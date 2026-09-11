@@ -1,53 +1,54 @@
 <script setup lang="ts">
-import BaseAlert from "@/components/base/BaseAlert.vue";
-import axios from "@axios";
+import BaseAlert from '@/components/base/BaseAlert.vue'
+import axios from '@axios'
+import { computed, ref, watch } from 'vue'
 
 /* ─────────────────────────────────────────
    TYPES
 ───────────────────────────────────────── */
 interface EmployeeOption {
-  emp_id: number;
-  user_id: number;
-  full_name: string;
-  position: string;
-  has_wage: boolean;
-  has_batch: boolean;
-  batch_count: number;
-  period_count: number;
-  wage: number;
-  premium_percent: number;
+  emp_id: number
+  user_id: number
+  full_name: string
+  position: string
+  has_wage: boolean
+  has_batch: boolean
+  batch_count: number
+  period_count: number
+  wage: number
+  premium_percent: number
 }
 
 interface AttendanceRow {
-  user_id: number;
-  full_name: string;
-  position: string;
-  division: string | null;
-  section: string | null;
-  regdays: number;
-  total_rendered_hours: number;
-  total_absent_days: number;
-  total_late_minutes: number;
-  total_undertime_minutes: number;
-  dtr_absent_days: number;
-  dtr_late_minutes: number;
-  dtr_undertime_minutes: number;
-  pass_slip_late_minutes: number;
-  absent_penalty_removed_minutes: number;
-  has_adjustment: boolean;
+  user_id: number
+  full_name: string
+  position: string
+  division: string | null
+  section: string | null
+  regdays: number
+  total_rendered_hours: number
+  total_absent_days: number
+  total_late_minutes: number
+  total_undertime_minutes: number
+  dtr_absent_days: number
+  dtr_late_minutes: number
+  dtr_undertime_minutes: number
+  pass_slip_late_minutes: number
+  absent_penalty_removed_minutes: number
+  has_adjustment: boolean
 }
 
 interface TardinessEmployee {
-  name: string; // "RODRIGUEZ, JULIUS CEZAR"
-  dates: string; // "4,5,6,7,11,13,14,18,19,20,21,25,26"
-  days: number; // 13
-  minutes: string; // "219"
-  has_adjustments: boolean; // true if pass-slip late adjustments are included
+  name: string // "RODRIGUEZ, JULIUS CEZAR"
+  dates: string // "4,5,6,7,11,13,14,18,19,20,21,25,26"
+  days: number // 13
+  minutes: string // "219"
+  has_adjustments: boolean // true if pass-slip late adjustments are included
 }
 
 interface TardinessDivision {
-  name: string; // "LOCAL HEALTH SUPPORT DIVISION"
-  employees: TardinessEmployee[];
+  name: string // "LOCAL HEALTH SUPPORT DIVISION"
+  employees: TardinessEmployee[]
 }
 
 interface UndertimeEmployee {
@@ -62,15 +63,15 @@ interface UndertimeDivision {
 }
 
 interface PunctualityEmployee {
-  name: string; // "RODRIGUEZ, JULIUS CEZAR"
-  position: string; // "Administrative Assistant III"
-  regdays: number; // 22
-  has_adjustments: boolean; // true if absences were fully offset by leave/official travel
+  name: string // "RODRIGUEZ, JULIUS CEZAR"
+  position: string // "Administrative Assistant III"
+  regdays: number // 22
+  has_adjustments: boolean // true if absences were fully offset by leave/official travel
 }
 
 interface PunctualityDivision {
-  name: string; // "LOCAL HEALTH SUPPORT DIVISION"
-  employees: PunctualityEmployee[];
+  name: string // "LOCAL HEALTH SUPPORT DIVISION"
+  employees: PunctualityEmployee[]
 }
 
 interface ApprovedBySignatory {
@@ -81,69 +82,106 @@ interface ApprovedBySignatory {
 
 type AlertType = "success" | "error" | "warning" | "info";
 
+type RemittanceType = 'ALL' | 'SSS' | 'PhilHealth' | 'Pag-IBIG'
+
+interface RemittanceRow {
+  emp_id: number
+  user_id: number
+  full_name: string
+  position: string
+  division: string | null
+  section: string | null
+  wage: number
+  contribution: number
+  sss?: number
+  philhealth?: number
+  pag_ibig?: number
+  total_contribution?: number
+}
+
 /* ─────────────────────────────────────────
    CONSTANTS
 ───────────────────────────────────────── */
 const MONTH_ITEMS = [
-  { title: "January", value: 1 },
-  { title: "February", value: 2 },
-  { title: "March", value: 3 },
-  { title: "April", value: 4 },
-  { title: "May", value: 5 },
-  { title: "June", value: 6 },
-  { title: "July", value: 7 },
-  { title: "August", value: 8 },
-  { title: "September", value: 9 },
-  { title: "October", value: 10 },
-  { title: "November", value: 11 },
-  { title: "December", value: 12 },
-];
+  { title: 'January', value: 1 },
+  { title: 'February', value: 2 },
+  { title: 'March', value: 3 },
+  { title: 'April', value: 4 },
+  { title: 'May', value: 5 },
+  { title: 'June', value: 6 },
+  { title: 'July', value: 7 },
+  { title: 'August', value: 8 },
+  { title: 'September', value: 9 },
+  { title: 'October', value: 10 },
+  { title: 'November', value: 11 },
+  { title: 'December', value: 12 },
+]
 
-const currentYear = new Date().getFullYear();
-const YEAR_ITEMS = Array.from({ length: 5 }, (_, i) => currentYear - i);
+const currentYear = new Date().getFullYear()
+const YEAR_ITEMS = Array.from({ length: 5 }, (_, i) => currentYear - i)
 
 const ATTENDANCE_HEADERS = [
-  { title: "Employee", key: "full_name", sortable: true },
-  { title: "Position", key: "position", sortable: true },
-  { title: "Working Days", key: "regdays", sortable: true },
-  { title: "Hours Rendered", key: "total_rendered_hours", sortable: true },
-  { title: "Absent Days", key: "total_absent_days", sortable: true },
-  { title: "Late (mins)", key: "total_late_minutes", sortable: true },
-  { title: "Undertime (mins)", key: "total_undertime_minutes", sortable: true },
-];
+  { title: 'Employee', key: 'full_name', sortable: true },
+  { title: 'Position', key: 'position', sortable: true },
+  { title: 'Working Days', key: 'regdays', sortable: true },
+  { title: 'Hours Rendered', key: 'total_rendered_hours', sortable: true },
+  { title: 'Absent Days', key: 'total_absent_days', sortable: true },
+  { title: 'Late (mins)', key: 'total_late_minutes', sortable: true },
+  { title: 'Undertime (mins)', key: 'total_undertime_minutes', sortable: true },
+]
+
+const REMITTANCE_TYPE_ITEMS: { title: string; value: RemittanceType }[] = [
+  { title: 'ALL', value: 'ALL' },
+  { title: 'SSS', value: 'SSS' },
+  { title: 'PhilHealth', value: 'PhilHealth' },
+  { title: 'Pag-IBIG', value: 'Pag-IBIG' },
+]
+
+// const REMITTANCE_HEADERS = [
+//   { title: 'Employee', key: 'full_name', sortable: true },
+//   { title: 'Position', key: 'position', sortable: true },
+//   { title: 'Wage', key: 'wage', sortable: true },
+//   { title: 'Contribution', key: 'contribution', sortable: true },
+// ]
 
 /* ─────────────────────────────────────────
    STATE — shared
 ───────────────────────────────────────── */
-const activeTab = ref<
-  "attendance" | "punctuality" | "tardiness" | "undertime" | "payslip"
+const activeTab = ref <
+  "attendance" | "punctuality" | "tardiness" | "undertime" | "payslip" | "remittances"
 >("attendance");
 const alertVisible = ref(false);
 const alertMessage = ref("");
 const alertType = ref<AlertType>("success");
 
 // Default to preceding month for both start and end
-const prevMonth = new Date().getMonth() === 0 ? 12 : new Date().getMonth();
-const prevYear = new Date().getMonth() === 0 ? currentYear - 1 : currentYear;
+const prevMonth = new Date().getMonth() === 0 ? 12 : new Date().getMonth()
+const prevYear = new Date().getMonth() === 0 ? currentYear - 1 : currentYear
 
 function showAlert(type: AlertType, msg: string) {
-  alertType.value = type;
-  alertMessage.value = msg;
-  alertVisible.value = true;
+  alertType.value = type
+  alertMessage.value = msg
+  alertVisible.value = true
 }
 
 const TAB_BANNERS = {
   payslip: {
-    type: "info" as const,
-    icon: "mdi-file-document-outline",
-    title: "Save DTR records before generating payslips",
-    body: "Ensure DTR records for all concerned employees have been saved for the selected period from the <strong>DTR module</strong>. Employees without a payroll batch or with missing DTR entries will be excluded or may produce inaccurate computations. Only <strong>finalized</strong> periods are included in the generated payslip.",
+    type: 'info' as const,
+    icon: 'mdi-file-document-outline',
+    title: 'Save DTR records before generating payslips',
+    body: 'Ensure DTR records for all concerned employees have been saved for the selected period from the <strong>DTR module</strong>. Employees without a payroll batch or with missing DTR entries will be excluded or may produce inaccurate computations. Only <strong>finalized</strong> periods are included in the generated payslip.',
+  },
+  remittances: {
+    type: 'info' as const,
+    icon: 'mdi-cash-multiple',
+    title: 'Remittance amounts follow finalized payroll runs',
+    body: 'Select a contribution type (<strong>SSS, PhilHealth, or Pag-IBIG</strong>) and a period to view employee contribution amounts. Values are sourced from <strong>finalized</strong> payroll runs only.',
   },
   punctuality: {
-    type: "success" as const,
-    icon: "mdi-clock-check-outline",
-    title: "Perfect attendance recognition",
-    body: "This report lists employees with <strong>zero absences, zero tardiness, and zero undertime</strong> for the selected month. Absences fully covered by approved Leave or Official Travel are offset and marked with an <strong>adj</strong> badge.",
+    type: 'success' as const,
+    icon: 'mdi-clock-check-outline',
+    title: 'Perfect attendance recognition',
+    body: 'This report lists employees with <strong>zero absences, zero tardiness, and zero undertime</strong> for the selected month. Absences fully covered by approved Leave or Official Travel are offset and marked with an <strong>adj</strong> badge.',
   },
   tardiness: {
     type: "warning" as const,
@@ -158,14 +196,14 @@ const TAB_BANNERS = {
     body: "Employees with any undertime minutes for the selected month are listed here, grouped by division. Values reflect the finalized payroll batch total where available, falling back to the saved DTR summary.",
   },
   attendance: {
-    type: "info" as const,
-    icon: "mdi-calendar-check-outline",
-    title: "Attendance summary is based on saved DTR data",
-    body: "Values are read from saved DTR summaries. Late minutes are sourced from the payroll batch where available; absent day counts reflect leave and official travel offsets. Make sure DTR has been saved for the selected period before loading.",
+    type: 'info' as const,
+    icon: 'mdi-calendar-check-outline',
+    title: 'Attendance summary is based on saved DTR data',
+    body: 'Values are read from saved DTR summaries. Late minutes are sourced from the payroll batch where available; absent day counts reflect leave and official travel offsets. Make sure DTR has been saved for the selected period before loading.',
   },
-} as const;
+} as const
 
-const tabBanner = computed(() => TAB_BANNERS[activeTab.value] ?? null);
+const tabBanner = computed(() => TAB_BANNERS[activeTab.value] ?? null)
 
 const approvedBySignatories = ref<ApprovedBySignatory[]>([]);
 const loadingApprovedBy = ref(false);
@@ -195,229 +233,246 @@ const approvedByOptions = computed(() =>
 /* ─────────────────────────────────────────
    STATE — Attendance tab
 ───────────────────────────────────────── */
-const attendanceMonth = ref<number>(prevMonth);
-const attendanceYear = ref<number>(currentYear);
-const attendanceRows = ref<AttendanceRow[]>([]);
-const loadingAttendance = ref(false);
-const exportingAttendance = ref(false);
-const exportingAttendancePdf = ref(false);
+const attendanceMonth = ref<number>(prevMonth)
+const attendanceYear = ref<number>(currentYear)
+const attendanceRows = ref<AttendanceRow[]>([])
+const loadingAttendance = ref(false)
+const exportingAttendance = ref(false)
+const exportingAttendancePdf = ref(false)
 
 // ── Division / Section filter (pre-load) ──
 interface EmployeeRef {
-  emp_id: number;
-  full_name: string;
-  position: string;
-  division: string | null;
-  section: string | null;
+  emp_id: number
+  full_name: string
+  position: string
+  division: string | null
+  section: string | null
 }
-const allEmployeesRef = ref<EmployeeRef[]>([]);
-const loadingEmployeeRefs = ref(false);
-const attFilterDivision = ref<string | null>(null);
-const attFilterSection = ref<string | null>(null);
+const allEmployeesRef = ref<EmployeeRef[]>([])
+const loadingEmployeeRefs = ref(false)
+const attFilterDivision = ref<string | null>(null)
+const attFilterSection = ref<string | null>(null)
 
 const divisionOptions = computed(
   () =>
     [
-      ...new Set(allEmployeesRef.value.map((e) => e.division).filter(Boolean)),
+      ...new Set(allEmployeesRef.value.map(e => e.division).filter(Boolean)),
     ].sort() as string[],
-);
+)
 
 const sectionOptions = computed(() => {
   const base = attFilterDivision.value
     ? allEmployeesRef.value.filter(
-        (e) => e.division === attFilterDivision.value,
-      )
-    : allEmployeesRef.value;
+      e => e.division === attFilterDivision.value,
+    )
+    : allEmployeesRef.value
+
   return [
-    ...new Set(base.map((e) => e.section).filter(Boolean)),
-  ].sort() as string[];
-});
+    ...new Set(base.map(e => e.section).filter(Boolean)),
+  ].sort() as string[]
+})
 
 // When division changes, reset section if it no longer belongs to the new division
 watch(attFilterDivision, () => {
   if (
-    attFilterSection.value &&
-    !sectionOptions.value.includes(attFilterSection.value)
-  ) {
-    attFilterSection.value = null;
-  }
-});
+    attFilterSection.value
+    && !sectionOptions.value.includes(attFilterSection.value)
+  )
+    attFilterSection.value = null
+})
 
 async function fetchEmployeeRefs() {
-  if (allEmployeesRef.value.length) return; // already loaded
-  loadingEmployeeRefs.value = true;
+  if (allEmployeesRef.value.length)
+    return // already loaded
+  loadingEmployeeRefs.value = true
   try {
-    const { data } = await axios.get("/api/reports/employees");
-    allEmployeesRef.value = data.data;
-  } catch {
-    showAlert("error", "Failed to load division/section list.");
-  } finally {
-    loadingEmployeeRefs.value = false;
+    const { data } = await axios.get('/api/reports/employees')
+
+    allEmployeesRef.value = data.data
+  }
+  catch {
+    showAlert('error', 'Failed to load division/section list.')
+  }
+  finally {
+    loadingEmployeeRefs.value = false
   }
 }
 
 const attendanceMonthLabel = computed(() => {
-  const m = MONTH_ITEMS.find((x) => x.value === attendanceMonth.value);
-  return `${m?.title ?? ""} ${attendanceYear.value}`;
-});
+  const m = MONTH_ITEMS.find(x => x.value === attendanceMonth.value)
+
+  return `${m?.title ?? ''} ${attendanceYear.value}`
+})
 
 const filteredAttendanceRows = computed(() => {
-  let rows = attendanceRows.value;
-  if (attFilterDivision.value) {
-    rows = rows.filter((r) => r.division === attFilterDivision.value);
-  }
-  if (attFilterSection.value) {
-    rows = rows.filter((r) => r.section === attFilterSection.value);
-  }
-  return rows;
-});
+  let rows = attendanceRows.value
+  if (attFilterDivision.value)
+    rows = rows.filter(r => r.division === attFilterDivision.value)
+
+  if (attFilterSection.value)
+    rows = rows.filter(r => r.section === attFilterSection.value)
+
+  return rows
+})
 
 async function fetchAttendance() {
-  loadingAttendance.value = true;
-  attendanceRows.value = [];
+  loadingAttendance.value = true
+  attendanceRows.value = []
   try {
-    const { data } = await axios.get("/api/reports/attendance", {
+    const { data } = await axios.get('/api/reports/attendance', {
       params: {
         month: attendanceMonth.value,
         year: attendanceYear.value,
       },
-    });
-    attendanceRows.value = data.data;
-  } catch (err: any) {
-    const status = err?.response?.status;
+    })
+
+    attendanceRows.value = data.data
+  }
+  catch (err: any) {
+    const status = err?.response?.status
     if (status === 404) {
       showAlert(
-        "warning",
+        'warning',
         `No saved DTR summaries found for ${attendanceMonthLabel.value}. Please save DTR first.`,
-      );
-    } else {
-      showAlert("error", "Failed to load attendance data.");
+      )
     }
-  } finally {
-    loadingAttendance.value = false;
+    else {
+      showAlert('error', 'Failed to load attendance data.')
+    }
+  }
+  finally {
+    loadingAttendance.value = false
   }
 }
 
 async function exportAttendanceExcel() {
-  exportingAttendance.value = true;
+  exportingAttendance.value = true
   try {
     const resp = await axios.post(
-      "/api/reports/attendance/export",
+      '/api/reports/attendance/export',
       {
         month: attendanceMonth.value,
         year: attendanceYear.value,
-        employee_ids: filteredAttendanceRows.value.map((r) => r.user_id),
+        employee_ids: filteredAttendanceRows.value.map(r => r.user_id),
       },
-      { responseType: "blob" },
-    );
+      { responseType: 'blob' },
+    )
 
     downloadBlob(
       resp.data,
-      `Attendance_Summary_${attendanceMonthLabel.value.replace(" ", "_")}.xlsx`,
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    );
-    showAlert("success", "Attendance Summary exported successfully.");
-  } catch (err: any) {
-    const msg = await blobErrorMessage(err);
-    showAlert("error", msg ?? "Failed to export attendance summary.");
-  } finally {
-    exportingAttendance.value = false;
+      `Attendance_Summary_${attendanceMonthLabel.value.replace(' ', '_')}.xlsx`,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    showAlert('success', 'Attendance Summary exported successfully.')
+  }
+  catch (err: any) {
+    const msg = await blobErrorMessage(err)
+
+    showAlert('error', msg ?? 'Failed to export attendance summary.')
+  }
+  finally {
+    exportingAttendance.value = false
   }
 }
 
 /* ── Attendance PDF export (jsPDF) ────────────────────────────────────────── */
 async function exportAttendancePdf() {
   if (!attendanceRows.value.length) {
-    showAlert("warning", "No attendance data to export.");
-    return;
+    showAlert('warning', 'No attendance data to export.')
+
+    return
   }
 
-  exportingAttendancePdf.value = true;
+  exportingAttendancePdf.value = true
   try {
     if (!(window as any).jspdf) {
       await new Promise<void>((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src =
-          "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-        s.onload = () => resolve();
-        s.onerror = () => reject(new Error("Failed to load jsPDF."));
-        document.head.appendChild(s);
-      });
+        const s = document.createElement('script')
+
+        s.src
+          = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
+        s.onload = () => resolve()
+        s.onerror = () => reject(new Error('Failed to load jsPDF.'))
+        document.head.appendChild(s)
+      })
     }
     if (!(window as any).__jspdfAutotableLoaded) {
       await new Promise<void>((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src =
-          "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js";
+        const s = document.createElement('script')
+
+        s.src
+          = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'
         s.onload = () => {
-          (window as any).__jspdfAutotableLoaded = true;
-          resolve();
-        };
-        s.onerror = () => reject(new Error("Failed to load AutoTable."));
-        document.head.appendChild(s);
-      });
+          (window as any).__jspdfAutotableLoaded = true
+          resolve()
+        }
+        s.onerror = () => reject(new Error('Failed to load AutoTable.'))
+        document.head.appendChild(s)
+      })
     }
 
-    const { jsPDF } = (window as any).jspdf;
-    const doc = new jsPDF({
-      orientation: "landscape",
-      unit: "mm",
-      format: "a4",
-    });
+    const { jsPDF } = (window as any).jspdf
 
-    const periodLabel = attendanceMonthLabel.value;
-    const generated = new Date().toLocaleDateString("en-PH", {
-      month: "long",
-      day: "numeric",
-      year: "numeric",
-    });
+    const doc = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a4',
+    })
+
+    const periodLabel = attendanceMonthLabel.value
+
+    const generated = new Date().toLocaleDateString('en-PH', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    })
 
     // ── Filter rows if not all selected ──────────────────────────────────────
-    const rows = filteredAttendanceRows.value;
+    const rows = filteredAttendanceRows.value
 
     // ── Color palette: Deep Teal / Forest Green ───────────────────────────────
-    const DEEP_TEAL = [18, 78, 76] as [number, number, number]; // #124E4C
-    const FOREST_GREEN = [34, 102, 68] as [number, number, number]; // #226644
-    const MIST_GREEN = [232, 245, 237] as [number, number, number]; // #E8F5ED
-    const PALE_FERN = [212, 235, 220] as [number, number, number]; // #D4EBDC
-    const CITRON = [188, 210, 55] as [number, number, number]; // #BCD237 — accent
-    const WHITE = [255, 255, 255] as [number, number, number];
-    const LIGHT_GRAY = [140, 140, 140] as [number, number, number];
-    const CHARCOAL = [45, 55, 45] as [number, number, number];
+    const DEEP_TEAL = [18, 78, 76] as [number, number, number] // #124E4C
+    const FOREST_GREEN = [34, 102, 68] as [number, number, number] // #226644
+    const MIST_GREEN = [232, 245, 237] as [number, number, number] // #E8F5ED
+    const PALE_FERN = [212, 235, 220] as [number, number, number] // #D4EBDC
+    const CITRON = [188, 210, 55] as [number, number, number] // #BCD237 — accent
+    const WHITE = [255, 255, 255] as [number, number, number]
+    const LIGHT_GRAY = [140, 140, 140] as [number, number, number]
+    const CHARCOAL = [45, 55, 45] as [number, number, number]
 
-    const pageW = doc.internal.pageSize.getWidth();
-    const pageH = doc.internal.pageSize.getHeight();
+    const pageW = doc.internal.pageSize.getWidth()
+    const pageH = doc.internal.pageSize.getHeight()
 
     // ── Header band ───────────────────────────────────────────────────────────
-    doc.setFillColor(...DEEP_TEAL);
-    doc.rect(0, 0, pageW, 32, "F");
-    doc.setFillColor(...CITRON);
-    doc.rect(0, 32, pageW, 2, "F");
-    doc.setFillColor(...FOREST_GREEN);
-    doc.rect(0, 0, 3, 34, "F");
+    doc.setFillColor(...DEEP_TEAL)
+    doc.rect(0, 0, pageW, 32, 'F')
+    doc.setFillColor(...CITRON)
+    doc.rect(0, 32, pageW, 2, 'F')
+    doc.setFillColor(...FOREST_GREEN)
+    doc.rect(0, 0, 3, 34, 'F')
 
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    doc.setTextColor(...WHITE);
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.setTextColor(...WHITE)
     doc.text(
-      "DEPARTMENT OF HEALTH — REGION XII (SOCCSKSARGEN)",
+      'DEPARTMENT OF HEALTH — REGION XII (SOCCSKSARGEN)',
       pageW / 2,
       11,
-      { align: "center" },
-    );
-    doc.setFontSize(13.5);
-    doc.text("JO Employee Attendance Summary", pageW / 2, 20, {
-      align: "center",
-    });
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
-    doc.setTextColor(180, 220, 195);
+      { align: 'center' },
+    )
+    doc.setFontSize(13.5)
+    doc.text('JO Employee Attendance Summary', pageW / 2, 20, {
+      align: 'center',
+    })
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(7.5)
+    doc.setTextColor(180, 220, 195)
     doc.text(
       `Period Covered: ${periodLabel}   ·   Generated: ${generated}   ·   Total Employees: ${rows.length}`,
       pageW / 2,
       28,
-      { align: "center" },
-    );
+      { align: 'center' },
+    )
 
     // ── Table ─────────────────────────────────────────────────────────────────
     const tableBody = rows.map((r, i) => [
@@ -426,65 +481,68 @@ async function exportAttendancePdf() {
       r.position,
       r.regdays,
       r.total_rendered_hours,
-      r.total_absent_days > 0 ? String(r.total_absent_days) : "—",
-      r.total_late_minutes > 0 ? fmtMins(r.total_late_minutes) : "—",
-      r.total_undertime_minutes > 0 ? fmtMins(r.total_undertime_minutes) : "—",
-    ]);
+      r.total_absent_days > 0 ? String(r.total_absent_days) : '—',
+      r.total_late_minutes > 0 ? fmtMins(r.total_late_minutes) : '—',
+      r.total_undertime_minutes > 0 ? fmtMins(r.total_undertime_minutes) : '—',
+    ])
 
     // ── Totals / summary row ──────────────────────────────────────────────────
     const totalRendered = rows.reduce(
       (s, r) => s + Number(r.total_rendered_hours),
       0,
-    );
+    )
+
     const totalAbsent = rows.reduce(
       (s, r) => s + Number(r.total_absent_days),
       0,
-    );
+    )
+
     const totalLate = rows.reduce(
       (s, r) => s + Number(r.total_late_minutes),
       0,
-    );
+    )
+
     const totalUndertime = rows.reduce(
       (s, r) => s + Number(r.total_undertime_minutes),
       0,
-    );
+    )
 
     const totalsRow = [
       {
-        content: "TOTAL",
+        content: 'TOTAL',
         colSpan: 3,
-        styles: { fontStyle: "bold" as const, halign: "left" as const },
+        styles: { fontStyle: 'bold' as const, halign: 'left' as const },
       },
 
       totalRendered.toFixed(2),
-      totalAbsent > 0 ? String(totalAbsent) : "—",
-      totalLate > 0 ? fmtMins(totalLate) : "—",
-      totalUndertime > 0 ? fmtMins(totalUndertime) : "—",
+      totalAbsent > 0 ? String(totalAbsent) : '—',
+      totalLate > 0 ? fmtMins(totalLate) : '—',
+      totalUndertime > 0 ? fmtMins(totalUndertime) : '—',
     ];
 
     (doc as any).autoTable({
       startY: 38,
       head: [
         [
-          "#",
-          "Employee",
-          "Position",
-          "Working Days",
-          "Hours Rendered",
-          "Absent Days",
-          "Late",
-          "Undertime",
+          '#',
+          'Employee',
+          'Position',
+          'Working Days',
+          'Hours Rendered',
+          'Absent Days',
+          'Late',
+          'Undertime',
         ],
       ],
       body: tableBody,
       foot: [totalsRow],
-      showFoot: "lastPage",
-      theme: "grid",
+      showFoot: 'lastPage',
+      theme: 'grid',
       styles: {
         fontSize: 7.5,
         cellPadding: 2.5,
-        valign: "middle",
-        overflow: "linebreak",
+        valign: 'middle',
+        overflow: 'linebreak',
         textColor: CHARCOAL,
         lineColor: [180, 215, 195],
         lineWidth: 0.2,
@@ -492,8 +550,8 @@ async function exportAttendancePdf() {
       headStyles: {
         fillColor: DEEP_TEAL,
         textColor: WHITE,
-        fontStyle: "bold",
-        halign: "center",
+        fontStyle: 'bold',
+        halign: 'center',
         fontSize: 7.5,
         lineColor: FOREST_GREEN,
         lineWidth: 0.3,
@@ -501,115 +559,125 @@ async function exportAttendancePdf() {
       footStyles: {
         fillColor: PALE_FERN,
         textColor: DEEP_TEAL,
-        fontStyle: "bold",
+        fontStyle: 'bold',
         lineColor: [160, 205, 180],
         lineWidth: 0.3,
       },
       alternateRowStyles: { fillColor: MIST_GREEN },
       columnStyles: {
-        0: { halign: "center", cellWidth: 8 },
+        0: { halign: 'center', cellWidth: 8 },
         1: { cellWidth: 52 },
         2: { cellWidth: 42 },
-        3: { halign: "center", cellWidth: 22 },
-        4: { halign: "center", cellWidth: 28 },
-        5: { halign: "center", cellWidth: 22 },
-        6: { halign: "center", cellWidth: 22 },
-        7: { halign: "center", cellWidth: 22 },
+        3: { halign: 'center', cellWidth: 22 },
+        4: { halign: 'center', cellWidth: 28 },
+        5: { halign: 'center', cellWidth: 22 },
+        6: { halign: 'center', cellWidth: 22 },
+        7: { halign: 'center', cellWidth: 22 },
       },
       margin: { left: 14, right: 14 },
-    });
+    })
 
     // ── Footer bar ────────────────────────────────────────────────────────────
-    doc.setFillColor(...CITRON);
-    doc.rect(0, pageH - 7, pageW, 2, "F");
-    doc.setFillColor(...DEEP_TEAL);
-    doc.rect(0, pageH - 5, pageW, 5, "F");
+    doc.setFillColor(...CITRON)
+    doc.rect(0, pageH - 7, pageW, 2, 'F')
+    doc.setFillColor(...DEEP_TEAL)
+    doc.rect(0, pageH - 5, pageW, 5, 'F')
 
-    const finalY = (doc as any).lastAutoTable.finalY + 5;
-    doc.setFont("helvetica", "italic");
-    doc.setFontSize(7);
-    doc.setTextColor(...LIGHT_GRAY);
+    const finalY = (doc as any).lastAutoTable.finalY + 5
+
+    doc.setFont('helvetica', 'italic')
+    doc.setFontSize(7)
+    doc.setTextColor(...LIGHT_GRAY)
     doc.text(
-      "This report is system-generated. Based on saved DTR summaries with payroll adjustments applied where available.",
+      'This report is system-generated. Based on saved DTR summaries with payroll adjustments applied where available.',
       pageW - 14,
       finalY,
-      { align: "right" },
-    );
+      { align: 'right' },
+    )
 
-    const pdfBlob = doc.output("blob");
-    const url = URL.createObjectURL(pdfBlob);
-    const tab = window.open(url, "_blank");
+    const pdfBlob = doc.output('blob')
+    const url = URL.createObjectURL(pdfBlob)
+    const tab = window.open(url, '_blank')
 
     if (!tab) {
-      showAlert("error", "Popup blocked. Please allow popups for this site.");
-      URL.revokeObjectURL(url);
-      return;
+      showAlert('error', 'Popup blocked. Please allow popups for this site.')
+      URL.revokeObjectURL(url)
+
+      return
     }
 
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    showAlert("success", "Attendance PDF opened in a new tab.");
-  } catch (err: any) {
-    showAlert("error", err.message ?? "PDF export failed.");
-  } finally {
-    exportingAttendancePdf.value = false;
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    showAlert('success', 'Attendance PDF opened in a new tab.')
+  }
+  catch (err: any) {
+    showAlert('error', err.message ?? 'PDF export failed.')
+  }
+  finally {
+    exportingAttendancePdf.value = false
   }
 }
 
 /* ─────────────────────────────────────────
    STATE — Punctuality tab
 ───────────────────────────────────────── */
-const generatingPunctualityPdf = ref(false);
+const generatingPunctualityPdf = ref(false)
 
-const punctualityMonth = ref<number>(prevMonth);
-const punctualityYear = ref<number>(currentYear);
-const loadingPunctuality = ref(false);
-const punctualityDivisions = ref<PunctualityDivision[]>([]);
-const punctualityLoadedLabel = ref("");
+const punctualityMonth = ref<number>(prevMonth)
+const punctualityYear = ref<number>(currentYear)
+const loadingPunctuality = ref(false)
+const punctualityDivisions = ref<PunctualityDivision[]>([])
+const punctualityLoadedLabel = ref('')
 
 // ─── Fetch punctuality data from the API ───────────────────────────────────
 // Backend returns employees with zero unjustified absences, zero effective
 // late minutes, and zero undertime, grouped by division (min 12 regdays,
 // hardcoded server-side).
 async function fetchPunctuality() {
-  loadingPunctuality.value = true;
-  punctualityDivisions.value = [];
+  loadingPunctuality.value = true
+  punctualityDivisions.value = []
   try {
-    const { data } = await axios.get("/api/reports/punctuality", {
+    const { data } = await axios.get('/api/reports/punctuality', {
       params: {
         month: punctualityMonth.value,
         year: punctualityYear.value,
       },
-    });
-    punctualityDivisions.value = data.data;
-    punctualityLoadedLabel.value = punctualityMonthLabel.value;
-  } catch (err: any) {
-    const status = err?.response?.status;
+    })
+
+    punctualityDivisions.value = data.data
+    punctualityLoadedLabel.value = punctualityMonthLabel.value
+  }
+  catch (err: any) {
+    const status = err?.response?.status
     if (status === 404) {
       // Backend distinguishes "no DTR data saved" vs "no one qualified" —
       // surface its specific message rather than a generic fallback.
       showAlert(
-        "warning",
-        err?.response?.data?.message ??
-          `No punctuality data found for ${punctualityMonthLabel.value}.`,
-      );
-    } else {
-      showAlert("error", "Failed to load punctuality data.");
+        'warning',
+        err?.response?.data?.message
+          ?? `No punctuality data found for ${punctualityMonthLabel.value}.`,
+      )
     }
-  } finally {
-    loadingPunctuality.value = false;
+    else {
+      showAlert('error', 'Failed to load punctuality data.')
+    }
+  }
+  finally {
+    loadingPunctuality.value = false
   }
 }
 
 const punctualityMonthLabel = computed(() => {
-  const m = MONTH_ITEMS.find((x) => x.value === punctualityMonth.value);
-  return `${m?.title ?? ""} ${punctualityYear.value}`;
-});
+  const m = MONTH_ITEMS.find(x => x.value === punctualityMonth.value)
+
+  return `${m?.title ?? ''} ${punctualityYear.value}`
+})
 
 // ─── Trigger PDF generation (DomPDF, backend-rendered) ─────────────────────
 async function exportPunctualityPdf() {
   if (!punctualityDivisions.value.length) {
-    showAlert("warning", "No punctuality data to export.");
-    return;
+    showAlert('warning', 'No punctuality data to export.')
+
+    return
   }
 
   if (!selectedApprovedBy.value) {
@@ -620,90 +688,99 @@ async function exportPunctualityPdf() {
   generatingPunctualityPdf.value = true;
 
   // Open the tab immediately while still in the user gesture context
-  const previewTab = window.open("", "_blank");
+  const previewTab = window.open('', '_blank')
 
   try {
     const resp = await axios.post(
-      "/api/reports/punctuality/generate",
+      '/api/reports/punctuality/generate',
       {
         month: punctualityMonth.value,
         year: punctualityYear.value,
         approved_by_id: selectedApprovedBy.value,
       },
-      { responseType: "blob" },
-    );
+      { responseType: 'blob' },
+    )
 
     const url = URL.createObjectURL(
-      new Blob([resp.data], { type: "application/pdf" }),
-    );
+      new Blob([resp.data], { type: 'application/pdf' }),
+    )
 
-    if (previewTab) {
-      previewTab.location.href = url;
-    }
+    if (previewTab)
+      previewTab.location.href = url
 
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    showAlert("success", "Punctuality memo PDF opened in a new tab.");
-  } catch (err: any) {
-    previewTab?.close(); // close the blank tab if the request failed
-    const msg = await blobErrorMessage(err);
-    showAlert("error", msg ?? "Failed to generate punctuality memo PDF.");
-  } finally {
-    generatingPunctualityPdf.value = false;
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    showAlert('success', 'Punctuality memo PDF opened in a new tab.')
+  }
+  catch (err: any) {
+    previewTab?.close() // close the blank tab if the request failed
+
+    const msg = await blobErrorMessage(err)
+
+    showAlert('error', msg ?? 'Failed to generate punctuality memo PDF.')
+  }
+  finally {
+    generatingPunctualityPdf.value = false
   }
 }
 
 /* ─────────────────────────────────────────
    STATE — Tardiness tab
 ───────────────────────────────────────── */
-const generatingTardinessPdf = ref(false);
+const generatingTardinessPdf = ref(false)
 
-const tardinessMonth = ref<number>(prevMonth);
-const tardinessYear = ref<number>(currentYear);
-const loadingTardiness = ref(false);
-const tardinessDivisions = ref<TardinessDivision[]>([]);
-const tardinessLoadedLabel = ref("");
+const tardinessMonth = ref<number>(prevMonth)
+const tardinessYear = ref<number>(currentYear)
+const loadingTardiness = ref(false)
+const tardinessDivisions = ref<TardinessDivision[]>([])
+const tardinessLoadedLabel = ref('')
 
 // ─── Fetch tardiness data from your API ────────────────────────────────────
 // Your backend should return employees grouped by division where days >= 5.
 // Adjust the endpoint and response shape to match your actual API.
 async function fetchTardiness() {
-  loadingTardiness.value = true;
-  tardinessDivisions.value = [];
+  loadingTardiness.value = true
+  tardinessDivisions.value = []
   try {
-    const { data } = await axios.get("/api/reports/tardiness", {
+    const { data } = await axios.get('/api/reports/tardiness', {
       params: {
         month: tardinessMonth.value,
         year: tardinessYear.value,
         min_days: 6, // only employees with 6+ tardiness days
       },
-    });
-    tardinessDivisions.value = data.data;
-    tardinessLoadedLabel.value = tardinessMonthLabel.value;
-  } catch (err: any) {
-    const status = err?.response?.status;
+    })
+
+    tardinessDivisions.value = data.data
+    tardinessLoadedLabel.value = tardinessMonthLabel.value
+  }
+  catch (err: any) {
+    const status = err?.response?.status
     if (status === 404) {
       showAlert(
-        "warning",
+        'warning',
         `No saved DTR data found for ${tardinessMonthLabel.value}.`,
-      );
-    } else {
-      showAlert("error", "Failed to load tardiness data.");
+      )
     }
-  } finally {
-    loadingTardiness.value = false;
+    else {
+      showAlert('error', 'Failed to load tardiness data.')
+    }
+  }
+  finally {
+    loadingTardiness.value = false
   }
 }
 
 const tardinessMonthLabel = computed(() => {
-  const m = MONTH_ITEMS.find((x) => x.value === tardinessMonth.value);
-  return `${m?.title ?? ""} ${tardinessYear.value}`;
-});
+  const m = MONTH_ITEMS.find(x => x.value === tardinessMonth.value)
+
+  return `${m?.title ?? ''} ${tardinessYear.value}`
+})
 
 // ─── Trigger PDF generation (DomPDF, backend-rendered) ─────────────────────
 async function exportTardinessPdf() {
   if (!tardinessDivisions.value.length) {
-    showAlert("warning", "No tardiness data to export.");
-    return;
+    showAlert('warning', 'No tardiness data to export.')
+
+    return
   }
 
   if (!selectedApprovedBy.value) {
@@ -714,35 +791,38 @@ async function exportTardinessPdf() {
   generatingTardinessPdf.value = true;
 
   // Open the tab immediately while still in the user gesture context
-  const previewTab = window.open("", "_blank");
+  const previewTab = window.open('', '_blank')
 
   try {
     const resp = await axios.post(
-      "/api/reports/tardiness/generate",
+      '/api/reports/tardiness/generate',
       {
         month: tardinessMonth.value,
         year: tardinessYear.value,
         approved_by_id: selectedApprovedBy.value,
       },
-      { responseType: "blob" },
-    );
+      { responseType: 'blob' },
+    )
 
     const url = URL.createObjectURL(
-      new Blob([resp.data], { type: "application/pdf" }),
-    );
+      new Blob([resp.data], { type: 'application/pdf' }),
+    )
 
-    if (previewTab) {
-      previewTab.location.href = url;
-    }
+    if (previewTab)
+      previewTab.location.href = url
 
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    showAlert("success", "Tardiness memo PDF opened in a new tab.");
-  } catch (err: any) {
-    previewTab?.close(); // close the blank tab if the request failed
-    const msg = await blobErrorMessage(err);
-    showAlert("error", msg ?? "Failed to generate tardiness memo PDF.");
-  } finally {
-    generatingTardinessPdf.value = false;
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    showAlert('success', 'Tardiness memo PDF opened in a new tab.')
+  }
+  catch (err: any) {
+    previewTab?.close() // close the blank tab if the request failed
+
+    const msg = await blobErrorMessage(err)
+
+    showAlert('error', msg ?? 'Failed to generate tardiness memo PDF.')
+  }
+  finally {
+    generatingTardinessPdf.value = false
   }
 }
 
@@ -836,135 +916,145 @@ async function exportUndertimePdf() {
 /* ─────────────────────────────────────────
    STATE — Payslip tab
 ───────────────────────────────────────── */
-const payslipStartMonth = ref<number>(prevMonth);
-const payslipStartYear = ref<number>(prevYear);
-const payslipEndMonth = ref<number>(prevMonth);
-const payslipEndYear = ref<number>(prevYear);
-const payslipEmployees = ref<EmployeeOption[]>([]);
-const selectedEmpIds = ref<number[]>([]); // emp_ids; empty = all
-const loadingEmployees = ref(false);
-const generatingPdf = ref(false);
-const exportingPayslip = ref(false);
-const selectAll = ref(false);
-const payslipSearch = ref("");
-const excludedCount = ref(0);
-const payslipPeriodMenu = ref(false);
+const payslipStartMonth = ref<number>(prevMonth)
+const payslipStartYear = ref<number>(prevYear)
+const payslipEndMonth = ref<number>(prevMonth)
+const payslipEndYear = ref<number>(prevYear)
+const payslipEmployees = ref<EmployeeOption[]>([])
+const selectedEmpIds = ref<number[]>([]) // emp_ids; empty = all
+const loadingEmployees = ref(false)
+const generatingPdf = ref(false)
+const exportingPayslip = ref(false)
+const selectAll = ref(false)
+const payslipSearch = ref('')
+const excludedCount = ref(0)
+const payslipPeriodMenu = ref(false)
 
 // Validate that end period is not before start period
 const endPeriodIsValid = computed(() => {
-  if (payslipEndYear.value !== payslipStartYear.value) {
-    return payslipEndYear.value > payslipStartYear.value;
-  }
-  return payslipEndMonth.value >= payslipStartMonth.value;
-});
+  if (payslipEndYear.value !== payslipStartYear.value)
+    return payslipEndYear.value > payslipStartYear.value
+
+  return payslipEndMonth.value >= payslipStartMonth.value
+})
 
 // When start changes, clamp end so it never falls before start
 watch([payslipStartMonth, payslipStartYear], () => {
   if (!endPeriodIsValid.value) {
-    payslipEndMonth.value = payslipStartMonth.value;
-    payslipEndYear.value = payslipStartYear.value;
+    payslipEndMonth.value = payslipStartMonth.value
+    payslipEndYear.value = payslipStartYear.value
   }
-});
+})
 
 function toggleSelectAll() {
   if (selectAll.value) {
-    selectedEmpIds.value = [];
-    selectAll.value = false;
-  } else {
-    selectedEmpIds.value = filteredPayslipEmployees.value.map((e) => e.emp_id);
-    selectAll.value = true;
+    selectedEmpIds.value = []
+    selectAll.value = false
+  }
+  else {
+    selectedEmpIds.value = filteredPayslipEmployees.value.map(e => e.emp_id)
+    selectAll.value = true
   }
 }
 
 // Keep selectAll in sync when individual checkboxes are toggled
-watch(selectedEmpIds, (val) => {
-  selectAll.value = val.length === filteredPayslipEmployees.value.length;
-});
+watch(selectedEmpIds, val => {
+  selectAll.value = val.length === filteredPayslipEmployees.value.length
+})
 
 const payslipMonthLabel = computed(() => {
-  const sm = MONTH_ITEMS.find((x) => x.value === payslipStartMonth.value);
-  const em = MONTH_ITEMS.find((x) => x.value === payslipEndMonth.value);
-  const startLabel = `${sm?.title ?? ""} ${payslipStartYear.value}`;
-  const endLabel = `${em?.title ?? ""} ${payslipEndYear.value}`;
-  return startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
-});
+  const sm = MONTH_ITEMS.find(x => x.value === payslipStartMonth.value)
+  const em = MONTH_ITEMS.find(x => x.value === payslipEndMonth.value)
+  const startLabel = `${sm?.title ?? ''} ${payslipStartYear.value}`
+  const endLabel = `${em?.title ?? ''} ${payslipEndYear.value}`
+
+  return startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`
+})
 
 const isMultiMonth = computed(
   () =>
-    payslipStartYear.value !== payslipEndYear.value ||
-    payslipStartMonth.value !== payslipEndMonth.value,
-);
+    payslipStartYear.value !== payslipEndYear.value
+    || payslipStartMonth.value !== payslipEndMonth.value,
+)
 
 const periodCount = computed(() => {
-  let count = 0;
-  let y = payslipStartYear.value;
-  let m = payslipStartMonth.value;
+  let count = 0
+  let y = payslipStartYear.value
+  let m = payslipStartMonth.value
   while (
-    y < payslipEndYear.value ||
-    (y === payslipEndYear.value && m <= payslipEndMonth.value)
+    y < payslipEndYear.value
+    || (y === payslipEndYear.value && m <= payslipEndMonth.value)
   ) {
-    count++;
-    m++;
+    count++
+    m++
     if (m > 12) {
-      m = 1;
-      y++;
+      m = 1
+      y++
     }
   }
-  return count;
-});
+
+  return count
+})
 
 const filteredPayslipEmployees = computed(() => {
-  const q = (payslipSearch.value ?? "").trim().toLowerCase();
-  if (!q) return payslipEmployees.value;
-  return payslipEmployees.value.filter((e) =>
+  const q = (payslipSearch.value ?? '').trim().toLowerCase()
+  if (!q)
+    return payslipEmployees.value
+
+  return payslipEmployees.value.filter(e =>
     e.full_name.toLowerCase().includes(q),
-  );
-});
+  )
+})
 
 async function fetchPayslipEmployees() {
   if (!endPeriodIsValid.value) {
-    showAlert("warning", "End period cannot be before start period.");
-    return;
+    showAlert('warning', 'End period cannot be before start period.')
+
+    return
   }
-  loadingEmployees.value = true;
-  payslipEmployees.value = [];
-  payslipSearch.value = "";
+  loadingEmployees.value = true
+  payslipEmployees.value = []
+  payslipSearch.value = ''
   try {
-    const { data } = await axios.get("/api/reports/payslip", {
+    const { data } = await axios.get('/api/reports/payslip', {
       params: {
         start_month: payslipStartMonth.value,
         start_year: payslipStartYear.value,
         end_month: payslipEndMonth.value,
         end_year: payslipEndYear.value,
       },
-    });
-    payslipEmployees.value = data.data;
-    excludedCount.value = data.meta?.excluded_count ?? 0;
-    selectedEmpIds.value = [];
-  } catch {
-    showAlert("error", "Failed to load employee list.");
-  } finally {
-    loadingEmployees.value = false;
+    })
+
+    payslipEmployees.value = data.data
+    excludedCount.value = data.meta?.excluded_count ?? 0
+    selectedEmpIds.value = []
+  }
+  catch {
+    showAlert('error', 'Failed to load employee list.')
+  }
+  finally {
+    loadingEmployees.value = false
   }
 }
 
 async function generatePdf() {
   if (selectedEmpIds.value.length === 0) {
     showAlert(
-      "warning",
-      "No employees selected. Please select at least one employee to generate PDF.",
-    );
-    return;
+      'warning',
+      'No employees selected. Please select at least one employee to generate PDF.',
+    )
+
+    return
   }
 
-  generatingPdf.value = true;
+  generatingPdf.value = true
 
   // Open the tab immediately while still in the user gesture context
-  const previewTab = window.open("", "_blank");
+  const previewTab = window.open('', '_blank')
 
   try {
     const resp = await axios.post(
-      "/api/reports/payslip/generate",
+      '/api/reports/payslip/generate',
       {
         start_month: payslipStartMonth.value,
         start_year: payslipStartYear.value,
@@ -972,41 +1062,45 @@ async function generatePdf() {
         end_year: payslipEndYear.value,
         employee_ids: selectedEmpIds.value,
       },
-      { responseType: "blob" },
-    );
+      { responseType: 'blob' },
+    )
 
     const url = URL.createObjectURL(
-      new Blob([resp.data], { type: "application/pdf" }),
-    );
+      new Blob([resp.data], { type: 'application/pdf' }),
+    )
 
-    if (previewTab) {
-      previewTab.location.href = url;
-    }
+    if (previewTab)
+      previewTab.location.href = url
 
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    showAlert("success", "Payslip PDF generated successfully.");
-  } catch (err: any) {
-    previewTab?.close(); // close the blank tab if the request failed
-    const msg = await blobErrorMessage(err);
-    showAlert("error", msg ?? "Failed to generate PDF.");
-  } finally {
-    generatingPdf.value = false;
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    showAlert('success', 'Payslip PDF generated successfully.')
+  }
+  catch (err: any) {
+    previewTab?.close() // close the blank tab if the request failed
+
+    const msg = await blobErrorMessage(err)
+
+    showAlert('error', msg ?? 'Failed to generate PDF.')
+  }
+  finally {
+    generatingPdf.value = false
   }
 }
 
 async function exportPayslipExcel() {
   if (selectedEmpIds.value.length === 0) {
     showAlert(
-      "warning",
-      "No employees selected. Please select at least one employee to export Excel.",
-    );
-    return;
+      'warning',
+      'No employees selected. Please select at least one employee to export Excel.',
+    )
+
+    return
   }
 
-  exportingPayslip.value = true;
+  exportingPayslip.value = true
   try {
     const resp = await axios.post(
-      "/api/reports/payslip/export",
+      '/api/reports/payslip/export',
       {
         start_month: payslipStartMonth.value,
         start_year: payslipStartYear.value,
@@ -1014,50 +1108,541 @@ async function exportPayslipExcel() {
         end_year: payslipEndYear.value,
         employee_ids: selectedEmpIds.value,
       },
-      { responseType: "blob" },
-    );
+      { responseType: 'blob' },
+    )
 
     downloadBlob(
       resp.data,
-      `Payslip_${payslipMonthLabel.value.replace(" ", "_")}.xlsx`,
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    );
-    showAlert("success", "Payslip Excel exported successfully.");
-  } catch (err: any) {
-    const msg = await blobErrorMessage(err);
-    showAlert("error", msg ?? "Failed to export Excel.");
-  } finally {
-    exportingPayslip.value = false;
+      `Payslip_${payslipMonthLabel.value.replace(' ', '_')}.xlsx`,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    showAlert('success', 'Payslip Excel exported successfully.')
+  }
+  catch (err: any) {
+    const msg = await blobErrorMessage(err)
+
+    showAlert('error', msg ?? 'Failed to export Excel.')
+  }
+  finally {
+    exportingPayslip.value = false
   }
 }
+
+/* ─────────────────────────────────────────
+   STATE — Remittances tab
+───────────────────────────────────────── */
+const remittanceMonth = ref<number>(prevMonth)
+const remittanceYear = ref<number>(currentYear)
+const remittanceType = ref<RemittanceType>('ALL')
+
+const REMITTANCE_HEADERS = computed(() => {
+  if (remittanceType.value === 'ALL') {
+    return [
+      { title: 'Employee', key: 'full_name', sortable: true },
+      { title: 'Position', key: 'position', sortable: true },
+      { title: 'Wage', key: 'wage', sortable: true },
+      { title: 'SSS', key: 'sss', sortable: true },
+      { title: 'PhilHealth', key: 'philhealth', sortable: true },
+      { title: 'Pag-IBIG', key: 'pag_ibig', sortable: true },
+      { title: 'Total', key: 'total_contribution', sortable: true },
+    ]
+  }
+
+  return [
+    { title: 'Employee', key: 'full_name', sortable: true },
+    { title: 'Position', key: 'position', sortable: true },
+    { title: 'Wage', key: 'wage', sortable: true },
+    { title: 'Contribution', key: 'contribution', sortable: true },
+  ]
+})
+
+const remittanceRows = ref<RemittanceRow[]>([])
+const loadingRemittance = ref(false)
+const exportingRemittance = ref(false)
+
+const remFilterDivision = ref<string | null>(null)
+const remFilterSection = ref<string | null>(null)
+const exportingRemittancePdf = ref(false)
+
+const remSectionOptions = computed(() => {
+  const base = remFilterDivision.value
+    ? allEmployeesRef.value.filter(
+      e => e.division === remFilterDivision.value,
+    )
+    : allEmployeesRef.value
+
+  return [
+    ...new Set(base.map(e => e.section).filter(Boolean)),
+  ].sort() as string[]
+})
+
+const filteredRemittanceRows = computed(() => {
+  let rows = remittanceRows.value
+
+  if (
+    remFilterDivision.value
+    && remFilterDivision.value !== 'ALL'
+  ) {
+    rows = rows.filter(
+      r =>
+        r.division?.trim() === remFilterDivision.value?.trim(),
+    )
+  }
+
+  if (
+    remFilterSection.value
+    && remFilterSection.value !== 'ALL'
+  ) {
+    rows = rows.filter(
+      r =>
+        r.section?.trim() === remFilterSection.value?.trim(),
+    )
+  }
+
+  return rows
+})
+
+const remittanceMonthLabel = computed(() => {
+  const m = MONTH_ITEMS.find(x => x.value === remittanceMonth.value)
+
+  return `${m?.title ?? ''} ${remittanceYear.value}`
+})
+
+async function fetchRemittance() {
+  loadingRemittance.value = true
+  remittanceRows.value = []
+  try {
+    const { data } = await axios.get('/api/reports/remittances', {
+      params: {
+        month: remittanceMonth.value,
+        year: remittanceYear.value,
+        type: remittanceType.value,
+      },
+    })
+
+    remittanceRows.value = data.data
+  }
+  catch (err: any) {
+    const status = err?.response?.status
+    if (status === 404) {
+      showAlert(
+        'warning',
+        `No saved payroll data found for ${remittanceType.value} — ${remittanceMonthLabel.value}.`,
+      )
+    }
+    else {
+      showAlert('error', 'Failed to load remittance data.')
+    }
+  }
+  finally {
+    loadingRemittance.value = false
+  }
+}
+
+async function exportRemittanceExcel() {
+  exportingRemittance.value = true
+  try {
+    const resp = await axios.post(
+      '/api/reports/remittances/export',
+      {
+        month: remittanceMonth.value,
+        year: remittanceYear.value,
+        type: remittanceType.value,
+        employee_ids: filteredRemittanceRows.value.map(r => r.user_id),
+      },
+      { responseType: 'blob' },
+    )
+
+    downloadBlob(
+      resp.data,
+      `${remittanceType.value}_Remittance_${remittanceMonthLabel.value.replace(' ', '_')}.xlsx`,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    showAlert('success', `${remittanceType.value} remittance exported successfully.`)
+  }
+  catch (err: any) {
+    const msg = await blobErrorMessage(err)
+
+    showAlert('error', msg ?? 'Failed to export remittance report.')
+  }
+  finally {
+    exportingRemittance.value = false
+  }
+}
+
+async function exportRemittancePdf() {
+  if (!filteredRemittanceRows.value.length) {
+    showAlert('warning', 'No remittance data to export.')
+
+    return
+  }
+
+  exportingRemittancePdf.value = true
+
+  try {
+    if (!(window as any).jspdf) {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement('script')
+
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
+        s.onload = () => resolve()
+        s.onerror = () => reject(new Error('Failed to load jsPDF.'))
+        document.head.appendChild(s)
+      })
+    }
+
+    if (!(window as any).__jspdfAutotableLoaded) {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement('script')
+
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'
+        s.onload = () => {
+          (window as any).__jspdfAutotableLoaded = true
+          resolve()
+        }
+        s.onerror = () => reject(new Error('Failed to load AutoTable.'))
+        document.head.appendChild(s)
+      })
+    }
+
+    const { jsPDF } = (window as any).jspdf
+
+    const doc = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a4',
+    })
+
+    const periodLabel = remittanceMonthLabel.value
+
+    const generated = new Date().toLocaleDateString('en-PH', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    })
+
+    const rows = filteredRemittanceRows.value
+
+    const DEEP_TEAL = [18, 78, 76] as [number, number, number]
+    const FOREST_GREEN = [34, 102, 68] as [number, number, number]
+    const MIST_GREEN = [232, 245, 237] as [number, number, number]
+    const PALE_FERN = [212, 235, 220] as [number, number, number]
+    const CITRON = [188, 210, 55] as [number, number, number]
+    const WHITE = [255, 255, 255] as [number, number, number]
+    const LIGHT_GRAY = [140, 140, 140] as [number, number, number]
+    const CHARCOAL = [45, 55, 45] as [number, number, number]
+
+    const pageW = doc.internal.pageSize.getWidth()
+    const pageH = doc.internal.pageSize.getHeight()
+
+    // ============================================
+    // REPORT HEADER
+    // ============================================
+
+    doc.setFillColor(...DEEP_TEAL)
+    doc.rect(0, 0, pageW, 32, 'F')
+
+    doc.setFillColor(...CITRON)
+    doc.rect(0, 32, pageW, 2, 'F')
+
+    doc.setFillColor(...FOREST_GREEN)
+    doc.rect(0, 0, 3, 34, 'F')
+
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.setTextColor(...WHITE)
+
+    doc.text(
+      'DEPARTMENT OF HEALTH — REGION XII (SOCCSKSARGEN)',
+      pageW / 2,
+      11,
+      { align: 'center' },
+    )
+
+    doc.setFontSize(13.5)
+
+    doc.text(
+      `${remittanceType.value} Remittance Report`,
+      pageW / 2,
+      20,
+      { align: 'center' },
+    )
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9.5)
+    doc.setTextColor(180, 220, 195)
+
+    doc.text(
+      `Period Covered: ${periodLabel}   ·   Generated: ${generated}`,
+      pageW / 2,
+      28,
+      { align: 'center' },
+    )
+
+    // ============================================
+    // TABLE FUNCTION
+    // ============================================
+
+    const addRemittanceTable = (
+  title: string,
+  contributionKey: 'sss' | 'philhealth' | 'pag_ibig' | 'contribution',
+  startY: number,
+) => {
+  const tableRows = rows
+    .filter(r => Number(r[contributionKey]) > 0)
+    .map((r, i) => [
+      i + 1,
+      r.full_name,
+      r.position,
+      r.division ?? '—',
+      r.section ?? '—',
+      Number(r[contributionKey]).toFixed(2),
+    ])
+
+      // Table title
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(10)
+      doc.setTextColor(...DEEP_TEAL)
+
+      doc.text(`${title} REMITTANCE`, 14, startY)
+
+      const tableStartY = startY + 4
+
+      const totalContribution = rows
+        .filter(r => Number(r[contributionKey]) > 0)
+        .reduce(
+          (sum, r) => sum + Number(r[contributionKey]),
+          0,
+        )
+
+      const totalsRow = [
+        {
+          content: 'TOTAL',
+          colSpan: 5,
+          styles: {
+            fontStyle: 'bold' as const,
+            halign: 'left' as const,
+          },
+        },
+        totalContribution.toFixed(2),
+      ]
+
+            ;(doc as any).autoTable({
+        startY: tableStartY,
+
+        tableWidth: pageW - 28,
+
+        head: [[
+          '#',
+          'Employee',
+          'Position',
+          'Division',
+          'Section',
+          `${title} Contribution`,
+        ]],
+
+        body: tableRows,
+
+        foot: tableRows.length ? [totalsRow] : [],
+
+        showFoot: 'lastPage',
+
+        theme: 'grid',
+
+        styles: {
+          fontSize: 7.5,
+          cellPadding: 2.5,
+          valign: 'middle',
+          overflow: 'linebreak',
+          textColor: CHARCOAL,
+          lineColor: [180, 215, 195],
+          lineWidth: 0.2,
+        },
+
+        headStyles: {
+          fillColor: DEEP_TEAL,
+          textColor: WHITE,
+          fontStyle: 'bold',
+          halign: 'center',
+          fontSize: 7.5,
+          lineColor: FOREST_GREEN,
+          lineWidth: 0.3,
+        },
+
+        footStyles: {
+          fillColor: PALE_FERN,
+          textColor: DEEP_TEAL,
+          fontStyle: 'bold',
+          lineColor: [160, 205, 180],
+          lineWidth: 0.3,
+        },
+
+        alternateRowStyles: {
+          fillColor: MIST_GREEN,
+        },
+
+        columnStyles: {
+          0: { halign: 'center', cellWidth: 10 },
+          5: { halign: 'right', cellWidth: 35 },
+        },
+
+        margin: {
+          left: 14,
+          right: 14,
+        },
+      })
+
+      return (doc as any).lastAutoTable.finalY
+    }
+
+    if (remittanceType.value === 'ALL') {
+      let currentY = 40
+
+      currentY = addRemittanceTable(
+        'SSS',
+        'sss',
+        currentY,
+      ) + 10
+
+      // New page if needed
+      if (currentY > pageH - 40) {
+        doc.addPage()
+        currentY = 20
+      }
+
+      currentY = addRemittanceTable(
+        'PhilHealth',
+        'philhealth',
+        currentY,
+      ) + 10
+
+      if (currentY > pageH - 40) {
+        doc.addPage()
+        currentY = 20
+      }
+
+      addRemittanceTable(
+        'Pag-IBIG',
+        'pag_ibig',
+        currentY,
+      )
+    }
+
+    // ============================================
+    // SINGLE CONTRIBUTION
+    // ============================================
+
+    else {
+      const columnMap: Record<string, 'sss' | 'philhealth' | 'pag_ibig' | 'contribution'> = {
+        'SSS': 'contribution',
+        'PhilHealth': 'contribution',
+        'Pag-IBIG': 'contribution',
+      }
+
+      addRemittanceTable(
+        remittanceType.value,
+        columnMap[remittanceType.value],
+        40,
+      )
+    }
+
+    // ============================================
+    // FOOTER
+    // ============================================
+
+    const totalPages = doc.internal.getNumberOfPages()
+
+    for (let page = 1; page <= totalPages; page++) {
+      doc.setPage(page)
+
+      doc.setFillColor(...CITRON)
+      doc.rect(0, pageH - 7, pageW, 2, 'F')
+
+      doc.setFillColor(...DEEP_TEAL)
+      doc.rect(0, pageH - 5, pageW, 5, 'F')
+
+      doc.setFont('helvetica', 'italic')
+      doc.setFontSize(7)
+      doc.setTextColor(...LIGHT_GRAY)
+
+      doc.text(
+        'This report is system-generated. Based on finalized payroll runs for the selected period.',
+        pageW - 14,
+        pageH - 9,
+        { align: 'right' },
+      )
+    }
+
+    const pdfBlob = doc.output('blob')
+    const url = URL.createObjectURL(pdfBlob)
+
+    const tab = window.open(url, '_blank')
+
+    if (!tab) {
+      showAlert(
+        'error',
+        'Popup blocked. Please allow popups for this site.',
+      )
+
+      URL.revokeObjectURL(url)
+
+      return
+    }
+
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+
+    showAlert(
+      'success',
+      'Remittance PDF opened in a new tab.',
+    )
+  }
+  catch (err: any) {
+    showAlert(
+      'error',
+      err.message ?? 'PDF export failed.',
+    )
+  }
+  finally {
+    exportingRemittancePdf.value = false
+  }
+}
+
+// Reset loaded rows when contribution type changes
+watch(remittanceType, () => {
+  remittanceRows.value = []
+})
 
 /* ─────────────────────────────────────────
    UTILITIES
 ───────────────────────────────────────── */
 function downloadBlob(blob: Blob, filename: string, type: string) {
-  const url = URL.createObjectURL(new Blob([blob], { type }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.setAttribute("download", filename);
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  const url = URL.createObjectURL(new Blob([blob], { type }))
+  const link = document.createElement('a')
+
+  link.href = url
+  link.setAttribute('download', filename)
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }
 
 async function blobErrorMessage(err: any): Promise<string | null> {
   try {
     if (err?.response?.data instanceof Blob) {
-      const text = await err.response.data.text();
-      const json = JSON.parse(text);
-      return json?.message ?? null;
+      const text = await err.response.data.text()
+      const json = JSON.parse(text)
+
+      return json?.message ?? null
     }
-  } catch {}
-  return err?.response?.data?.message ?? null;
+  }
+  catch {}
+
+  return err?.response?.data?.message ?? null
 }
 
 function fmtMins(mins: number): string {
-  return `${mins}m`;
+  return `${mins}m`
 }
 
 /* ─────────────────────────────────────────
@@ -1068,17 +1653,26 @@ onMounted(() => {
   fetchApprovedBySignatories();
 });
 
-watch(activeTab, (tab) => {
-  if (tab === "attendance") fetchEmployeeRefs();
-});
+watch(activeTab, tab => {
+  if (tab === 'attendance' || tab === 'remittances')
+    fetchEmployeeRefs()
+})
+watch(remFilterDivision, () => {
+  remFilterSection.value = null
+})
 </script>
 
 <template>
   <div>
-    <VContainer fluid class="pa-6">
+    <VContainer
+      fluid
+      class="pa-6"
+    >
       <!-- ── Page Header ── -->
       <div class="mb-6">
-        <h4 class="text-h5 font-weight-bold mb-1">Reports</h4>
+        <h4 class="text-h5 font-weight-bold mb-1">
+          Reports
+        </h4>
         <p class="text-body-2 text-medium-emphasis mb-0">
           Generate tardiness, payslips, and export attendance summaries.
         </p>
@@ -1093,44 +1687,86 @@ watch(activeTab, (tab) => {
         rounded="lg"
         class="mb-6"
       >
-        <template #title>{{ tabBanner.title }}</template>
+        <template #title>
+          {{ tabBanner.title }}
+        </template>
         <span v-html="tabBanner.body" />
       </VAlert>
 
       <!-- ── Tabs ── -->
-      <VTabs v-model="activeTab" color="primary" class="mb-6">
-        <VTab value="attendance" prepend-icon="mdi-calendar-check-outline"
-          >Attendance Summary</VTab
+      <VTabs
+        v-model="activeTab"
+        color="primary"
+        class="mb-6"
+      >
+        <VTab
+          value="attendance"
+          prepend-icon="mdi-calendar-check-outline"
         >
-        <VTab value="punctuality" prepend-icon="mdi-clock-check-outline"
-          >Punctuality</VTab
+          Attendance Summary
+        </VTab>
+        <VTab
+          value="punctuality"
+          prepend-icon="mdi-clock-check-outline"
         >
-        <VTab value="tardiness" prepend-icon="mdi-clock-alert-outline"
-          >Tardiness</VTab
+          Punctuality
+        </VTab>
+        <VTab
+          value="tardiness"
+          prepend-icon="mdi-clock-alert-outline"
         >
-        <VTab value="undertime" prepend-icon="mdi-timer-sand">Undertime</VTab>
-        <VTab value="payslip" prepend-icon="mdi-file-document-outline"
-          >Payslip</VTab
+          Tardiness
+        </VTab>
+
+        <VTab
+          value="undertime"
+          prepend-icon="mdi-timer-sand"
         >
+          Undertime
+        </VTab>
+
+        <VTab
+          value="payslip"
+          prepend-icon="mdi-file-document-outline"
+        >
+          Payslip
+        </VTab>
+
+        <VTab
+          value="remittances"
+          prepend-icon="mdi-cash-multiple"
+        >
+          Remittances
+        </VTab>
       </VTabs>
 
       <VWindow v-model="activeTab">
-        <!-- ══════════════════════════════════════════
+        <!--
+          ══════════════════════════════════════════
           TAB 1 — ATTENDANCE SUMMARY
-    ══════════════════════════════════════════ -->
+          ══════════════════════════════════════════
+        -->
         <VWindowItem value="attendance">
           <VRow>
             <!-- ── Period + controls ── -->
             <VCol cols="12">
-              <VCard variant="flat" rounded="lg">
+              <VCard
+                variant="flat"
+                rounded="lg"
+              >
                 <VCardText>
-                  <p
-                    class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3"
-                  >
+                  <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
                     Select Period
                   </p>
-                  <VRow dense align="center">
-                    <VCol cols="12" sm="6" md="2">
+                  <VRow
+                    dense
+                    align="center"
+                  >
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
                       <VSelect
                         v-model="attendanceMonth"
                         label="Month"
@@ -1143,7 +1779,11 @@ watch(activeTab, (tab) => {
                         hide-details
                       />
                     </VCol>
-                    <VCol cols="12" sm="6" md="2">
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
                       <VSelect
                         v-model="attendanceYear"
                         label="Year"
@@ -1154,7 +1794,11 @@ watch(activeTab, (tab) => {
                         hide-details
                       />
                     </VCol>
-                    <VCol cols="12" sm="6" md="3">
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="3"
+                    >
                       <VSelect
                         v-model="attFilterDivision"
                         :items="divisionOptions"
@@ -1168,7 +1812,11 @@ watch(activeTab, (tab) => {
                         placeholder="All divisions"
                       />
                     </VCol>
-                    <VCol cols="12" sm="6" md="3">
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="3"
+                    >
                       <VSelect
                         v-model="attFilterSection"
                         :items="sectionOptions"
@@ -1182,7 +1830,11 @@ watch(activeTab, (tab) => {
                         placeholder="All sections"
                       />
                     </VCol>
-                    <VCol cols="12" sm="6" md="2">
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
                       <VBtn
                         variant="tonal"
                         color="primary"
@@ -1200,16 +1852,18 @@ watch(activeTab, (tab) => {
             </VCol>
 
             <!-- ── Attendance table ── -->
-            <VCol v-if="attendanceRows.length" cols="12">
-              <VCard variant="flat" rounded="lg">
+            <VCol
+              v-if="attendanceRows.length"
+              cols="12"
+            >
+              <VCard
+                variant="flat"
+                rounded="lg"
+              >
                 <VCardText>
-                  <div
-                    class="d-flex align-center justify-space-between flex-wrap gap-3 mb-4"
-                  >
+                  <div class="d-flex align-center justify-space-between flex-wrap gap-3 mb-4">
                     <div>
-                      <p
-                        class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
-                      >
+                      <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
                         Attendance Summary — {{ attendanceMonthLabel }}
                       </p>
                       <p class="text-caption text-medium-emphasis mt-1">
@@ -1262,11 +1916,14 @@ watch(activeTab, (tab) => {
                         >
                           {{ fmtMins(item.total_late_minutes) }}
                         </VChip>
-                        <span v-else class="text-medium-emphasis">—</span>
+                        <span
+                          v-else
+                          class="text-medium-emphasis"
+                        >—</span>
                         <VTooltip
                           v-if="
-                            item.has_adjustment &&
-                            item.dtr_late_minutes !== item.total_late_minutes
+                            item.has_adjustment
+                              && item.dtr_late_minutes !== item.total_late_minutes
                           "
                           location="top"
                         >
@@ -1277,8 +1934,9 @@ watch(activeTab, (tab) => {
                               size="x-small"
                               variant="tonal"
                               label
-                              >adj</VChip
                             >
+                              adj
+                            </VChip>
                           </template>
                           <span>
                             DTR: {{ fmtMins(item.dtr_late_minutes) }}
@@ -1286,16 +1944,12 @@ watch(activeTab, (tab) => {
                               + pass slip:
                               {{
                                 fmtMins(item.pass_slip_late_minutes)
-                              }}</template
-                            >
-                            <template
-                              v-if="item.absent_penalty_removed_minutes > 0"
-                            >
+                              }}</template>
+                            <template v-if="item.absent_penalty_removed_minutes > 0">
                               − Official Travel/Leave:
                               {{
                                 fmtMins(item.absent_penalty_removed_minutes)
-                              }}</template
-                            >
+                              }}</template>
                             = {{ fmtMins(item.total_late_minutes) }}
                           </span>
                         </VTooltip>
@@ -1312,12 +1966,15 @@ watch(activeTab, (tab) => {
                         >
                           {{ fmtMins(item.total_undertime_minutes) }}
                         </VChip>
-                        <span v-else class="text-medium-emphasis">—</span>
+                        <span
+                          v-else
+                          class="text-medium-emphasis"
+                        >—</span>
                         <VTooltip
                           v-if="
-                            item.has_adjustment &&
-                            item.dtr_undertime_minutes !==
-                              item.total_undertime_minutes
+                            item.has_adjustment
+                              && item.dtr_undertime_minutes
+                                !== item.total_undertime_minutes
                           "
                           location="top"
                         >
@@ -1328,8 +1985,9 @@ watch(activeTab, (tab) => {
                               size="x-small"
                               variant="tonal"
                               label
-                              >adj</VChip
                             >
+                              adj
+                            </VChip>
                           </template>
                           <span>
                             DTR: {{ fmtMins(item.dtr_undertime_minutes) }} =
@@ -1349,11 +2007,14 @@ watch(activeTab, (tab) => {
                         >
                           {{ item.total_absent_days }}
                         </VChip>
-                        <span v-else class="text-medium-emphasis">—</span>
+                        <span
+                          v-else
+                          class="text-medium-emphasis"
+                        >—</span>
                         <VTooltip
                           v-if="
-                            item.has_adjustment &&
-                            item.dtr_absent_days !== item.total_absent_days
+                            item.has_adjustment
+                              && item.dtr_absent_days !== item.total_absent_days
                           "
                           location="top"
                         >
@@ -1364,8 +2025,9 @@ watch(activeTab, (tab) => {
                               size="x-small"
                               variant="tonal"
                               label
-                              >adj</VChip
                             >
+                              adj
+                            </VChip>
                           </template>
                           DTR: {{ item.dtr_absent_days }} day(s) −
                           {{ item.dtr_absent_days - item.total_absent_days }}
@@ -1379,8 +2041,15 @@ watch(activeTab, (tab) => {
             </VCol>
 
             <!-- ── Empty state ── -->
-            <VCol v-else-if="!loadingAttendance" cols="12">
-              <VCard variant="tonal" rounded="lg" color="default">
+            <VCol
+              v-else-if="!loadingAttendance"
+              cols="12"
+            >
+              <VCard
+                variant="tonal"
+                rounded="lg"
+                color="default"
+              >
                 <VCardText class="text-center py-8">
                   <VIcon
                     icon="mdi-calendar-check-outline"
@@ -1401,22 +2070,32 @@ watch(activeTab, (tab) => {
           </VRow>
         </VWindowItem>
 
-        <!-- ══════════════════════════════════════════
+        <!--
+          ══════════════════════════════════════════
           TAB 2 — PUNCTUALITY
-    ══════════════════════════════════════════ -->
+          ══════════════════════════════════════════
+        -->
         <VWindowItem value="punctuality">
           <VRow>
             <!-- Period + controls -->
             <VCol cols="12">
-              <VCard variant="flat" rounded="lg">
+              <VCard
+                variant="flat"
+                rounded="lg"
+              >
                 <VCardText>
-                  <p
-                    class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3"
-                  >
+                  <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
                     Select Period
                   </p>
-                  <VRow dense align="center">
-                    <VCol cols="12" sm="6" md="2">
+                  <VRow
+                    dense
+                    align="center"
+                  >
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
                       <VSelect
                         v-model="punctualityMonth"
                         label="Month"
@@ -1429,7 +2108,11 @@ watch(activeTab, (tab) => {
                         hide-details
                       />
                     </VCol>
-                    <VCol cols="12" sm="6" md="2">
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
                       <VSelect
                         v-model="punctualityYear"
                         label="Year"
@@ -1486,7 +2169,10 @@ watch(activeTab, (tab) => {
             </VCol>
 
             <!-- Results: one card per division (shown after data loads) -->
-            <VCol v-if="punctualityDivisions.length" cols="12">
+            <VCol
+              v-if="punctualityDivisions.length"
+              cols="12"
+            >
               <!-- Export button at top -->
               <div class="d-flex justify-end mb-4">
                 <VBtn
@@ -1509,9 +2195,7 @@ watch(activeTab, (tab) => {
                 class="mb-4"
               >
                 <VCardText>
-                  <p
-                    class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3"
-                  >
+                  <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
                     {{ division.name }}
                   </p>
                   <VDataTable
@@ -1555,7 +2239,10 @@ watch(activeTab, (tab) => {
                     <template #item.name="{ item }">
                       <div class="d-flex align-center gap-2">
                         <span class="font-weight-medium">{{ item.name }}</span>
-                        <VTooltip v-if="item.has_adjustments" location="top">
+                        <VTooltip
+                          v-if="item.has_adjustments"
+                          location="top"
+                        >
                           <template #activator="{ props }">
                             <VChip
                               v-bind="props"
@@ -1568,10 +2255,8 @@ watch(activeTab, (tab) => {
                               adj
                             </VChip>
                           </template>
-                          <span
-                            >Absence(s) fully offset by Leave/Official
-                            Travel</span
-                          >
+                          <span>Absence(s) fully offset by Leave/Official
+                            Travel</span>
                         </VTooltip>
                       </div>
                     </template>
@@ -1610,8 +2295,15 @@ watch(activeTab, (tab) => {
             </VCol>
 
             <!-- Empty state -->
-            <VCol v-else-if="!loadingPunctuality" cols="12">
-              <VCard variant="tonal" rounded="lg" color="default">
+            <VCol
+              v-else-if="!loadingPunctuality"
+              cols="12"
+            >
+              <VCard
+                variant="tonal"
+                rounded="lg"
+                color="default"
+              >
                 <VCardText class="text-center py-8">
                   <VIcon
                     icon="mdi-clock-check-outline"
@@ -1634,22 +2326,32 @@ watch(activeTab, (tab) => {
           </VRow>
         </VWindowItem>
 
-        <!-- ══════════════════════════════════════════
+        <!--
+          ══════════════════════════════════════════
           TAB 3 — TARDINESS
-    ══════════════════════════════════════════ -->
+          ══════════════════════════════════════════
+        -->
         <VWindowItem value="tardiness">
           <VRow>
             <!-- Period + controls -->
             <VCol cols="12">
-              <VCard variant="flat" rounded="lg">
+              <VCard
+                variant="flat"
+                rounded="lg"
+              >
                 <VCardText>
-                  <p
-                    class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3"
-                  >
+                  <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
                     Select Period
                   </p>
-                  <VRow dense align="center">
-                    <VCol cols="12" sm="6" md="2">
+                  <VRow
+                    dense
+                    align="center"
+                  >
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
                       <VSelect
                         v-model="tardinessMonth"
                         label="Month"
@@ -1662,7 +2364,11 @@ watch(activeTab, (tab) => {
                         hide-details
                       />
                     </VCol>
-                    <VCol cols="12" sm="6" md="2">
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
                       <VSelect
                         v-model="tardinessYear"
                         label="Year"
@@ -1719,7 +2425,10 @@ watch(activeTab, (tab) => {
             </VCol>
 
             <!-- Results: two side-by-side report cards (shown after data loads) -->
-            <VCol v-if="tardinessDivisions.length" cols="12">
+            <VCol
+              v-if="tardinessDivisions.length"
+              cols="12"
+            >
               <!-- Export button at top -->
               <div class="d-flex justify-end mb-4">
                 <VBtn
@@ -1742,9 +2451,7 @@ watch(activeTab, (tab) => {
                 class="mb-4"
               >
                 <VCardText>
-                  <p
-                    class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3"
-                  >
+                  <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
                     {{ division.name }}
                   </p>
                   <VDataTable
@@ -1794,7 +2501,10 @@ watch(activeTab, (tab) => {
                     <template #item.name="{ item }">
                       <div class="d-flex align-center gap-2">
                         <span class="font-weight-medium">{{ item.name }}</span>
-                        <VTooltip v-if="item.has_adjustments" location="top">
+                        <VTooltip
+                          v-if="item.has_adjustments"
+                          location="top"
+                        >
                           <template #activator="{ props }">
                             <VChip
                               v-bind="props"
@@ -1852,8 +2562,15 @@ watch(activeTab, (tab) => {
             </VCol>
 
             <!-- Empty state -->
-            <VCol v-else-if="!loadingTardiness" cols="12">
-              <VCard variant="tonal" rounded="lg" color="default">
+            <VCol
+              v-else-if="!loadingTardiness"
+              cols="12"
+            >
+              <VCard
+                variant="tonal"
+                rounded="lg"
+                color="default"
+              >
                 <VCardText class="text-center py-8">
                   <VIcon
                     icon="mdi-clock-alert-outline"
@@ -2061,18 +2778,21 @@ watch(activeTab, (tab) => {
           </VRow>
         </VWindowItem>
 
-        <!-- ══════════════════════════════════════════
+        <!--
+          ══════════════════════════════════════════
           TAB 4 — PAYSLIP
-    ══════════════════════════════════════════ -->
+          ══════════════════════════════════════════
+        -->
         <VWindowItem value="payslip">
           <VRow>
             <!-- ── Period + controls ── -->
             <VCol cols="12">
-              <VCard variant="flat" rounded="lg">
+              <VCard
+                variant="flat"
+                rounded="lg"
+              >
                 <VCardText>
-                  <p
-                    class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3"
-                  >
+                  <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
                     Select Period
                   </p>
 
@@ -2106,11 +2826,20 @@ watch(activeTab, (tab) => {
                       </VBtn>
                     </template>
 
-                    <VCard rounded="lg" elevation="4">
+                    <VCard
+                      rounded="lg"
+                      elevation="4"
+                    >
                       <VCardText>
-                        <VRow dense align="center">
+                        <VRow
+                          dense
+                          align="center"
+                        >
                           <!-- FROM -->
-                          <VCol cols="12" sm="6">
+                          <VCol
+                            cols="12"
+                            sm="6"
+                          >
                             <p class="text-caption text-medium-emphasis mb-2">
                               <VIcon
                                 icon="mdi-calendar-plus-outline"
@@ -2146,7 +2875,10 @@ watch(activeTab, (tab) => {
                           </VCol>
 
                           <!-- TO -->
-                          <VCol cols="12" sm="6">
+                          <VCol
+                            cols="12"
+                            sm="6"
+                          >
                             <p class="text-caption text-medium-emphasis mb-2">
                               <VIcon
                                 icon="mdi-calendar-check-outline"
@@ -2215,8 +2947,15 @@ watch(activeTab, (tab) => {
                   </VMenu>
 
                   <!-- Search + Load row -->
-                  <VRow dense align="center">
-                    <VCol cols="12" sm="6" md="8">
+                  <VRow
+                    dense
+                    align="center"
+                  >
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="8"
+                    >
                       <VTextField
                         v-model="payslipSearch"
                         label="Search employee"
@@ -2229,7 +2968,11 @@ watch(activeTab, (tab) => {
                         :disabled="!payslipEmployees.length"
                       />
                     </VCol>
-                    <VCol cols="12" sm="6" md="3">
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="3"
+                    >
                       <VBtn
                         variant="tonal"
                         color="primary"
@@ -2248,17 +2991,19 @@ watch(activeTab, (tab) => {
             </VCol>
 
             <!-- ── Employee selection ── -->
-            <VCol v-if="payslipEmployees.length" cols="12">
-              <VCard variant="flat" rounded="lg">
+            <VCol
+              v-if="payslipEmployees.length"
+              cols="12"
+            >
+              <VCard
+                variant="flat"
+                rounded="lg"
+              >
                 <VCardText>
                   <!-- ── Header row: title + chips + select all toggle ── -->
-                  <div
-                    class="d-flex align-center justify-space-between flex-wrap gap-3 mb-3"
-                  >
+                  <div class="d-flex align-center justify-space-between flex-wrap gap-3 mb-3">
                     <div>
-                      <p
-                        class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0"
-                      >
+                      <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
                         Employees — {{ payslipMonthLabel }}
                       </p>
                       <p class="text-caption text-medium-emphasis mt-1">
@@ -2374,7 +3119,9 @@ watch(activeTab, (tab) => {
                       >
                         <template #label>
                           <div>
-                            <div class="text-body-2">{{ emp.full_name }}</div>
+                            <div class="text-body-2">
+                              {{ emp.full_name }}
+                            </div>
                             <div class="text-caption text-medium-emphasis">
                               {{ emp.position }}
                             </div>
@@ -2412,8 +3159,15 @@ watch(activeTab, (tab) => {
             </VCol>
 
             <!-- ── Empty state ── -->
-            <VCol v-else-if="!loadingEmployees" cols="12">
-              <VCard variant="tonal" rounded="lg" color="default">
+            <VCol
+              v-else-if="!loadingEmployees"
+              cols="12"
+            >
+              <VCard
+                variant="tonal"
+                rounded="lg"
+                color="default"
+              >
                 <VCardText class="text-center py-8">
                   <VIcon
                     icon="mdi-file-document-outline"
@@ -2433,10 +3187,253 @@ watch(activeTab, (tab) => {
             </VCol>
           </VRow>
         </VWindowItem>
+
+        <!--
+          ══════════════════════════════════════════
+          TAB 5 — REMITTANCES
+          ══════════════════════════════════════════
+        -->
+        <VWindowItem value="remittances">
+          <VRow>
+            <!-- ── Period + type filter ── -->
+            <VCol cols="12">
+              <VCard
+                variant="flat"
+                rounded="lg"
+              >
+                <VCardText>
+                  <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
+                    Select Period & Contribution Type
+                  </p>
+                  <VRow
+                    dense
+                    align="center"
+                  >
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
+                      <VSelect
+                        v-model="remittanceMonth"
+                        label="Month"
+                        :items="MONTH_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        variant="outlined"
+                        density="compact"
+                        prepend-inner-icon="mdi-calendar-month-outline"
+                        hide-details
+                      />
+                    </VCol>
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
+                      <VSelect
+                        v-model="remittanceYear"
+                        label="Year"
+                        :items="YEAR_ITEMS"
+                        variant="outlined"
+                        density="compact"
+                        prepend-inner-icon="mdi-calendar-outline"
+                        hide-details
+                      />
+                    </VCol>
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
+                      <VSelect
+                        v-model="remittanceType"
+                        label="Contribution Type"
+                        :items="REMITTANCE_TYPE_ITEMS"
+                        item-title="title"
+                        item-value="value"
+                        variant="outlined"
+                        density="compact"
+                        prepend-inner-icon="mdi-cash-multiple"
+                        hide-details
+                      />
+                    </VCol>
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
+                      <VSelect
+                        v-model="remFilterDivision"
+                        :items="divisionOptions"
+                        :loading="loadingEmployeeRefs"
+                        label="Division (optional)"
+                        variant="outlined"
+                        density="compact"
+                        prepend-inner-icon="mdi-office-building-outline"
+                        clearable
+                        hide-details
+                        placeholder="All divisions"
+                      />
+                    </VCol>
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
+                      <VSelect
+                        v-model="remFilterSection"
+                        :items="remSectionOptions"
+                        :disabled="!remFilterDivision"
+                        label="Section (optional)"
+                        variant="outlined"
+                        density="compact"
+                        prepend-inner-icon="mdi-account-group-outline"
+                        clearable
+                        hide-details
+                        placeholder="All sections"
+                      />
+                    </VCol>
+                    <VCol
+                      cols="12"
+                      sm="6"
+                      md="2"
+                    >
+                      <VBtn
+                        variant="tonal"
+                        color="primary"
+                        prepend-icon="mdi-magnify"
+                        :loading="loadingRemittance"
+                        block
+                        @click="fetchRemittance"
+                      >
+                        Load Data
+                      </VBtn>
+                    </VCol>
+                  </VRow>
+                </VCardText>
+              </VCard>
+            </VCol>
+
+            <!-- ── Remittance table ── -->
+            <VCol
+              v-if="remittanceRows.length"
+              cols="12"
+            >
+              <VCard
+                variant="flat"
+                rounded="lg"
+              >
+                <VCardText>
+                  <div class="d-flex align-center justify-space-between flex-wrap gap-3 mb-4">
+                    <div>
+                      <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-0">
+                        {{ remittanceType }} Remittance — {{ remittanceMonthLabel }}
+                      </p>
+                      <p class="text-caption text-medium-emphasis mt-1">
+                        {{ filteredRemittanceRows.length }} employees
+                      </p>
+                    </div>
+                    <div class="d-flex gap-2 align-center">
+                      <VBtn
+                        color="error"
+                        variant="outlined"
+                        prepend-icon="mdi-file-pdf-box"
+                        :loading="exportingRemittancePdf"
+                        :disabled="exportingRemittance"
+                        @click="exportRemittancePdf"
+                      >
+                        Export PDF
+                      </VBtn>
+                      <VBtn
+                        color="success"
+                        variant="outlined"
+                        prepend-icon="mdi-microsoft-excel"
+                        :loading="exportingRemittance"
+                        :disabled="exportingRemittancePdf"
+                        @click="exportRemittanceExcel"
+                      >
+                        Export Excel
+                      </VBtn>
+                    </div>
+                  </div>
+
+                  <VDataTable
+                    :headers="REMITTANCE_HEADERS"
+                    :items="filteredRemittanceRows"
+                    :items-per-page="15"
+                    density="compact"
+                    class="rounded-lg"
+                  >
+                    <template #item.wage="{ item }">
+                      ₱{{ item.wage.toFixed(2) }}
+                    </template>
+                    <template #item.contribution="{ item }">
+                      <VChip
+                        color="primary"
+                        size="x-small"
+                        variant="tonal"
+                        label
+                      >
+                        ₱{{ item.contribution.toFixed(2) }}
+                      </VChip>
+                    </template>
+                    <template #item.sss="{ item }">
+                      ₱{{ (item.sss ?? 0).toFixed(2) }}
+                    </template>
+                    <template #item.philhealth="{ item }">
+                      ₱{{ (item.philhealth ?? 0).toFixed(2) }}
+                    </template>
+                    <template #item.pag_ibig="{ item }">
+                      ₱{{ (item.pag_ibig ?? 0).toFixed(2) }}
+                    </template>
+                    <template #item.total_contribution="{ item }">
+                      <VChip
+                        color="primary"
+                        size="x-small"
+                        variant="tonal"
+                        label
+                      >
+                        ₱{{ (item.total_contribution ?? 0).toFixed(2) }}
+                      </VChip>
+                    </template>
+                  </VDataTable>
+                </VCardText>
+              </VCard>
+            </VCol>
+
+            <!-- ── Empty state ── -->
+            <VCol
+              v-else-if="!loadingRemittance"
+              cols="12"
+            >
+              <VCard
+                variant="tonal"
+                rounded="lg"
+                color="default"
+              >
+                <VCardText class="text-center py-8">
+                  <VIcon
+                    icon="mdi-cash-multiple"
+                    size="48"
+                    class="mb-3 text-medium-emphasis"
+                  />
+                  <p class="text-body-1 text-medium-emphasis">
+                    Select a period and contribution type, then click
+                    <strong>Load Data</strong>.
+                  </p>
+                  <p class="text-caption text-medium-emphasis mt-2">
+                    Shows SSS, PhilHealth, or Pag-IBIG contributions based on
+                    saved payroll batches.
+                  </p>
+                </VCardText>
+              </VCard>
+            </VCol>
+          </VRow>
+        </VWindowItem>
       </VWindow>
     </VContainer>
 
-    <!-- ── Alert ── -->
     <BaseAlert
       v-model="alertVisible"
       :message="alertMessage"

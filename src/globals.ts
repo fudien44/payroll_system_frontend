@@ -1,6 +1,6 @@
 interface Globals {
   api: string
-  
+
   reverb: {
     host: string
     port: number
