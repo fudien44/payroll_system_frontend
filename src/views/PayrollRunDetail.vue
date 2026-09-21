@@ -963,6 +963,13 @@ async function fetchEwtPreview() {
     if (data.success) {
       suggestedEwt.value = data.data.ewt;
       ewtBreakdown.value = data.data;
+      if (!ewtDirty.value) {
+       isAutoEwtUpdate.value = true;
+       editForm.value.ewt = data.data.ewt;
+       nextTick(() => {
+         isAutoEwtUpdate.value = false;
+       });
+     }
     }
   } catch {
     suggestedEwt.value = null;
@@ -1073,7 +1080,7 @@ async function confirmRecompute(forceConfirm = false) {
 function buildAutoRemarks(days: number, mins: number): string {
   const parts: string[] = [];
   if (days > 0) parts.push(`ABSENT ${days} DAY${days !== 1 ? "S" : ""}`);
-  if (mins > 0) parts.push(`${mins} MINS LATE`);
+  if (mins > 0) parts.push(`${mins} MINS LATE/UT`);
   return parts.join(", ");
 }
 
@@ -1089,7 +1096,7 @@ function buildAutoRemarksSplit(
       `ABSENT ${decDays} DAY${decDays !== 1 ? "S" : ""}-${editPriorMonthAbbr.value}`,
     );
   if (decMins > 0)
-    priorParts.push(`${decMins} MINS LATE-${editPriorMonthAbbr.value}`);
+    priorParts.push(`${decMins} MINS LATE/UT-${editPriorMonthAbbr.value}`);
 
   const currentParts: string[] = [];
   if (janDays > 0)
@@ -1097,7 +1104,7 @@ function buildAutoRemarksSplit(
       `ABSENT ${janDays} DAY${janDays !== 1 ? "S" : ""}-${editCurrentMonthAbbr.value}`,
     );
   if (janMins > 0)
-    currentParts.push(`${janMins} MINS LATE-${editCurrentMonthAbbr.value}`);
+    currentParts.push(`${janMins} MINS LATE/UT-${editCurrentMonthAbbr.value}`);
 
   const segments = [priorParts.join(", "), currentParts.join(", ")].filter(
     Boolean,
@@ -2651,6 +2658,7 @@ onMounted(async () => {
                         <th class="text-right">Absent Deduct</th>
                         <th class="text-right">Late/UT Deduct</th>
                         <th class="text-right">Gross Earned</th>
+                        <th class="text-right">EWT Tax</th>
                         <th class="text-right">PhilHealth</th>
                         <th class="text-right">Pag-IBIG</th>
                         <th class="text-right">SSS</th>
@@ -2810,6 +2818,9 @@ onMounted(async () => {
                           {{ fmt(emp.gross_earned) }}
                         </td>
                         <td class="text-right text-caption text-error">
+                          {{ emp.ewt > 0 ? fmt(emp.ewt) : "—" }}
+                        </td>
+                        <td class="text-right text-caption text-error">
                           {{ emp.philhealth > 0 ? fmt(emp.philhealth) : "—" }}
                         </td>
                         <td class="text-right text-caption text-error">
@@ -2907,7 +2918,7 @@ onMounted(async () => {
                           {{ fmt(secGroup.subtotal.gross) }}
                         </td>
                         <td
-                          colspan="6"
+                          colspan="7"
                           class="text-right text-caption font-weight-bold text-error"
                         >
                           Deductions:

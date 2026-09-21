@@ -247,7 +247,9 @@ const passSlipMinutesTotal = computed(() =>
 // )
 /* ── Split previews — now sourced from stored totals, not re-derived ── */
 const previewAbsentDays = computed(() => Number(props.item?.total_absent_days ?? 0))
-const previewLateMinutes = computed(() => Number(props.item?.total_late_minutes ?? 0))
+const previewLateMinutes = computed(() =>
+   Number(props.item?.total_late_minutes ?? 0) + Number(props.item?.total_undertime_minutes ?? 0)
+ )
 
 // Dec/Jan split for display only — still useful context, not the source of truth
 const carriedAbsentBaseline = computed(() => Number(props.item?.dtr_carried_over_absent_days ?? 0))
@@ -491,7 +493,7 @@ function showAlert(type: AlertType, message: string) {
                   <strong>{{ item?.dtr_absent_days ?? 0 }}</strong>
                 </div>
                 <div class="d-flex justify-space-between text-body-2 mt-1">
-                  <span class="text-medium-emphasis">Late Minutes</span>
+                  <span class="text-medium-emphasis">Late/UT Minutes</span>
                   <strong>{{ item?.dtr_late_minutes ?? 0 }}</strong>
                 </div>
                 <div class="d-flex justify-space-between text-body-2 mt-1">
@@ -523,7 +525,7 @@ function showAlert(type: AlertType, message: string) {
                 </div>
 
                 <div class="d-flex justify-space-between text-body-2 mt-1">
-                  <span class="text-medium-emphasis">Late Minutes</span>
+                  <span class="text-medium-emphasis">Late/UT Minutes</span>
                   <strong :class="compressedMinuteOffset > 0 ? 'text-success' : passSlipMinutesTotal > 0 ? 'text-warning' : ''">
                     {{ previewLateMinutes }}
                     <span v-if="compressedMinuteOffset > 0" class="text-caption text-success">
