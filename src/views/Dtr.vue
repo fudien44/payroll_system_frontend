@@ -86,6 +86,10 @@ interface AttendanceDay {
   pm_official_time: string | null;
   has_pass_slip: boolean;
   pass_slips: PassSlipEntry[];
+  has_rpo: boolean;
+  rpo_entries: RpoEntry[];
+  is_rpo_excused: boolean;
+  rpo_excused_value: number; //1=full day, 0.5=half day
 }
 
 interface PassSlipEntry {
@@ -125,6 +129,7 @@ interface DtrData {
   total_late_minutes: number;
   total_late_hours: number;
   total_absent_days: number;
+  total_rpo_excused_days: number;
   total_undertime_minutes: number;
   total_undertime_hours: number;
   regdays: number;
@@ -165,6 +170,16 @@ interface PeriodSummary {
   total_holidays: number;
   total_suspensions: number;
   already_saved: boolean;
+}
+
+interface RpoEntry {
+  id: number;
+  rpo_number: string | null;
+  remarks: string | null;
+  date_from: string;
+  date_to: string;
+  date_from_label: string;
+  date_to_label: string;
 }
 
 type AlertType = "success" | "error" | "warning" | "info";
@@ -637,6 +652,7 @@ function getRowClass(row: AttendanceRow): string {
   if (row.is_rest_day) return "dtr-row--fri-cmp";
   if (row.isSunday) return "dtr-row--sunday";
   if (row.isSaturday) return "dtr-row--saturday";
+  if (row.is_rpo_excused) return "dtr-row--rpo";
   if (row.is_absent) return "dtr-row--absent";
   if (row.is_half_day_absent) return "dtr-row--halfday";
   if (row.is_late_am || row.is_late_pm) return "dtr-row--late";
@@ -969,7 +985,9 @@ onUnmounted(() => {
         data-tour="calendar-reminder"
       >
         <strong>Reminder:</strong> Before saving DTR summaries, ensure all
-        <strong>holidays</strong>, <strong>suspensions</strong>, <strong>contract breaks</strong> and <strong>standard week exemptions</strong> for the period are set in the
+        <strong>holidays</strong>, <strong>suspensions</strong>,
+        <strong>contract breaks</strong> and
+        <strong>standard week exemptions</strong> for the period are set in the
         <strong>Calendar</strong> module. DTR summaries cannot be re-saved
         without going through Override, so missing calendar entries will require
         an override to correct. A <strong>3-minute cooldown</strong> applies
@@ -1313,6 +1331,15 @@ onUnmounted(() => {
                   dtrData.total_suspensions
                 }}</strong>
               </div>
+              <div
+                v-if="dtrData.total_rpo_excused_days > 0"
+                class="text-caption text-medium-emphasis"
+              >
+                RPO:
+                <strong class="text-indigo">{{
+                  dtrData.total_rpo_excused_days
+                }}</strong>
+              </div>
               <div class="text-caption text-medium-emphasis">
                 Late Hours:
                 <strong class="text-warning"
@@ -1419,6 +1446,10 @@ onUnmounted(() => {
               <div class="d-flex align-center gap-1">
                 <div class="dtr-legend dtr-legend--pass-slip" />
                 <span class="text-caption">Pass Slip</span>
+              </div>
+              <div class="d-flex align-center gap-1">
+                <div class="dtr-legend dtr-legend--rpo" />
+                <span class="text-caption">RPO (Official Travel)</span>
               </div>
               <div class="d-flex align-center gap-1">
                 <div class="dtr-legend dtr-legend--fri-cmp" />
@@ -1656,6 +1687,27 @@ onUnmounted(() => {
                             No Data Entry
                           </td>
                         </template>
+                        <template
+                          v-else-if="
+                            item.row.is_rpo_excused &&
+                            item.row.entry_count === 0
+                          "
+                        >
+                          <td
+                            colspan="5"
+                            class="text-center text-caption text-disabled"
+                          >
+                            RPO No.
+                            <span class="font-weight-medium">
+                              {{
+                                item.row.rpo_entries
+                                  .map((rpo) => rpo.rpo_number)
+                                  .filter(Boolean)
+                                  .join(", ") || "—"
+                              }}
+                            </span>
+                          </td>
+                        </template>
                         <template v-else>
                           <td
                             class="col-time text-caption"
@@ -1735,6 +1787,56 @@ onUnmounted(() => {
                             >
                               Present
                             </VChip>
+                            <VTooltip
+                              v-if="item.row.has_rpo"
+                              location="top"
+                              max-width="300"
+                              content-class="pass-slip-tooltip"
+                            >
+                              <template #activator="{ props }">
+                                <VChip
+                                  v-bind="props"
+                                  color="indigo"
+                                  size="x-small"
+                                  variant="tonal"
+                                  label
+                                >
+                                  <VIcon start size="12">mdi-airplane</VIcon>
+                                  RPO<template
+                                    v-if="
+                                      item.row.is_rpo_excused &&
+                                      item.row.rpo_excused_value === 0.5
+                                    "
+                                  >
+                                    ½ Day</template
+                                  >
+                                </VChip>
+                              </template>
+                              <div
+                                v-for="rpo in item.row.rpo_entries"
+                                :key="rpo.id"
+                                class="mb-1"
+                              >
+                                <div class="font-weight-medium">
+                                  RPO No. {{ rpo.rpo_number ?? "—" }}
+                                </div>
+                                <div>
+                                  {{ rpo.date_from_label }}
+                                  <template
+                                    v-if="rpo.date_from !== rpo.date_to"
+                                  >
+                                    – {{ rpo.date_to_label }}
+                                  </template>
+                                </div>
+                                <div v-if="rpo.remarks">{{ rpo.remarks }}</div>
+                              </div>
+                              <div
+                                v-if="item.row.is_rpo_excused"
+                                class="text-caption mt-1"
+                              >
+                                Excused — removed from absences
+                              </div>
+                            </VTooltip>
 
                             <VTooltip
                               v-if="item.row.has_pass_slip"
@@ -2259,5 +2361,11 @@ onUnmounted(() => {
   padding: 8px 12px;
   text-align: left;
   white-space: normal;
+}
+.dtr-row--rpo {
+  background: rgba(63, 81, 181, 0.08);
+}
+.dtr-legend--rpo {
+  background: rgba(63, 81, 181, 0.4);
 }
 </style>
