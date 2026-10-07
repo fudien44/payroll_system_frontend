@@ -90,6 +90,8 @@ interface AttendanceDay {
   rpo_entries: RpoEntry[];
   is_rpo_excused: boolean;
   rpo_excused_value: number; //1=full day, 0.5=half day
+  has_missing_punches: boolean;
+  missing_punch_slots: string[];
 }
 
 interface PassSlipEntry {
@@ -176,6 +178,7 @@ interface RpoEntry {
   id: number;
   rpo_number: string | null;
   remarks: string | null;
+  day_type: "whole" | "half_am" | "half_pm";
   date_from: string;
   date_to: string;
   date_from_label: string;
@@ -188,6 +191,12 @@ type AlertType = "success" | "error" | "warning" | "info";
    CONSTANTS
 ───────────────────────────────────────── */
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const SLOT_LABELS: Record<string, string> = {
+  in_am: "AM IN",
+  out_am: "AM OUT",
+  in_pm: "PM IN",
+  out_pm: "PM OUT",
+};
 const MONTH_SHORT_NAMES = [
   "Jan",
   "Feb",
@@ -653,6 +662,13 @@ function getRowClass(row: AttendanceRow): string {
   if (row.isSunday) return "dtr-row--sunday";
   if (row.isSaturday) return "dtr-row--saturday";
   if (row.is_rpo_excused) return "dtr-row--rpo";
+  if (
+    halfCoveredByRpo(row, "am") &&
+    halfCoveredByRpo(row, "pm") &&
+    row.entry_count === 0
+  ) {
+    return "dtr-row--rpo";
+  }
   if (row.is_absent) return "dtr-row--absent";
   if (row.is_half_day_absent) return "dtr-row--halfday";
   if (row.is_late_am || row.is_late_pm) return "dtr-row--late";
@@ -660,6 +676,48 @@ function getRowClass(row: AttendanceRow): string {
   return "";
 }
 
+function halfCoveredByRpo(row: AttendanceRow, half: "am" | "pm"): boolean {
+  return row.rpo_entries.some(
+    (e) =>
+      !e.day_type || e.day_type === "whole" || e.day_type === `half_${half}`,
+  );
+}
+
+function halfHasPunch(row: AttendanceRow, half: "am" | "pm"): boolean {
+  return half === "am"
+    ? !!(row.in_am || row.out_am)
+    : !!(row.in_pm || row.out_pm);
+}
+
+function rpoNumbersForHalf(row: AttendanceRow, half: "am" | "pm"): string {
+  return (
+    row.rpo_entries
+      .filter(
+        (e) =>
+          !e.day_type ||
+          e.day_type === "whole" ||
+          e.day_type === `half_${half}`,
+      )
+      .map((e) => e.rpo_number)
+      .filter(Boolean)
+      .join(", ") || "—"
+  );
+}
+
+function rpoChipSuffix(row: AttendanceRow): string {
+  const am = halfCoveredByRpo(row, "am");
+  const pm = halfCoveredByRpo(row, "pm");
+  if (am && pm) return "";
+  return am ? "½ Day (AM)" : "½ Day (PM)";
+}
+
+function rpoDayTypeLabel(t?: string): string {
+  return t === "half_am"
+    ? "Half day (AM)"
+    : t === "half_pm"
+      ? "Half day (PM)"
+      : "Whole day";
+}
 /* ─────────────────────────────────────────
    API
 ───────────────────────────────────────── */
@@ -1689,7 +1747,8 @@ onUnmounted(() => {
                         </template>
                         <template
                           v-else-if="
-                            item.row.is_rpo_excused &&
+                            halfCoveredByRpo(item.row, 'am') &&
+                            halfCoveredByRpo(item.row, 'pm') &&
                             item.row.entry_count === 0
                           "
                         >
@@ -1698,35 +1757,76 @@ onUnmounted(() => {
                             class="text-center text-caption text-disabled"
                           >
                             RPO No.
-                            <span class="font-weight-medium">
-                              {{
-                                item.row.rpo_entries
-                                  .map((rpo) => rpo.rpo_number)
-                                  .filter(Boolean)
-                                  .join(", ") || "—"
-                              }}
-                            </span>
+                            <span class="font-weight-medium">{{
+                              rpoNumbersForHalf(item.row, "am")
+                            }}</span>
                           </td>
                         </template>
                         <template v-else>
+                          <!-- AM half -->
                           <td
-                            class="col-time text-caption"
-                            :class="{ 'text-warning': item.row.is_late_am }"
+                            v-if="
+                              halfCoveredByRpo(item.row, 'am') &&
+                              !halfHasPunch(item.row, 'am')
+                            "
+                            colspan="2"
+                            class="text-center text-caption text-indigo dtr-cell--rpo"
                           >
-                            {{ item.row.in_am || "—" }}
+                            RPO No.
+                            <span class="font-weight-medium">{{
+                              rpoNumbersForHalf(item.row, "am")
+                            }}</span>
+                            (AM)
                           </td>
-                          <td class="col-time text-caption">
-                            {{ item.row.out_am || "—" }}
-                          </td>
+                          <template v-else>
+                            <td
+                              class="col-time text-caption"
+                              :class="{ 'text-warning': item.row.is_late_am }"
+                            >
+                              {{ item.row.in_am || "—" }}
+                            </td>
+                            <td
+                              class="col-time text-caption"
+                              :class="{
+                                'text-info': item.row.undertime_minutes_am > 0,
+                              }"
+                            >
+                              {{ item.row.out_am || "—" }}
+                            </td>
+                          </template>
+
+                          <!-- PM half -->
                           <td
-                            class="col-time text-caption"
-                            :class="{ 'text-warning': item.row.is_late_pm }"
+                            v-if="
+                              halfCoveredByRpo(item.row, 'pm') &&
+                              !halfHasPunch(item.row, 'pm')
+                            "
+                            colspan="2"
+                            class="text-center text-caption text-indigo dtr-cell--rpo"
                           >
-                            {{ item.row.in_pm || "—" }}
+                            RPO No.
+                            <span class="font-weight-medium">{{
+                              rpoNumbersForHalf(item.row, "pm")
+                            }}</span>
+                            (PM)
                           </td>
-                          <td class="col-time text-caption">
-                            {{ item.row.out_pm || "—" }}
-                          </td>
+                          <template v-else>
+                            <td
+                              class="col-time text-caption"
+                              :class="{ 'text-warning': item.row.is_late_pm }"
+                            >
+                              {{ item.row.in_pm || "—" }}
+                            </td>
+                            <td
+                              class="col-time text-caption"
+                              :class="{
+                                'text-info': item.row.undertime_minutes_pm > 0,
+                              }"
+                            >
+                              {{ item.row.out_pm || "—" }}
+                            </td>
+                          </template>
+
                           <td class="col-hours text-caption font-weight-medium">
                             {{
                               item.row.total_hours
@@ -1774,6 +1874,33 @@ onUnmounted(() => {
                             >
                               UT {{ item.row.total_undertime_minutes }}m
                             </VChip>
+                            <VTooltip
+                              v-if="item.row.has_missing_punches"
+                              location="top"
+                            >
+                              <template #activator="{ props }">
+                                <VChip
+                                  v-bind="props"
+                                  color="orange"
+                                  size="x-small"
+                                  variant="tonal"
+                                  label
+                                >
+                                  <VIcon start size="12"
+                                    >mdi-alert-outline</VIcon
+                                  >
+                                  Missing punch
+                                </VChip>
+                              </template>
+                              <span>
+                                Missing:
+                                {{
+                                  item.row.missing_punch_slots
+                                    .map((s) => SLOT_LABELS[s])
+                                    .join(", ")
+                                }}
+                              </span>
+                            </VTooltip>
                             <VChip
                               v-if="
                                 !item.row.is_absent &&
@@ -1802,13 +1929,8 @@ onUnmounted(() => {
                                   label
                                 >
                                   <VIcon start size="12">mdi-airplane</VIcon>
-                                  RPO<template
-                                    v-if="
-                                      item.row.is_rpo_excused &&
-                                      item.row.rpo_excused_value === 0.5
-                                    "
-                                  >
-                                    ½ Day</template
+                                  RPO<template v-if="rpoChipSuffix(item.row)">
+                                    {{ rpoChipSuffix(item.row) }}</template
                                   >
                                 </VChip>
                               </template>
@@ -1817,8 +1939,8 @@ onUnmounted(() => {
                                 :key="rpo.id"
                                 class="mb-1"
                               >
-                                <div class="font-weight-medium">
-                                  RPO No. {{ rpo.rpo_number ?? "—" }}
+                                <div class="text-caption">
+                                  {{ rpoDayTypeLabel(rpo.day_type) }}
                                 </div>
                                 <div>
                                   {{ rpo.date_from_label }}
@@ -2367,5 +2489,8 @@ onUnmounted(() => {
 }
 .dtr-legend--rpo {
   background: rgba(63, 81, 181, 0.4);
+}
+.dtr-cell--rpo {
+  background: rgba(63, 81, 181, 0.08);
 }
 </style>
