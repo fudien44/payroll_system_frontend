@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import BaseTable from '@/components/base/BaseTable.vue'
 import axios from '@axios'
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 interface AuditLogRow {
   id: number
@@ -18,9 +17,10 @@ interface AuditLogRow {
 
 interface FilterOptions {
   modules: string[]
-  module_actions: { module: string; action: string }[]   // CHANGED from actions: string[]
+  module_actions: { module: string; action: string }[]
   actors: { user_id: number; username: string }[]
 }
+
 const logs = ref<AuditLogRow[]>([])
 const totalLogs = ref(0)
 const loading = ref(false)
@@ -33,6 +33,16 @@ const filters = ref({
   date_from: null as string | null,
   date_to: null as string | null,
 })
+
+const page = ref(1)
+const perPage = ref(50)
+const perPageOptions = [
+  { value: 25, title: '25' },
+  { value: 50, title: '50' },
+  { value: 100, title: '100' },
+  { value: 200, title: '200' }, // backend max is 200
+]
+
 const availableActions = computed(() => {
   const pairs = filterOptions.value.module_actions
   const scoped = filters.value.module
@@ -40,15 +50,15 @@ const availableActions = computed(() => {
     : pairs
   return [...new Set(scoped.map(p => p.action))]
 })
-const page = ref(1)
-const perPage = ref(50)
 
+// Server returns rows ordered by created_at desc; client-side sorting would
+// only reorder the current page, so sorting is disabled.
 const headers = [
-  { title: 'Date/Time', key: 'created_at' },
-  { title: 'User', key: 'username' },
-  { title: 'Module', key: 'module' },
-  { title: 'Action', key: 'action' },
-  { title: 'Description', key: 'description' },
+  { title: 'Date/Time', key: 'created_at', sortable: false },
+  { title: 'User', key: 'username', sortable: false },
+  { title: 'Module', key: 'module', sortable: false },
+  { title: 'Action', key: 'action', sortable: false },
+  { title: 'Description', key: 'description', sortable: false },
 ]
 
 const moduleLabels: Record<string, string> = {
@@ -71,7 +81,11 @@ function formatDateTime(dt: string) {
   })
 }
 
+// Guards against an older, slower response overwriting a newer one
+let requestId = 0
+
 async function fetchLogs() {
+  const current = ++requestId
   loading.value = true
   try {
     const { data } = await axios.get('/api/audit-logs', {
@@ -85,10 +99,11 @@ async function fetchLogs() {
         per_page: perPage.value,
       },
     })
-    logs.value = data.data.data          // Laravel paginator shape: { data: { data: [...], total, ... } }
+    if (current !== requestId) return
+    logs.value = data.data.data
     totalLogs.value = data.data.total
   } finally {
-    loading.value = false
+    if (current === requestId) loading.value = false
   }
 }
 
@@ -97,16 +112,25 @@ async function fetchFilterOptions() {
   filterOptions.value = data.data
 }
 
-function resetFilters() {
-  filters.value = { module: null, action: null, user_id: null, date_from: null, date_to: null }
-  page.value = 1
+// Clear action in the same tick as the module change, so it's one fetch
+function onModuleChange() {
+  filters.value.action = null
 }
 
-watch(filters, () => { page.value = 1; fetchLogs() }, { deep: true })
-watch(page, fetchLogs)
-watch(() => filters.value.module, () => {
-  filters.value.action = null
-})
+function resetFilters() {
+  filters.value = { module: null, action: null, user_id: null, date_from: null, date_to: null }
+}
+
+// Filter change: go back to page 1. If already on page 1, fetch directly;
+// otherwise the page watcher below does the fetch (avoids a double request).
+watch(filters, () => {
+  if (page.value !== 1) page.value = 1
+  else fetchLogs()
+}, { deep: true })
+
+// Page or per-page change (VDataTableServer may change both in one tick → one fetch)
+watch([page, perPage], fetchLogs)
+
 onMounted(() => {
   fetchFilterOptions()
   fetchLogs()
@@ -124,17 +148,18 @@ onMounted(() => {
             label="Module"
             clearable
             density="compact"
+            @update:model-value="onModuleChange"
           />
         </VCol>
         <VCol cols="12" sm="3">
-        <VSelect
-          v-model="filters.action"
-          :items="availableActions"
-          label="Action"
-          clearable
-          density="compact"
-        />
-      </VCol>
+          <VSelect
+            v-model="filters.action"
+            :items="availableActions"
+            label="Action"
+            clearable
+            density="compact"
+          />
+        </VCol>
         <VCol cols="12" sm="3">
           <VSelect
             v-model="filters.user_id"
@@ -155,13 +180,27 @@ onMounted(() => {
         </VCol>
       </VRow>
 
-      <BaseTable
+      <VDataTableServer
+        v-model:page="page"
+        v-model:items-per-page="perPage"
         :headers="headers"
         :items="logs"
+        :items-length="totalLogs"
+        :items-per-page-options="perPageOptions"
         :loading="loading"
-        :items-per-page="perPage"
-        :searchable="false"
+        class="text-no-wrap"
       >
+        <template #loading>
+          <VSkeletonLoader type="table-row@5" />
+        </template>
+
+        <template #no-data>
+          <div class="text-center py-8">
+            <VIcon icon="mdi-database-off-outline" size="48" color="medium-emphasis" class="mb-3" />
+            <p class="text-medium-emphasis">No records found</p>
+          </div>
+        </template>
+
         <template #item.created_at="{ item }">
           {{ formatDateTime(item.created_at) }}
         </template>
@@ -171,14 +210,7 @@ onMounted(() => {
         <template #item.module="{ item }">
           {{ formatModule(item.module) }}
         </template>
-      </BaseTable>
-
-      <div class="d-flex justify-end mt-4">
-        <VPagination
-          v-model="page"
-          :length="Math.ceil(totalLogs / perPage)"
-        />
-      </div>
+      </VDataTableServer>
     </VCardText>
   </VCard>
 </template>

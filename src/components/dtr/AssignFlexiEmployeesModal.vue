@@ -5,6 +5,8 @@ interface Employee {
   id: number;
   full_name: string;
   position: string | null;
+  division_id: number | null;   // ← add
+  section_id: number | null; 
   division: string | null;
   section: string | null;
   emp_type: string | null;
