@@ -30,6 +30,7 @@ interface PayrollRun {
   division_name: string;
   section_name: string | null; // NEW: backend already returns this, type was just missing it
   fund_cluster: string;
+  charging_labels?: string[];
   saa_no: string | null;
   ors_no: string | null;
   dv_no: string | null;
@@ -167,6 +168,7 @@ const filteredItems = computed(() =>
       ...r,
       period: `${MONTH_NAMES[r.period_month - 1]} ${r.period_year}`,
       netPayDisp: fmt(r.total_net_pay),
+      chargingText: (r.charging_labels ?? []).join(", "),
     })),
 );
 
@@ -715,14 +717,7 @@ onMounted(() => {
         :loading="loading"
         :items-per-page="10"
         searchable
-        :filter-keys="[
-          'payroll_no',
-          'period',
-          'division_name',
-          'section_name',
-          'fund_cluster',
-          'status',
-        ]"
+        :filter-keys="['payroll_no','period','division_name','section_name','fund_cluster','chargingText','status']"
         @edit="openDetail"
         @delete="openDeleteConfirm"
       >
@@ -767,6 +762,15 @@ onMounted(() => {
             </div>
           </div>
         </template>
+
+        <template #item.fund_cluster="{ item }">
+        <div class="d-flex flex-wrap gap-1">
+          <VChip
+            v-for="fc in (item.charging_labels?.length ? item.charging_labels : [item.fund_cluster])"
+            :key="fc" size="x-small" variant="tonal" label
+          >{{ fc || "—" }}</VChip>
+        </div>
+      </template>
 
         <!-- Employee count -->
         <template #item.employee_count="{ item }">

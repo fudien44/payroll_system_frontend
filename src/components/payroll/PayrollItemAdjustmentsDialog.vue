@@ -2,6 +2,7 @@
 import BaseAlert from '@/components/base/BaseAlert.vue'
 import AdjustmentDatePicker from '@/components/payroll/AdjustmentDatePicker.vue'
 import axios from '@axios'
+import { defineEmits, defineProps, } from 'vue'
 
 /* ─────────────────────────────────────────
    TYPES
@@ -47,7 +48,7 @@ interface BatchItem {
 
 interface Adjustment {
   id:                   number
-  type:                 'pass_slip' | 'official_travel' | 'leave' | 'contract_break'
+  type: 'pass_slip' | 'official_travel' | 'leave' | 'contract_break' | 'rpo'
   date:                 string
   date_to:              string | null
   minutes:              number
@@ -133,6 +134,8 @@ const BLANK_ROW = (): BatchRow => ({
 const rows      = ref<BatchRow[]>([BLANK_ROW()])
 const rowErrors = ref<Record<number, Record<string, string>>>({})
 
+const LABEL_ONLY_TYPES = ['contract_break', 'rpo']
+
 function addRow() {
   rows.value.push(BLANK_ROW())
 }
@@ -186,13 +189,13 @@ function isCarriedOverDate(dateStr: string): boolean {
 // straight from the backend's enrichAdjustment().
 const currentWholeDayCount = computed(() =>
   adjustments.value
-    .filter(a => a.is_whole_day && a.type !== 'contract_break')
+    .filter(a => a.is_whole_day && !LABEL_ONLY_TYPES.includes(a.type))
     .reduce((sum, a) => sum + (a.days_in_month - (a.carried_over_days ?? 0)), 0)
 )
 
 const carriedWholeDayCount = computed(() =>
   adjustments.value
-    .filter(a => a.is_whole_day && a.type !== 'contract_break')
+    .filter(a => a.is_whole_day && !LABEL_ONLY_TYPES.includes(a.type))
     .reduce((sum, a) => sum + (a.carried_over_days ?? 0), 0)
 )
 
@@ -200,7 +203,7 @@ const carriedWholeDayCount = computed(() =>
 // (enrichAdjustment only accumulates it when inCurrentPeriod is true).
 const currentCompressedMinuteOffset = computed(() =>
   adjustments.value
-    .filter(a => a.is_whole_day && a.type !== 'contract_break')
+    .filter(a => a.is_whole_day && !LABEL_ONLY_TYPES.includes(a.type))
     .reduce((sum, a) => sum + (a.compressed_mins_offset ?? 0), 0)
 )
 
@@ -278,6 +281,7 @@ const typeLabel = (type: string) => {
   if (type === 'official_travel') return 'Official Travel'
   if (type === 'leave')           return 'Leave'
   if (type === 'contract_break')  return 'Contract Break'
+  if (type === 'rpo') return 'RPO (Official Travel)'
   return type
 }
 
@@ -286,6 +290,7 @@ const typeColor = (type: string) => {
   if (type === 'official_travel') return 'blue'
   if (type === 'leave')           return 'teal'
   if (type === 'contract_break')  return 'grey-darken-1'
+  if (type === 'rpo') return 'indigo' 
   return 'grey'
 }
 
@@ -294,6 +299,7 @@ const typeIcon = (type: string) => {
   if (type === 'official_travel') return 'mdi-briefcase-outline'
   if (type === 'leave')           return 'mdi-calendar-check-outline'
   if (type === 'contract_break')  return 'mdi-calendar-remove-outline'
+  if (type === 'rpo') return 'mdi-airplane'
   return 'mdi-help-circle-outline'
 }
 
@@ -642,9 +648,10 @@ function showAlert(type: AlertType, message: string) {
                 </td>
                 <td class="text-caption text-medium-emphasis" style="max-width: 160px; white-space: pre-wrap;">
                   {{ adj.notes || '—' }}
+                  <div v-if="adj.type === 'rpo'" class="text-indigo">Already excused in DTR — no deduction change</div>
                 </td>
                 <td class="text-center">
-                  <VBtn v-if="!item?.manual_override_at" icon size="x-small" variant="text" color="error"
+                  <VBtn v-if="!item?.manual_override_at && adj.type !== 'rpo'" icon size="x-small" variant="text" color="error"
                   :loading="deleting && deleteTarget?.id === adj.id"
                   @click="deleteTarget = adj">
                   <VIcon size="14">mdi-delete-outline</VIcon>

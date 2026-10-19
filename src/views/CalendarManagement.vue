@@ -30,8 +30,7 @@
   <VListItem prepend-icon="mdi-calendar-remove-outline" title="Contract Break Batch" @click="openBatchDialog()" />
   <VListItem prepend-icon="mdi-account-clock-outline" title="Individual Contract Break" @click="openCustomBreakDialog()" />
   <VDivider class="my-1" />
-  <VListItem prepend-icon="mdi-calendar-clock-outline" title="Standard Week Batch" @click="openStandardWeekBatchDialog()" />
-  <VListItem prepend-icon="mdi-account-clock" title="Individual Standard Week" @click="openCustomStandardWeekDialog()" />
+  <VListItem prepend-icon="mdi-account-group-outline" title="Standard Week Section" @click="openSectionEntryCreateDialog()" />
 </VList>
   </VMenu>
 </div>
@@ -149,6 +148,7 @@
                 class="cm-cell"
                 :class="cellClasses(cell, week.isCompressed)"
                 @click="cell.date && !cell.isWeekend && onCellClick(cell)"
+                :title="cell.date ? cellTooltip(cell) : ''"
               >
                 <template v-if="cell.date">
                   <span class="cm-cell-num">{{ cell.date.getDate() }}</span>
@@ -308,7 +308,73 @@
         <div class="cm-card">
           <div class="cm-card-header">
             <h3 class="cm-card-title">Standard Week Exemptions</h3>
+            <VBtn size="x-small" variant="tonal" color="indigo" prepend-icon="mdi-plus" @click="openSectionEntryCreateDialog()">
+              Section
+            </VBtn>
           </div>
+
+          <!-- Section entries — searchable + paginated -->
+          <VTextField
+            v-if="sectionEntries.length"
+            v-model="sectionEntrySearch"
+            placeholder="Search section or division"
+            density="compact"
+            variant="outlined"
+            prepend-inner-icon="mdi-magnify"
+            hide-details
+            clearable
+            class="mb-2"
+          />
+
+          <VProgressLinear v-if="sectionEntriesLoading && !sectionEntries.length" indeterminate color="indigo" height="2" />
+
+          <div
+            v-for="se in pagedSectionEntries"
+            :key="se.id"
+            class="cm-se-item"
+            :class="{ 'cm-se-item--empty': !se.batch_count && !se.individual_count }"
+            @click="openSectionDialog(se)"
+          >
+            <div class="cm-se-item-text">
+              <span class="cm-se-item-name" :title="se.section_name">{{ se.section_name }}</span>
+              <span class="cm-se-item-div" :title="se.division_name ?? ''">{{ se.section_shortcode ?? se.division_name ?? '—' }}</span>
+            </div>
+            <div class="cm-se-item-meta">
+              <VChip size="x-small" color="indigo" variant="tonal" :title="`Batches with weeks in ${viewYear}`">
+                <VIcon start size="11">mdi-calendar-clock-outline</VIcon>
+                {{ se.batch_count }}
+              </VChip>
+              <VChip size="x-small" color="primary" variant="tonal" :title="`Employees with individual weeks in ${viewYear}`">
+                <VIcon start size="11">mdi-account-clock</VIcon>
+                {{ se.individual_count }}
+              </VChip>
+              <VBtn icon size="x-small" variant="text" color="error" title="Delete section entry" @click.stop="confirmRemoveSectionEntry(se)">
+                <VIcon size="15">mdi-delete-outline</VIcon>
+              </VBtn>
+            </div>
+          </div>
+
+          <p v-if="!sectionEntriesLoading && !sectionEntries.length" class="cm-empty-text">
+            No section entries yet. Click <strong>+ Section</strong> to create one.
+          </p>
+          <p v-else-if="sectionEntries.length && !filteredSectionEntries.length" class="cm-empty-text">
+            No matching section.
+          </p>
+
+          <div v-if="sectionEntryPageCount > 1" class="cm-se-pager">
+            <span class="text-caption text-medium-emphasis">
+              {{ sectionEntryRangeLabel }}
+            </span>
+            <div class="d-flex align-center">
+              <VBtn icon="mdi-chevron-left" size="x-small" variant="text" :disabled="sectionEntryPage <= 1" @click="sectionEntryPage--" />
+              <span class="text-caption">{{ sectionEntryPage }} / {{ sectionEntryPageCount }}</span>
+              <VBtn icon="mdi-chevron-right" size="x-small" variant="text" :disabled="sectionEntryPage >= sectionEntryPageCount" @click="sectionEntryPage++" />
+            </div>
+          </div>
+
+          <!-- Legacy (unassigned) items — older batches/individuals not tied to a section -->
+          <template v-if="standardWeekBatchesForYear.length || customStandardWeekExemptionsForYear.length">
+          <p class="cm-list-section-label mt-4">Unassigned (legacy)</p>
 
           <div v-if="standardWeekBatchesForYear.length">
             <div
@@ -338,9 +404,8 @@
             </div>
           </div>
 
-          <p v-else class="cm-empty-text">No standard-week exemptions for {{ viewYear }}.</p>
          <template v-if="customStandardWeekExemptionsForYear.length">
-          <p class="cm-list-section-label mt-3">Individual</p>
+          <p class="cm-list-section-label mt-3">Individual (legacy)</p>
           <div
             v-for="ex in customStandardWeekExemptionsForYear"
             :key="ex.emp_id"
@@ -361,6 +426,7 @@
             </div>
           </div>
         </template>
+          </template>
       </div>
 
         <!-- Holidays -->
@@ -381,7 +447,10 @@
                   <VChip size="x-small" color="error" variant="tonal" label>
                     {{ formatDisplayDate(h.date) }}
                   </VChip>
-                  <span class="cm-list-item-label">{{ h.label }}</span>
+                  <div class="cm-list-item-text">
+                    <span class="cm-list-item-label">{{ h.label }}</span>
+                    <span v-if="h.reference" class="cm-list-item-ref">{{ h.reference }}</span>
+                  </div>
                 </div>
                 <div class="cm-list-item-actions">
                   <VBtn icon size="x-small" variant="text" color="primary" @click="openHolidayDialog(h)">
@@ -402,14 +471,17 @@
                 class="cm-list-item"
               >
                 <div class="cm-list-item-info">
-                  <VChip size="x-small" color="warning" variant="tonal" label>
-                    {{ formatDisplayDate(h.date) }}
-                  </VChip>
+                <VChip size="x-small" color="warning" variant="tonal" label>
+                  {{ formatDisplayDate(h.date) }}
+                </VChip>
+                <div class="cm-list-item-text">
                   <span class="cm-list-item-label">
                     {{ h.label }}
                     <VChip v-if="h.is_half_day" size="x-small" color="purple" variant="tonal" class="ml-1">½</VChip>
                   </span>
+                  <span v-if="h.reference" class="cm-list-item-ref">{{ h.reference }}</span>
                 </div>
+              </div>
                 <div class="cm-list-item-actions">
                   <VBtn icon size="x-small" variant="text" color="primary" @click="openHolidayDialog(h)">
                     <VIcon size="15">mdi-pencil-outline</VIcon>
@@ -438,14 +510,17 @@
               class="cm-list-item"
             >
               <div class="cm-list-item-info">
-                <VChip size="x-small" color="success" variant="tonal" label>
-                  {{ formatDisplayDate(s.date) }}
-                </VChip>
+              <VChip size="x-small" color="success" variant="tonal" label>
+                {{ formatDisplayDate(s.date) }}
+              </VChip>
+              <div class="cm-list-item-text">
                 <span class="cm-list-item-label">
                   {{ s.label }}
                   <VChip v-if="s.is_half_day" size="x-small" color="purple" variant="tonal" class="ml-1">½</VChip>
                 </span>
+                <span v-if="s.reference" class="cm-list-item-ref">{{ s.reference }}</span>
               </div>
+            </div>
               <div class="cm-list-item-actions">
                 <VBtn icon size="x-small" variant="text" color="primary" @click="openSuspensionDialog(s)">
                   <VIcon size="15">mdi-pencil-outline</VIcon>
@@ -520,6 +595,19 @@
               hide-details="auto"
             />
           </div>
+
+          <div class="cm-field mb-3">
+          <label class="cm-label">Reference</label>
+          <VTextField
+            v-model="holidayDialog.reference"
+            placeholder="e.g. Proc. No. 727, s. 2024"
+            density="compact"
+            variant="outlined"
+            prepend-inner-icon="mdi-file-document-outline"
+            maxlength="150"
+            hide-details="auto"
+          />
+        </div>
 
           <div class="cm-field mb-3">
             <label class="cm-label">Holiday Type <span class="cm-required">*</span></label>
@@ -667,6 +755,19 @@
               hide-details="auto"
             />
           </div>
+
+          <div class="cm-field mb-3">
+          <label class="cm-label">Reference</label>
+          <VTextField
+            v-model="suspensionDialog.reference"
+            placeholder="e.g. MC No. 12, s. 2026"
+            density="compact"
+            variant="outlined"
+            prepend-inner-icon="mdi-file-document-outline"
+            maxlength="150"
+            hide-details="auto"
+          />
+        </div>
 
           <!-- Half-day toggle for suspensions -->
           <div class="cm-field">
@@ -1684,6 +1785,124 @@
       </VCard>
     </VDialog>
 
+    <!-- ── Standard Week Section: create entry ───────────────────────────── -->
+    <VDialog v-model="sectionEntryCreateDialog.visible" max-width="440" persistent>
+      <VCard rounded="lg">
+        <VCardText class="pa-6">
+          <div class="d-flex align-center gap-3 mb-4">
+            <VAvatar color="indigo" variant="tonal" size="44" rounded="lg">
+              <VIcon icon="mdi-account-group-outline" size="22" />
+            </VAvatar>
+            <div>
+              <div class="text-body-1 font-weight-medium">Add Standard Week Section</div>
+              <div class="text-caption text-medium-emphasis">
+                One entry per section — reuse it every payroll month
+              </div>
+            </div>
+          </div>
+
+          <div class="cm-field mb-3">
+            <label class="cm-label">Division <span class="cm-required">*</span></label>
+            <VSelect
+              v-model="sectionEntryCreateDialog.divisionId"
+              :items="sectionEntryCreateDialog.divisions"
+              item-title="description"
+              item-value="id"
+              :loading="sectionEntryCreateDialog.loadingDivisions"
+              placeholder="Select division"
+              density="compact"
+              variant="outlined"
+              hide-details="auto"
+            />
+          </div>
+
+          <div class="cm-field mb-3">
+            <label class="cm-label">Section <span class="cm-required">*</span></label>
+            <VSelect
+              v-model="sectionEntryCreateDialog.sectionId"
+              :items="sectionEntryCreateOptions"
+              item-title="title"
+              item-value="value"
+              item-props="props"
+              :loading="sectionEntryCreateDialog.loadingSections"
+              :disabled="!sectionEntryCreateDialog.divisionId"
+              placeholder="Select section"
+              density="compact"
+              variant="outlined"
+              hide-details="auto"
+            />
+            <p class="text-caption text-medium-emphasis mt-1 mb-0">
+              Sections that already have an entry are disabled — open them from the sidebar.
+            </p>
+          </div>
+
+          <div class="cm-field">
+            <label class="cm-label">Notes</label>
+            <VTextField
+              v-model="sectionEntryCreateDialog.notes"
+              placeholder="Optional"
+              density="compact"
+              variant="outlined"
+              prepend-inner-icon="mdi-note-outline"
+              hide-details="auto"
+            />
+          </div>
+
+          <VAlert v-if="sectionEntryCreateDialog.error" type="error" variant="tonal" density="compact" class="mt-3">
+            {{ sectionEntryCreateDialog.error }}
+          </VAlert>
+        </VCardText>
+        <VDivider />
+        <VCardActions class="justify-end pa-4 gap-2">
+          <VBtn variant="text" :disabled="sectionEntryCreateDialog.loading" @click="sectionEntryCreateDialog.visible = false">
+            Cancel
+          </VBtn>
+          <VBtn color="indigo" variant="tonal" :loading="sectionEntryCreateDialog.loading" prepend-icon="mdi-plus" @click="submitSectionEntryCreate">
+            Create &amp; Open
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
+    <!-- ── Standard Week Section: delete entry ───────────────────────────── -->
+    <VDialog v-model="sectionEntryDeleteDialog.visible" max-width="420">
+      <VCard rounded="lg">
+        <VCardText class="pa-6">
+          <div class="d-flex align-center gap-3 mb-4">
+            <VAvatar color="error" variant="tonal" size="44" rounded="lg">
+              <VIcon icon="mdi-delete-outline" size="22" />
+            </VAvatar>
+            <div>
+              <div class="text-body-1 font-weight-medium">Delete section entry?</div>
+              <div class="text-caption text-medium-emphasis">This action cannot be undone.</div>
+            </div>
+          </div>
+          <p class="text-body-2 text-medium-emphasis mb-0">
+            <strong class="text-high-emphasis">{{ sectionEntryDeleteDialog.entry?.section_name }}</strong>
+            and <strong class="text-high-emphasis">every batch and individual exemption inside it, in all years</strong>,
+            will be removed. Affected employees go back to the office-wide schedule on the next DTR computation.
+          </p>
+        </VCardText>
+        <VDivider />
+        <VCardActions class="justify-end pa-4 gap-2">
+          <VBtn variant="text" :disabled="sectionEntryDeleteDialog.loading" @click="sectionEntryDeleteDialog.visible = false">Cancel</VBtn>
+          <VBtn color="error" variant="tonal" :loading="sectionEntryDeleteDialog.loading" @click="executeRemoveSectionEntry">
+            Delete
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
+    <!-- ── Standard Week Section: batches + individuals modal ────────────── -->
+    <StandardWeekSectionDialog
+      v-model="sectionDialog.visible"
+      :entry="sectionDialog.entry"
+      :initial-year="viewYear"
+      :initial-month="viewMonth"
+      @changed="fetchSectionEntries(viewYear)"
+      @notify="showToast"
+    />
+
     <!-- ── Success Snackbar ──────────────────────────────────────────────── -->
     <VSnackbar
       v-model="snackbar.visible"
@@ -1701,6 +1920,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import StandardWeekSectionDialog from '@/components/payroll/StandardWeekSectionDialog.vue'
 import StandardWeekSelector from '@/components/payroll/StandardWeekSelector.vue'
 import {
   formatDisplayDate,
@@ -1708,11 +1928,14 @@ import {
   usePayrollCalendar,
   type ContractBreakBatch,
   type ContractBreakEmployeePickerRow,
+  type DivisionOption,
   type EmployeeContractBreak,
   type EmployeeStandardWeekExemption,
   type Holiday,
   type HolidayType,
+  type SectionOption,
   type StandardWeekBatch,
+  type StandardWeekSectionEntry,
   type SuspensionDay
 } from '@/composable/usePayrollCalendar'
 import axios from '@axios'
@@ -1758,6 +1981,13 @@ const {
   customStandardWeekExemptions,
   fetchCustomStandardWeekExemptions,
   clearCustomStandardWeekExemption,
+  sectionEntries,
+  sectionEntriesLoading,
+  fetchSectionEntries,
+  addSectionEntry,
+  removeSectionEntry,
+  fetchDivisionOptions,
+  fetchSectionOptions,
 } = usePayrollCalendar()
 
 const contractBreakBatchesForYear = computed(() =>
@@ -1895,6 +2125,142 @@ onMounted(() => {
   fetchCustomContractBreaks()
   fetchCustomStandardWeekExemptions()
 })
+
+// ---------------------------------------------------------------------------
+// Standard Week Sections
+// ---------------------------------------------------------------------------
+
+// Counts on each entry are for the year being viewed
+watch(viewYear, y => fetchSectionEntries(y), { immediate: true })
+
+const sectionEntrySearch = ref('')
+
+const filteredSectionEntries = computed(() => {
+  const q = (sectionEntrySearch.value ?? '').trim().toLowerCase()
+  const base = q
+    ? sectionEntries.value.filter(e =>
+        e.section_name.toLowerCase().includes(q) || (e.division_name ?? '').toLowerCase().includes(q))
+    : sectionEntries.value
+  // Entries with activity this year first, then alphabetical (server order)
+  return [...base].sort((a, b) =>
+    Number(!!(b.batch_count || b.individual_count)) - Number(!!(a.batch_count || a.individual_count)))
+})
+
+const SECTION_ENTRIES_PER_PAGE = 5
+const sectionEntryPage = ref(1)
+
+const sectionEntryPageCount = computed(() =>
+  Math.max(1, Math.ceil(filteredSectionEntries.value.length / SECTION_ENTRIES_PER_PAGE)))
+
+const pagedSectionEntries = computed(() => {
+  const start = (sectionEntryPage.value - 1) * SECTION_ENTRIES_PER_PAGE
+  return filteredSectionEntries.value.slice(start, start + SECTION_ENTRIES_PER_PAGE)
+})
+
+const sectionEntryRangeLabel = computed(() => {
+  const total = filteredSectionEntries.value.length
+  const start = (sectionEntryPage.value - 1) * SECTION_ENTRIES_PER_PAGE + 1
+  const end   = Math.min(sectionEntryPage.value * SECTION_ENTRIES_PER_PAGE, total)
+  return `${start}–${end} of ${total}`
+})
+
+// Back to page 1 on new search; clamp when entries are deleted
+watch(sectionEntrySearch, () => { sectionEntryPage.value = 1 })
+watch(sectionEntryPageCount, n => { if (sectionEntryPage.value > n) sectionEntryPage.value = n })
+
+const sectionDialog = reactive({
+  visible: false,
+  entry:   null as StandardWeekSectionEntry | null,
+})
+
+function openSectionDialog(entry: StandardWeekSectionEntry) {
+  sectionDialog.entry   = entry
+  sectionDialog.visible = true
+}
+
+// ── Create entry ──────────────────────────────────────────────────────────
+const sectionEntryCreateDialog = reactive({
+  visible:          false,
+  divisions:        [] as DivisionOption[],
+  sections:         [] as SectionOption[],
+  divisionId:       null as number | null,
+  sectionId:        null as number | null,
+  notes:            '',
+  loadingDivisions: false,
+  loadingSections:  false,
+  loading:          false,
+  error:            '',
+})
+
+const sectionEntryCreateOptions = computed(() => {
+  const taken = new Set(sectionEntries.value.map(e => e.section_id))
+  return sectionEntryCreateDialog.sections.map(s => ({
+    title: s.station + (taken.has(s.id) ? ' — already added' : ''),
+    value: s.id,
+    props: { disabled: taken.has(s.id) },
+  }))
+})
+
+async function openSectionEntryCreateDialog() {
+  Object.assign(sectionEntryCreateDialog, {
+    visible: true, divisionId: null, sectionId: null, sections: [], notes: '', error: '', loading: false,
+  })
+  if (!sectionEntryCreateDialog.divisions.length) {
+    sectionEntryCreateDialog.loadingDivisions = true
+    sectionEntryCreateDialog.divisions = await fetchDivisionOptions()
+    sectionEntryCreateDialog.loadingDivisions = false
+  }
+}
+
+watch(() => sectionEntryCreateDialog.divisionId, async divisionId => {
+  sectionEntryCreateDialog.sectionId = null
+  sectionEntryCreateDialog.sections  = []
+  if (!divisionId) return
+  sectionEntryCreateDialog.loadingSections = true
+  sectionEntryCreateDialog.sections = await fetchSectionOptions(divisionId)
+  sectionEntryCreateDialog.loadingSections = false
+})
+
+async function submitSectionEntryCreate() {
+  sectionEntryCreateDialog.error = ''
+  if (!sectionEntryCreateDialog.sectionId) { sectionEntryCreateDialog.error = 'Please select a section.'; return }
+
+  sectionEntryCreateDialog.loading = true
+  const result = await addSectionEntry(sectionEntryCreateDialog.sectionId, sectionEntryCreateDialog.notes)
+  sectionEntryCreateDialog.loading = false
+
+  if (typeof result === 'string') { sectionEntryCreateDialog.error = result; return }
+
+  sectionEntryCreateDialog.visible = false
+  showToast(`Section entry "${result.section_name}" created.`)
+  openSectionDialog(result)
+}
+
+// ── Delete entry ──────────────────────────────────────────────────────────
+const sectionEntryDeleteDialog = reactive({
+  visible: false,
+  entry:   null as StandardWeekSectionEntry | null,
+  loading: false,
+})
+
+function confirmRemoveSectionEntry(entry: StandardWeekSectionEntry) {
+  sectionEntryDeleteDialog.entry   = entry
+  sectionEntryDeleteDialog.loading = false
+  sectionEntryDeleteDialog.visible = true
+}
+
+async function executeRemoveSectionEntry() {
+  if (!sectionEntryDeleteDialog.entry) return
+  sectionEntryDeleteDialog.loading = true
+  const result = await removeSectionEntry(sectionEntryDeleteDialog.entry.id)
+  sectionEntryDeleteDialog.loading = false
+  if (result === true) {
+    sectionEntryDeleteDialog.visible = false
+    showToast('Section entry deleted.')
+  } else {
+    showToast(result, 'error')
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Snackbar
@@ -2050,6 +2416,7 @@ const holidayDialog = reactive({
   editId:       null as number | null,
   date:         '',
   originalDate: '',
+  reference:    '',
   dateChanged:  false,
   label:        '',
   type:         'regular' as HolidayType,
@@ -2067,6 +2434,7 @@ function openHolidayDialog(holiday?: Holiday, prefillDate?: Date) {
   holidayDialog.label        = holiday?.label ?? ''
   holidayDialog.type         = holiday?.type ?? 'regular'
   holidayDialog.isHalfDay    = holiday?.is_half_day ?? false
+  holidayDialog.reference    = holiday?.reference ?? ''
   holidayDialog.error        = ''
   holidayDialog.loading      = false
   holidayDialog.visible      = true
@@ -2083,8 +2451,8 @@ async function submitHoliday() {
   const isHalfDay = holidayDialog.type === 'special' ? holidayDialog.isHalfDay : false
 
   const result = holidayDialog.editId
-    ? await updateHoliday(holidayDialog.editId, holidayDialog.date, holidayDialog.label, holidayDialog.type, isHalfDay)
-    : await addHoliday(holidayDialog.date, holidayDialog.label, holidayDialog.type, isHalfDay)
+    ? await updateHoliday(holidayDialog.editId, holidayDialog.date, holidayDialog.label, holidayDialog.type, isHalfDay, holidayDialog.reference)
+  : await addHoliday(holidayDialog.date, holidayDialog.label, holidayDialog.type, isHalfDay, holidayDialog.reference)
 
   holidayDialog.loading = false
   if (result === true) {
@@ -2106,6 +2474,7 @@ const suspensionDialog = reactive({
   date:      '',
   label:     '',
   isHalfDay: false,
+  reference: '',
   error:     '',
   loading:   false,
 })
@@ -2115,6 +2484,7 @@ function openSuspensionDialog(suspension?: SuspensionDay, prefillDate?: Date) {
   suspensionDialog.date      = suspension?.date ?? (prefillDate ? toISODate(prefillDate) : '')
   suspensionDialog.label     = suspension?.label ?? ''
   suspensionDialog.isHalfDay = suspension?.is_half_day ?? false
+  suspensionDialog.reference = suspension?.reference ?? ''
   suspensionDialog.error     = ''
   suspensionDialog.loading   = false
   suspensionDialog.visible   = true
@@ -2129,8 +2499,8 @@ async function submitSuspension() {
   suspensionDialog.loading = true
 
   const result = suspensionDialog.editId
-    ? await updateSuspensionDay(suspensionDialog.editId, suspensionDialog.date, suspensionDialog.label, suspensionDialog.isHalfDay)
-    : await addSuspensionDay(suspensionDialog.date, suspensionDialog.label, suspensionDialog.isHalfDay)
+    ? await updateSuspensionDay(suspensionDialog.editId, suspensionDialog.date, suspensionDialog.label, suspensionDialog.isHalfDay, suspensionDialog.reference)
+    : await addSuspensionDay(suspensionDialog.date, suspensionDialog.label, suspensionDialog.isHalfDay, suspensionDialog.reference)
 
   suspensionDialog.loading = false
   if (result === true) {
@@ -2141,6 +2511,15 @@ async function submitSuspension() {
   } else {
     suspensionDialog.error = result
   }
+}
+
+function cellTooltip(cell: CalendarCell): string {
+  const parts: string[] = []
+  const h = cell.info.holiday
+  const s = cell.info.suspension
+  if (h) parts.push(`${h.label}${h.reference ? ` — ${h.reference}` : ''}`)
+  if (s) parts.push(`${s.label}${s.reference ? ` — ${s.reference}` : ''}`)
+  return parts.join('\n')
 }
 
 // ---------------------------------------------------------------------------
@@ -3250,6 +3629,58 @@ async function executeDelete() {
   margin-bottom: 0.4rem;
 }
 
+.cm-se-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.35rem;
+  border-bottom: 1px solid var(--surface-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cm-se-item:last-of-type { border-bottom: none; }
+.cm-se-item:hover { background: var(--surface-hover); }
+.cm-se-item--empty { opacity: 0.6; }
+.cm-se-item--empty:hover { opacity: 1; }
+
+.cm-se-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.cm-se-item-name {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cm-se-item-div {
+  font-size: 0.68rem;
+  color: var(--text-color-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cm-se-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.cm-se-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--surface-border);
+}
+
 .cm-cb-item-label {
   font-size: 0.85rem;
   color: var(--text-color);
@@ -3268,6 +3699,20 @@ async function executeDelete() {
   align-items: center;
   padding: 0.4rem 0;
   border-bottom: 1px solid var(--surface-border);
+}
+
+.cm-list-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cm-list-item-ref {
+  font-size: 0.7rem;
+  color: var(--text-color-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cm-list-item:last-child { border-bottom: none; }

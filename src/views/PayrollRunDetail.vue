@@ -39,6 +39,9 @@ interface BatchItem {
   position: string | null;
   division_name: string | null;
   section_name: string | null;
+  fund_cluster: string | null;
+  charging: string;
+  charging_is_custom: boolean;
   engas_no: string | null;
   nip: boolean;
   wage: number;
@@ -104,6 +107,8 @@ interface PayrollRunDetail {
   division_id: number; // ← FIX #3: added so fetchSignatories can send it
   division_name: string;
   section_name: string | null;
+  charging_totals: { label: string; count: number; gross_earned: number; net_pay: number }[];
+  charging_options: string[];
   fund_cluster: string;
   saa_no: string | null;
   ors_no: string | null;
@@ -292,6 +297,53 @@ const removeLoading = ref(false);
 const selectedRemoveIds = ref<number[]>([]);
 const removeBatchDialog = ref(false);
 const removeBatchLoading = ref(false);
+
+// ── Charging ──
+const chargingDialog = ref(false);
+const chargingSaving = ref(false);
+const chargingTargetEmpIds = ref<number[]>([]);
+const chargingValue = ref<string | null>(null);
+
+const chargingTargetNames = computed(() =>
+  allEmployees()
+    .filter((e) => chargingTargetEmpIds.value.includes(e.emp_id))
+    .map((e) => e.emp_name),
+);
+
+function openChargingDialog(empIds: number[]) {
+  if (!empIds.length) return;
+  chargingTargetEmpIds.value = [...empIds];
+  const first = allEmployees().find((e) => e.emp_id === empIds[0]);
+  chargingValue.value = empIds.length === 1 ? (first?.charging ?? null) : null;
+  chargingDialog.value = true;
+}
+
+async function saveCharging(reset = false) {
+  if (!run.value) return;
+  const value = reset ? null : String(chargingValue.value ?? "").trim();
+  if (!reset && !value) {
+    showAlert("warning", "Enter or pick a fund cluster.");
+    return;
+  }
+  chargingSaving.value = true;
+  try {
+    const { data } = await axios.post(
+      `/api/payroll-run/${run.value.id}/items/charging`,
+      { emp_ids: chargingTargetEmpIds.value, fund_cluster: value },
+    );
+    if (!data.success) throw new Error(data.message);
+    showAlert("success", data.message);
+    chargingDialog.value = false;
+    await fetchRun();
+  } catch (err: any) {
+    showAlert(
+      "error",
+      err.response?.data?.message ?? err.message ?? "Failed to update charging.",
+    );
+  } finally {
+    chargingSaving.value = false;
+  }
+}
 
 // ── Adjustments ──
 const adjustmentTarget = ref<BatchItem | null>(null);
@@ -1557,403 +1609,7 @@ async function generateDocument() {
   }
 }
 
-function openPdf(doc: any) {
-  const blob = doc.output("blob");
-  const url = URL.createObjectURL(blob);
-  const tab = window.open(url, "_blank");
-  if (!tab) {
-    showAlert("error", "Popup blocked. Please allow popups.");
-    URL.revokeObjectURL(url);
-    return;
-  }
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
 
-function generatePayrollSheet(
-  approvedSig: Signatory | null,
-  certSigs: (Signatory | null)[],
-) {
-  const { jsPDF } = (window as any).jspdf;
-  const doc = new jsPDF({
-    orientation: "landscape",
-    unit: "mm",
-    format: "legal",
-  });
-  const r = run.value!;
-  const pageW = doc.internal.pageSize.getWidth();
-  const BLK = [0, 0, 0] as [number, number, number];
-  const GRAY = [80, 80, 80] as [number, number, number];
-  const LGRAY = [180, 180, 180] as [number, number, number];
-  const WHITE = [255, 255, 255] as [number, number, number];
-
-  const emps = allEmployees();
-  const gt = grandTotal.value;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  doc.setTextColor(...BLK);
-  doc.text("PAYROLL", pageW / 2, 10, { align: "center" });
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.text(
-    `For the period ${MONTH_NAMES[r.period_month - 1].toUpperCase()} ${r.period_year}`,
-    pageW / 2,
-    16,
-    { align: "center" },
-  );
-
-  doc.setFontSize(7.5);
-  doc.setTextColor(...GRAY);
-  doc.text(
-    `Entity Name : DEPARTMENT OF HEALTH - CENTER FOR HEALTH DEVELOPMENT, SOCCSKSARGEN REGION`,
-    14,
-    23,
-  );
-  doc.text(`Payroll No. : ${r.payroll_no}`, pageW - 14, 23, { align: "right" });
-  doc.text(`Fund Cluster : ${r.fund_cluster || "_____________"}`, 14, 28);
-  doc.text("Sheet _______ of _______ Sheets", pageW - 14, 28, {
-    align: "right",
-  });
-
-  doc.setFontSize(7);
-  doc.setFont("helvetica", "italic");
-  doc.text(
-    "We acknowledge receipt of cash shown opposite our name as full compensation for services rendered for the period covered.",
-    14,
-    34,
-  );
-
-  let serial = 1;
-  const tableBody: any[] = [];
-
-  r.groups.forEach((div) => {
-    div.sections.forEach((sec) => {
-      sec.employees.forEach((emp) => {
-        const nipLabel = emp.nip ? " (NIP)" : "";
-        const grossAmtEarned =
-          Number(emp.gross) -
-          Number(emp.absent_deduction) -
-          Number(emp.late_ut_deduction);
-        tableBody.push([
-          serial++,
-          emp.engas_no || "",
-          emp.emp_name + nipLabel,
-          emp.position || "",
-          fmtNum(emp.wage),
-          fmtNum(emp.premium),
-          fmtNum(emp.gross),
-          fmtNum(emp.absent_deduction),
-          fmtNum(emp.late_ut_deduction),
-          fmtNum(grossAmtEarned),
-          emp.ewt > 0 ? fmtNum(emp.ewt) : "",
-          emp.philhealth > 0 ? fmtNum(emp.philhealth) : "",
-          fmtNum(emp.pag_ibig),
-          emp.sss > 0 ? fmtNum(emp.sss) : "",
-          fmtNum(emp.net_pay),
-          emp.remarks || "",
-          r.saa_no ? `SAA ${r.saa_no}${emp.nip ? " (NIP)" : ""}` : "",
-        ]);
-      });
-    });
-  });
-
-  const totalAbsent = emps.reduce((s, e) => s + Number(e.absent_deduction), 0);
-  const totalLateUt = emps.reduce((s, e) => s + Number(e.late_ut_deduction), 0);
-  const totalGrossEarned = emps.reduce(
-    (s, e) =>
-      s +
-      (Number(e.gross) -
-        Number(e.absent_deduction) -
-        Number(e.late_ut_deduction)),
-    0,
-  );
-  tableBody.push([
-    {
-      content: "TOTAL",
-      colSpan: 4,
-      styles: { fontStyle: "bold", halign: "left" },
-    },
-    {
-      content: fmtNum(emps.reduce((s, e) => s + Number(e.wage), 0)),
-      styles: { halign: "right", fontStyle: "bold" },
-    },
-    {
-      content: fmtNum(emps.reduce((s, e) => s + Number(e.premium), 0)),
-      styles: { halign: "right", fontStyle: "bold" },
-    },
-    {
-      content: fmtNum(gt.gross),
-      styles: { halign: "right", fontStyle: "bold" },
-    },
-    {
-      content: fmtNum(totalAbsent),
-      styles: { halign: "right", fontStyle: "bold" },
-    },
-    {
-      content: fmtNum(totalLateUt),
-      styles: { halign: "right", fontStyle: "bold" },
-    },
-    {
-      content: fmtNum(totalGrossEarned),
-      styles: { halign: "right", fontStyle: "bold" },
-    },
-    { content: fmtNum(gt.ewt), styles: { halign: "right", fontStyle: "bold" } },
-    {
-      content: fmtNum(gt.philhealth),
-      styles: { halign: "right", fontStyle: "bold" },
-    },
-    {
-      content: fmtNum(gt.pag_ibig),
-      styles: { halign: "right", fontStyle: "bold" },
-    },
-    { content: fmtNum(gt.sss), styles: { halign: "right", fontStyle: "bold" } },
-    {
-      content: fmtNum(gt.net_pay),
-      styles: { halign: "right", fontStyle: "bold" },
-    },
-    { content: "", colSpan: 2 },
-  ]);
-  (doc as any).autoTable({
-    startY: 37,
-    head: [
-      [
-        {
-          content: "Serial\nNo.",
-          rowSpan: 2,
-          styles: { valign: "middle", halign: "center" },
-        },
-        {
-          content: "Engas\nNo.",
-          rowSpan: 2,
-          styles: { valign: "middle", halign: "center" },
-        },
-        { content: "Name", rowSpan: 2, styles: { valign: "middle" } },
-        { content: "Position", rowSpan: 2, styles: { valign: "middle" } },
-        {
-          content: "Wage",
-          rowSpan: 2,
-          styles: { valign: "middle", halign: "center" },
-        },
-        {
-          content: "20%\nPremium",
-          rowSpan: 2,
-          styles: { valign: "middle", halign: "center" },
-        },
-        { content: "COMPENSATION", colSpan: 4, styles: { halign: "center" } },
-        {
-          content: "D E D U C T I O N S",
-          colSpan: 4,
-          styles: { halign: "center" },
-        },
-        {
-          content: "Net Amount\nDue",
-          rowSpan: 2,
-          styles: { valign: "middle", halign: "center" },
-        },
-        { content: "REMARKS", rowSpan: 2, styles: { valign: "middle" } },
-        { content: "CHARGING", rowSpan: 2, styles: { valign: "middle" } },
-      ],
-      [
-        "Total",
-        "Amount of\nDay/s not\nrendered/\nNo contract",
-        "Amount of\nMinute/s\nLate/UT/\nPass Slip",
-        "GROSS\nAMOUNT\nEARNED",
-        "Expanded\nWithholding\nTax 5%",
-        "Philhealth",
-        "PAG-IBIG",
-        "SSS",
-      ],
-    ],
-    body: tableBody,
-    theme: "grid",
-    tableWidth: pageW - 28,
-    styles: {
-      fontSize: 6.5,
-      cellPadding: 1.5,
-      valign: "middle",
-      overflow: "linebreak",
-      textColor: BLK,
-      lineColor: LGRAY,
-      lineWidth: 0.15,
-    },
-    headStyles: {
-      fillColor: WHITE,
-      textColor: BLK,
-      fontStyle: "bold",
-      halign: "center",
-      fontSize: 6.5,
-      lineColor: BLK,
-      lineWidth: 0.3,
-    },
-    columnStyles: {
-      0: { halign: "center", cellWidth: 12 },
-      1: { cellWidth: 18 },
-      2: { cellWidth: "auto" },
-      3: { cellWidth: 24 },
-      4: { halign: "right", cellWidth: 16 },
-      5: { halign: "right", cellWidth: 14 },
-      6: { halign: "right", cellWidth: 16 },
-      7: { halign: "right", cellWidth: 17 },
-      8: { halign: "right", cellWidth: 17 },
-      9: { halign: "right", cellWidth: 18 },
-      10: { halign: "right", cellWidth: 16 },
-      11: { halign: "right", cellWidth: 15 },
-      12: { halign: "right", cellWidth: 13 },
-      13: { halign: "right", cellWidth: 13 },
-      14: { halign: "right", cellWidth: 18 },
-      15: { cellWidth: 28 },
-      16: { cellWidth: 22 },
-    },
-    margin: { left: 14, right: 14 },
-  });
-
-  const finalY = (doc as any).lastAutoTable.finalY + 2;
-  const TW = pageW - 28;
-  const cLbl = 9.2;
-  const cL = (TW - cLbl) * 0.4;
-  const cM = (TW - cLbl) * 0.4;
-  const cR = TW - cLbl - cL - cM;
-
-  const aSig = certSigs[0] ?? null;
-  const bSig = certSigs[1] ?? null;
-  const cSig = certSigs[2] ?? null;
-
-  const sigLine = (sig: Signatory | null): string => {
-    const name = sig?.name ?? "";
-    const position = sig?.position ?? "";
-    return `\n\n\n\n                                     ________________________________________\n                                               ${name}\n                                                   ${position}`;
-  };
-
-  const sigLineWithDateA = (sig: Signatory | null): string => {
-    const name = sig?.name ?? "";
-    const position = sig?.position ?? "";
-    return `\n\n\n\n___________________________________                               ______________\n${name}                                                       Date\n${position}`;
-  };
-
-  const sigLineWithDateB = (sig: Signatory | null): string => {
-    const name = sig?.name ?? "";
-    const position = sig?.position ?? "";
-    return `\n\n\n\n_________________________________________                                                                                            _______________\n${name}                                                Date\n                   ${position}                                                                                                                                       `;
-  };
-
-  const sigLineWithDateC = (sig: Signatory | null): string => {
-    const name = sig?.name ?? "";
-    const position = sig?.position ?? "";
-    return `\n\n\n\n___________________________________                               ______________\n${name}                                                      Date\n${position}`;
-  };
-
-  (doc as any).autoTable({
-    startY: finalY,
-    tableWidth: TW,
-    body: [
-      [
-        {
-          content: "A",
-          styles: {
-            fontStyle: "bold",
-            fontSize: 7,
-            cellPadding: { top: 3, left: 2, right: 2, bottom: 3 },
-            valign: "top",
-            halign: "left",
-          },
-        },
-        {
-          content: `CERTIFIED:  Services duly rendered as stated.${sigLineWithDateA(aSig)}`,
-          styles: {
-            fontSize: 7,
-            cellPadding: { top: 3, left: 7, right: 0, bottom: 3 },
-            valign: "top",
-            halign: "left",
-          },
-        },
-        {
-          content: `APPROVED FOR PAYMENT: _______________________________________${sigLineWithDateB(approvedSig)}`,
-          styles: {
-            fontSize: 7,
-            cellPadding: { top: 3, left: 30, right: 0, bottom: 3 },
-            valign: "top",
-            halign: "left",
-          },
-          colSpan: 2,
-        },
-      ],
-    ],
-    theme: "grid",
-    styles: {
-      textColor: BLK,
-      lineColor: BLK,
-      lineWidth: 0.2,
-      overflow: "linebreak",
-    },
-    columnStyles: {
-      0: { cellWidth: cLbl },
-      1: { cellWidth: cL },
-      2: { cellWidth: cM + cR },
-    },
-    margin: { left: 14, right: 14 },
-  });
-  (doc as any).autoTable({
-    startY: (doc as any).lastAutoTable.finalY,
-    tableWidth: TW,
-    body: [
-      [
-        {
-          content: "B",
-          styles: {
-            fontStyle: "bold",
-            fontSize: 7,
-            cellPadding: { top: 3, left: 2, right: 2, bottom: 3 },
-            valign: "top",
-            halign: "left",
-          },
-        },
-        {
-          content: `CERTIFIED:  Supporting documents complete and proper; and cash available in the amount of \nP______________________.${sigLineWithDateC(bSig)}`,
-          styles: {
-            fontSize: 7,
-            cellPadding: { top: 3, left: 7, right: 0, bottom: 3 },
-            valign: "top",
-            halign: "left",
-          },
-        },
-        {
-          content: `CERTIFIED:  Supporting documents complete and proper; and cash available in the amount of \n\nP______________________.${sigLine(cSig)}`,
-          styles: {
-            fontSize: 7,
-            cellPadding: { top: 3, left: 7, right: 0, bottom: 3 },
-            valign: "top",
-            halign: "left",
-          },
-        },
-        {
-          content: `E   ORS/BURS No.${r.ors_no ? " " + r.ors_no : " ___________________________"}\n\nDate : ___________________________\nJEV No. : ___________________________\nDate : ___________________________`,
-          styles: {
-            fontSize: 7,
-            cellPadding: { top: 3, left: 3, right: 3, bottom: 3 },
-            valign: "top",
-            halign: "left",
-          },
-        },
-      ],
-    ],
-    theme: "grid",
-    styles: {
-      textColor: BLK,
-      lineColor: BLK,
-      lineWidth: 0.2,
-      overflow: "linebreak",
-    },
-    columnStyles: {
-      0: { cellWidth: cLbl },
-      1: { cellWidth: cL },
-      2: { cellWidth: cM },
-      3: { cellWidth: cR },
-    },
-    margin: { left: 14, right: 14 },
-  });
-
-  openPdf(doc);
-}
 
 const docGenerateLoading = computed(() => {
   if (docType.value === "ors") return orsLoading.value;
@@ -2119,6 +1775,33 @@ onMounted(async () => {
                     <span class="text-body-2 font-weight-bold text-success">{{
                       fmt(grandTotal.net_pay)
                     }}</span>
+                  </div>
+                </div>
+              </VCardText>
+            </VCard>
+
+            <VCard
+              v-if="run.charging_totals?.length"
+              variant="outlined"
+              rounded="lg"
+              class="mb-4"
+            >
+              <VCardText>
+                <p class="text-caption text-medium-emphasis font-weight-medium text-uppercase mb-3">
+                  Charging Breakdown
+                </p>
+                <div
+                  v-for="c in run.charging_totals"
+                  :key="c.label"
+                  class="d-flex justify-space-between align-start mb-2"
+                >
+                  <div>
+                    <div class="text-body-2 font-weight-medium">{{ c.label || "—" }}</div>
+                    <div class="text-caption text-medium-emphasis">{{ c.count }} employee(s)</div>
+                  </div>
+                  <div class="text-right">
+                    <div class="text-body-2 font-weight-medium">{{ fmt(c.gross_earned) }}</div>
+                    <div class="text-caption text-success">Net {{ fmt(c.net_pay) }}</div>
                   </div>
                 </div>
               </VCardText>
@@ -2592,6 +2275,17 @@ onMounted(async () => {
               >
                 Remove Selected ({{ selectedRemoveIds.length }})
               </VBtn>
+
+              <VBtn
+              color="deep-purple"
+              size="small"
+              variant="tonal"
+              prepend-icon="mdi-bank-transfer"
+              :disabled="!selectedRemoveIds.length"
+              @click="openChargingDialog(selectedRemoveIds)"
+            >
+              Set Charging ({{ selectedRemoveIds.length }})
+            </VBtn>
             </div>
 
             <!-- Batch Items Table -->
@@ -2664,6 +2358,7 @@ onMounted(async () => {
                         <th class="text-right">SSS</th>
                         <th class="text-right">Total Deductions</th>
                         <th class="text-right text-success">Net Pay</th>
+                        <th class="text-left">Charging</th>
                         <th class="text-left">Remarks</th>
                         <th class="text-center">Actions</th>
                       </tr>
@@ -2839,6 +2534,22 @@ onMounted(async () => {
                         >
                           {{ fmt(emp.net_pay) }}
                         </td>
+                        <td style="min-width: 90px">
+                        <VChip
+                          size="x-small"
+                          :color="emp.charging_is_custom ? 'deep-purple' : undefined"
+                          variant="tonal"
+                          label
+                          :style="isDraft ? 'cursor: pointer' : ''"
+                          @click="isDraft && openChargingDialog([emp.emp_id])"
+                        >
+                          <VIcon v-if="emp.charging_is_custom" start size="10">mdi-swap-horizontal</VIcon>
+                          {{ emp.charging || "—" }}
+                        </VChip>
+                        <VTooltip v-if="isDraft" activator="parent" location="top">
+                          {{ emp.charging_is_custom ? "Custom charging — click to change" : "Section default — click to change" }}
+                        </VTooltip>
+                      </td>
                         <td
                           class="text-caption text-medium-emphasis"
                           style="max-width: 120px; white-space: pre-wrap"
@@ -2904,33 +2615,22 @@ onMounted(async () => {
                       </tr>
                     </tbody>
                     <tfoot>
-                      <tr
-                        style="background: rgba(var(--v-theme-primary), 0.06)"
-                      >
-                        <td v-if="isDraft"></td>
-                        <td
-                          class="text-right text-caption font-weight-bold pr-2"
-                        >
-                          Section Total
-                        </td>
-                        <td colspan="2"></td>
-                        <td class="text-right text-caption font-weight-bold">
-                          {{ fmt(secGroup.subtotal.gross) }}
-                        </td>
-                        <td
-                          colspan="7"
-                          class="text-right text-caption font-weight-bold text-error"
-                        >
-                          Deductions:
-                          {{ fmt(secGroup.subtotal.total_deductions) }}
-                        </td>
-                        <td
-                          class="text-right text-caption font-weight-bold text-success"
-                        >
-                          {{ fmt(secGroup.subtotal.net_pay) }}
-                        </td>
-                        <td colspan="2"></td>
-                      </tr>
+                      <tr style="background: rgba(var(--v-theme-primary), 0.06)">
+                      <td v-if="isDraft"></td>
+                      <td class="text-right text-caption font-weight-bold pr-2">Section Total</td>
+                      <td colspan="5"></td>
+                      <td class="text-right text-caption font-weight-bold">
+                        {{ fmt(secGroup.subtotal.gross) }}
+                      </td>
+                      <td colspan="4"></td>
+                      <td class="text-right text-caption font-weight-bold text-error">
+                        {{ fmt(secGroup.subtotal.total_deductions) }}
+                      </td>
+                      <td class="text-right text-caption font-weight-bold text-success">
+                        {{ fmt(secGroup.subtotal.net_pay) }}
+                      </td>
+                      <td colspan="3"></td>
+                    </tr>
                     </tfoot>
                   </VTable>
                 </VCard>
@@ -3540,6 +3240,51 @@ onMounted(async () => {
             @click="confirmRemoveBatch"
           >
             <VIcon start size="16">mdi-delete-outline</VIcon>Yes, Remove All
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
+
+    <VDialog v-model="chargingDialog" max-width="460" persistent>
+      <VCard rounded="lg">
+        <VCardText class="pa-6">
+          <div class="d-flex align-center gap-3 mb-4">
+            <VAvatar color="deep-purple" variant="tonal" size="44" rounded="lg">
+              <VIcon icon="mdi-bank-transfer" size="22" />
+            </VAvatar>
+            <div>
+              <div class="text-body-1 font-weight-medium">Set Charging</div>
+              <div class="text-caption text-medium-emphasis">
+                {{ chargingTargetEmpIds.length }} employee(s)
+              </div>
+            </div>
+          </div>
+          <ul
+            class="text-body-2 mb-4"
+            style="max-height: 120px; overflow-y: auto; padding-left: 20px"
+          >
+            <li v-for="name in chargingTargetNames" :key="name">{{ name }}</li>
+          </ul>
+          <VCombobox
+            v-model="chargingValue"
+            :items="run?.charging_options ?? []"
+            label="Fund Cluster / Charging"
+            variant="outlined"
+            density="compact"
+            prepend-inner-icon="mdi-bank-outline"
+            hint="Pick an existing fund cluster or type a new one (max 50 chars)"
+            persistent-hint
+          />
+        </VCardText>
+        <VDivider />
+        <VCardActions class="justify-end pa-4 gap-2">
+          <VBtn variant="text" :disabled="chargingSaving" @click="chargingDialog = false">Cancel</VBtn>
+          <VBtn variant="text" color="secondary" :loading="chargingSaving" @click="saveCharging(true)">
+            Reset to Section Default
+          </VBtn>
+          <VBtn color="deep-purple" variant="tonal" :loading="chargingSaving" @click="saveCharging()">
+            <VIcon start size="16">mdi-content-save-outline</VIcon>Save
           </VBtn>
         </VCardActions>
       </VCard>

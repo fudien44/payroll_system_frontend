@@ -25,6 +25,8 @@ interface Employee {
   id: number;
   full_name: string;
   position: string | null;
+  division_id: number | null;
+  section_id: number | null;
   division: string | null;
   section: string | null;
   emp_type: string | null;
@@ -171,7 +173,10 @@ interface PeriodSummary {
   regdays: number;
   total_holidays: number;
   total_suspensions: number;
-  already_saved: boolean;
+  already_saved: boolean; // everyone in scope saved
+  scope_total: number;
+  scope_saved: number;
+  scope_unsaved: number;
 }
 
 interface RpoEntry {
@@ -309,6 +314,122 @@ function resumeCooldownIfAny() {
   }
 }
 
+// ── Save scope (All / By Section / Individual) ──────────────────────
+type SaveScope = "all" | "section" | "individual";
+
+const saveScope = ref<SaveScope>("all");
+const scopeSectionIds = ref<number[]>([]);
+const scopeSectionId = ref<number | null>(null);
+const scopeUserIds = ref<number[]>([]);
+const scopeEmpSearch = ref("");
+
+// Captured at dispatch time — the dialog may be reset before the
+// completion broadcast arrives.
+const runningScope = ref<SaveScope>("all");
+const runningMode = ref<"save" | "override">("save");
+
+const sectionOptions = computed(() => {
+  const map = new Map<number, { name: string; count: number }>();
+  for (const e of employees.value) {
+    if (e.section_id == null  || e.id == null) continue;
+    const cur = map.get(e.section_id);
+    if (cur) cur.count++;
+    else map.set(e.section_id, { name: e.section ?? `Section #${e.section_id}`, count: 1 });
+  }
+  return [...map.entries()]
+    .map(([value, { name, count }]) => ({ value, title: `${name} (${count})` }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+});
+
+const scopeEmployeePool = computed(() => {
+  if (scopeSectionId.value == null) return [];
+  const q = scopeEmpSearch.value.trim().toLowerCase();
+  return employees.value.filter(
+    (e) =>
+      e.id != null &&   
+      e.section_id === scopeSectionId.value &&
+      (!q || e.full_name.toLowerCase().includes(q)),
+  );
+});
+
+const allScopeUsersChecked = computed(
+  () =>
+    scopeEmployeePool.value.length > 0 &&
+    scopeEmployeePool.value.every((e) => scopeUserIds.value.includes(e.id)),
+);
+
+function toggleScopeUser(id: number) {
+  scopeUserIds.value = scopeUserIds.value.includes(id)
+    ? scopeUserIds.value.filter((x) => x !== id)
+    : [...scopeUserIds.value, id];
+}
+
+function toggleAllScopeUsers() {
+  const poolIds = scopeEmployeePool.value.map((e) => e.id);
+  scopeUserIds.value = allScopeUsersChecked.value
+    ? scopeUserIds.value.filter((id) => !poolIds.includes(id))
+    : Array.from(new Set([...scopeUserIds.value, ...poolIds]));
+}
+
+watch(scopeSectionId, () => {
+  scopeUserIds.value = [];
+  scopeEmpSearch.value = "";
+});
+
+const isScopeValid = computed(() => {
+  if (saveScope.value === "section") return scopeSectionIds.value.length > 0;
+  if (saveScope.value === "individual")
+    return scopeSectionId.value != null && scopeUserIds.value.length > 0;
+  return true;
+});
+
+const scopePayload = computed(() => {
+  switch (saveScope.value) {
+    case "section":
+      return { scope: "section", section_ids: scopeSectionIds.value };
+    case "individual":
+      return {
+        scope: "individual",
+        section_id: scopeSectionId.value,
+        user_ids: scopeUserIds.value,
+      };
+    default:
+      return { scope: "all" };
+  }
+});
+
+const scopeDescription = computed(() => {
+  if (saveScope.value === "section") {
+    const n = scopeSectionIds.value.length;
+    return `${n} section${n === 1 ? "" : "s"}`;
+  }
+  if (saveScope.value === "individual") {
+    const n = scopeUserIds.value.length;
+    return `${n} selected employee${n === 1 ? "" : "s"}`;
+  }
+  return "all active JO employees";
+});
+
+// Cooldown only gates "All" saves
+const cooldownBlocks = computed(
+  () => cooldownActive.value && saveScope.value === "all",
+);
+
+function resetScope() {
+  saveScope.value = "all";
+  scopeSectionIds.value = [];
+  scopeSectionId.value = null;
+  scopeUserIds.value = [];
+  scopeEmpSearch.value = "";
+}
+
+function openSaveDialog(scope: SaveScope) {
+  resetScope();
+  saveScope.value = scope;
+  savingElapsedSecs.value = 0;
+  confirmSaveOpen.value = true;
+}
+
 // ── Set Flexi state ─────────────────────────────────────────────────
 const flexiModalOpen = ref(false);
 
@@ -374,12 +495,20 @@ const periodSummaryLoading = ref(false);
 // Fetch the working days / holidays / suspensions preview whenever the
 // Save DTR dialog is opened, and again whenever the month/year selectors
 // inside the dialog change while it's open.
+let summaryDebounce: ReturnType<typeof setTimeout> | null = null;
+let summaryRequestSeq = 0;
+
+function queuePeriodSummary() {
+  if (summaryDebounce) clearTimeout(summaryDebounce);
+  summaryDebounce = setTimeout(fetchPeriodSummary, 300);
+}
+
 watch(confirmSaveOpen, (open) => {
-  if (open) fetchPeriodSummary();
+  if (open) queuePeriodSummary();
 });
 
-watch([saveDtrMonth, saveDtrYear], () => {
-  if (confirmSaveOpen.value) fetchPeriodSummary();
+watch([saveDtrMonth, saveDtrYear, scopePayload], () => {
+  if (confirmSaveOpen.value) queuePeriodSummary();
 });
 
 const isOverrideMode = computed(
@@ -392,6 +521,7 @@ const saveDialogIcon = computed(() => {
     : "mdi-content-save-outline";
 });
 const saveDialogColor = computed(() => {
+  if (savingDtr.value) return runningMode.value === "override" ? "warning" : "success";
   if (!isMonthComplete.value) return "error";
   return isOverrideMode.value ? "warning" : "success";
 });
@@ -433,7 +563,11 @@ const isMonthComplete = computed(() => {
 });
 
 const canSaveDtr = computed(
-  () => !savingDtr.value && !cooldownActive.value && isMonthComplete.value,
+  () =>
+    !savingDtr.value &&
+    !cooldownBlocks.value &&
+    isMonthComplete.value &&
+    isScopeValid.value,
 );
 
 const cooldownLabel = computed(() => {
@@ -448,7 +582,7 @@ const saveDtrDisabledReason = computed(() => {
     return `${saveDtrLabel.value} is not yet complete — DTR can only be saved after the month ends.`;
   }
   if (cooldownActive.value) {
-    return `Save DTR is on cooldown. ${cooldownLabel.value}.`;
+    return `Save All DTRs is on cooldown. ${cooldownLabel.value}. Section and individual saves are still available.`;
   }
   return null;
 });
@@ -467,7 +601,7 @@ const savingElapsedLabel = computed(() => {
 });
 
 const saveProgressLabel = computed(() => {
-  const verb = isOverrideMode.value ? "Overriding" : "Saving";
+  const verb = runningMode.value === "override" ? "Overriding" : "Saving";
   if (saveProgressTotal.value === 0) return `${verb}...`;
   return `${verb} DTR ${saveProgressDone.value} out of ${saveProgressTotal.value}`;
 });
@@ -759,22 +893,32 @@ async function fetchDtr() {
 }
 
 async function fetchPeriodSummary() {
-  periodSummaryLoading.value = true;
-  periodSummary.value = null;
+  const seq = ++summaryRequestSeq;
 
+  if (!isScopeValid.value) {
+    periodSummary.value = null;
+    periodSummaryLoading.value = false;
+    return;
+  }
+
+  periodSummaryLoading.value = true;
   try {
     const { data } = await axios.get(
       `/api/dtr/period-summary/${saveDtrMonth.value}/${saveDtrYear.value}`,
+      { params: scopePayload.value },
     );
+    if (seq !== summaryRequestSeq) return; // stale response
     periodSummary.value = {
       ...data.data,
       already_saved: data.already_saved,
+      scope_total: data.scope_total,
+      scope_saved: data.scope_saved,
+      scope_unsaved: data.scope_unsaved,
     };
   } catch {
-    // Non-critical preview — fail silently, dialog still works without it
-    periodSummary.value = null;
+    if (seq === summaryRequestSeq) periodSummary.value = null;
   } finally {
-    periodSummaryLoading.value = false;
+    if (seq === summaryRequestSeq) periodSummaryLoading.value = false;
   }
 }
 
@@ -794,11 +938,17 @@ function finishSavingDtr() {
 // Shared by saveDtr() and overrideDtr() — both queue a job for the same
 // month/year payload and drive the same progress UI; only the target
 // endpoint and the 422 fallback message differ.
-async function runDtrJob(endpoint: string, incompleteMonthMessage: string) {
+async function runDtrJob(
+  endpoint: string,
+  incompleteMonthMessage: string,
+  mode: "save" | "override",
+) {
   if (savingDtr.value) return;
   savingDtr.value = true;
   savingTimedOut.value = false;
   savingElapsedSecs.value = 0;
+  runningScope.value = saveScope.value;
+  runningMode.value = mode;
   savingTimer = setInterval(() => {
     savingElapsedSecs.value++;
   }, 1000);
@@ -821,16 +971,14 @@ async function runDtrJob(endpoint: string, incompleteMonthMessage: string) {
     await axios.post(endpoint, {
       month: saveDtrMonth.value,
       year: saveDtrYear.value,
+      ...scopePayload.value,
     });
   } catch (err: any) {
     const status = err?.response?.status;
     const message = err?.response?.data?.message;
 
     if (status === 409) {
-      showAlert(
-        "warning",
-        message ?? `DTR for ${saveDtrLabel.value} has already been saved.`,
-      );
+      showAlert("warning", message ?? `DTR for ${saveDtrLabel.value} has already been saved.`);
     } else if (status === 422) {
       showAlert("warning", message ?? incompleteMonthMessage);
     } else {
@@ -841,18 +989,11 @@ async function runDtrJob(endpoint: string, incompleteMonthMessage: string) {
 }
 
 async function saveDtr() {
-  await runDtrJob(
-    "/api/dtr/save",
-    `DTR for ${saveDtrLabel.value} is not yet complete.`,
-  );
+  await runDtrJob("/api/dtr/save", `DTR for ${saveDtrLabel.value} is not yet complete.`, "save");
 }
-
 async function overrideDtr() {
   confirmOverrideOpen.value = false;
-  await runDtrJob(
-    "/api/dtr/override",
-    `DTR for ${saveDtrLabel.value} is not yet complete.`,
-  );
+  await runDtrJob("/api/dtr/override", `DTR for ${saveDtrLabel.value} is not yet complete.`, "override");
 }
 
 /* ─────────────────────────────────────────
@@ -877,6 +1018,7 @@ function cancelSaveDtr() {
   saveDtrMonth.value = defaultPeriod.month;
   saveDtrYear.value = defaultPeriod.year;
   periodSummary.value = null;
+  resetScope();
 }
 
 /* ─────────────────────────────────────────
@@ -897,8 +1039,11 @@ onMounted(() => {
 
       if (payload.status === "completed") {
         showAlert("success", payload.message);
+        const wasAll = runningScope.value === "all";
         finishSavingDtr();
-        startCooldown();
+        resetScope();
+        if (wasAll) startCooldown();
+        fetchData(); // refresh DTR Status column
         return;
       }
 
@@ -923,6 +1068,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (cooldownTimer) clearInterval(cooldownTimer);
+  if (summaryDebounce) clearTimeout(summaryDebounce);
 
   const userId = userStore.user?.id;
   if (!userId) return;
@@ -949,37 +1095,43 @@ onUnmounted(() => {
         <!-- ── Header action buttons ── -->
         <div class="d-flex align-center gap-2">
           <!-- Save DTR button — saves ALL JO employees' DTR for the preceding month -->
-          <VTooltip location="bottom">
+          <VMenu location="bottom end">
             <template #activator="{ props }">
-              <span v-bind="props" style="display: inline-block">
-                <VBtn
-                  color="success"
-                  variant="tonal"
-                  prepend-icon="mdi-content-save-outline"
-                  :loading="savingDtr"
-                  :disabled="!canSaveDtr"
-                  data-tour="save-dtr"
-                  @click="
-                    {
-                      savingElapsedSecs = 0;
-                      confirmSaveOpen = true;
-                    }
-                  "
-                >
-                  Save DTR
-                </VBtn>
-              </span>
+              <VBtn
+                v-bind="props"
+                color="success"
+                variant="tonal"
+                prepend-icon="mdi-content-save-outline"
+                append-icon="mdi-menu-down"
+                :loading="savingDtr"
+                :disabled="savingDtr"
+                data-tour="save-dtr"
+              >
+                Save DTR
+              </VBtn>
             </template>
-            <span>
-              {{
-                !isMonthComplete
-                  ? `${saveDtrLabel} is not yet complete — DTR can only be saved after the month ends`
-                  : cooldownActive
-                    ? cooldownLabel
-                    : "Save DTR summaries — select period in dialog"
-              }}
-            </span>
-          </VTooltip>
+            <VList density="compact" min-width="260">
+              <VListItem
+                prepend-icon="mdi-account-group-outline"
+                title="All DTRs"
+                :subtitle="cooldownActive ? cooldownLabel : 'Every active JO employee'"
+                :disabled="cooldownActive"
+                @click="openSaveDialog('all')"
+              />
+              <VListItem
+                prepend-icon="mdi-sitemap-outline"
+                title="By Section"
+                subtitle="One or more sections"
+                @click="openSaveDialog('section')"
+              />
+              <VListItem
+                prepend-icon="mdi-account-check-outline"
+                title="Individual"
+                subtitle="Selected employees in a section"
+                @click="openSaveDialog('individual')"
+              />
+            </VList>
+          </VMenu>
 
           <!-- Set Flexi button — mark/unmark employees on the flexi schedule -->
           <VBtn
@@ -1048,8 +1200,8 @@ onUnmounted(() => {
         <strong>standard week exemptions</strong> for the period are set in the
         <strong>Calendar</strong> module. DTR summaries cannot be re-saved
         without going through Override, so missing calendar entries will require
-        an override to correct. A <strong>3-minute cooldown</strong> applies
-        before another save can be performed.
+        an override to correct. A <strong>3-minute cooldown</strong> applies after saving
+        <strong>All DTRs</strong>; section and individual saves are not affected.
       </VAlert>
 
       <!-- ── Summary Cards ── -->
@@ -2033,7 +2185,11 @@ onUnmounted(() => {
     </BaseModal>
 
     <!-- ── Save DTR Confirmation Dialog ── -->
-    <VDialog v-model="confirmSaveOpen" max-width="440" persistent>
+    <VDialog
+      v-model="confirmSaveOpen"
+      :max-width="saveScope === 'individual' ? 560 : 480"
+      persistent
+    >
       <VCard
         rounded="lg"
         :class="
@@ -2064,7 +2220,7 @@ onUnmounted(() => {
               >
               <template v-else>save</template>
               DTR summary totals for
-              <strong>all active JO employees</strong> for:
+              <strong>{{ scopeDescription }}</strong> for:
             </p>
 
             <!-- ── Period selectors ── -->
@@ -2094,7 +2250,96 @@ onUnmounted(() => {
                 />
               </VCol>
             </VRow>
+              <!-- ── Scope selector ── -->
+            <VBtnToggle
+              v-model="saveScope"
+              mandatory
+              divided
+              density="compact"
+              color="success"
+              variant="outlined"
+              class="mb-3 d-flex"
+            >
+              <VBtn value="all" class="flex-grow-1" :disabled="cooldownActive">All</VBtn>
+              <VBtn value="section" class="flex-grow-1">By Section</VBtn>
+              <VBtn value="individual" class="flex-grow-1">Individual</VBtn>
+            </VBtnToggle>
 
+            <!-- By Section: multi-select -->
+            <VAutocomplete
+              v-if="saveScope === 'section'"
+              v-model="scopeSectionIds"
+              :items="sectionOptions"
+              label="Sections"
+              multiple
+              chips
+              closable-chips
+              variant="outlined"
+              density="compact"
+              prepend-inner-icon="mdi-sitemap-outline"
+              hide-details
+              class="mb-3"
+            />
+
+            <!-- Individual: one section → pick employees -->
+            <template v-else-if="saveScope === 'individual'">
+              <VAutocomplete
+                v-model="scopeSectionId"
+                :items="sectionOptions"
+                label="Section"
+                variant="outlined"
+                density="compact"
+                prepend-inner-icon="mdi-sitemap-outline"
+                hide-details
+                class="mb-3"
+              />
+              <template v-if="scopeSectionId != null">
+                <VTextField
+                  v-model="scopeEmpSearch"
+                  placeholder="Search employee..."
+                  prepend-inner-icon="mdi-magnify"
+                  variant="outlined"
+                  density="compact"
+                  clearable
+                  hide-details
+                  class="mb-2"
+                  @click:clear="scopeEmpSearch = ''"
+                />
+                <div class="d-flex align-center justify-space-between mb-1">
+                  <span class="text-caption font-weight-medium">
+                    {{ scopeUserIds.length }} selected of {{ scopeEmployeePool.length }}
+                  </span>
+                  <VBtn variant="text" size="small" density="compact" @click="toggleAllScopeUsers">
+                    {{ allScopeUsersChecked ? "Clear all" : "Select all" }}
+                  </VBtn>
+                </div>
+                <div class="scope-emp-list mb-3">
+                  <div
+                    v-for="emp in scopeEmployeePool"
+                    :key="emp.id"
+                    class="d-flex align-center py-1 px-1 assign-row"
+                    @click="toggleScopeUser(emp.id)"
+                  >
+                    <VCheckbox
+                      :model-value="scopeUserIds.includes(emp.id)"
+                      density="compact"
+                      hide-details
+                      readonly
+                    />
+                    <div class="flex-grow-1 text-truncate">
+                      <span class="text-body-2">{{ emp.full_name }}</span>
+                      <span class="text-caption text-medium-emphasis ms-2">{{ emp.position ?? "" }}</span>
+                    </div>
+                  </div>
+                  <p
+                    v-if="!scopeEmployeePool.length"
+                    class="text-caption text-medium-emphasis text-center py-4"
+                  >
+                    No employees match.
+                  </p>
+                </div>
+              </template>
+            </template>
             <p
               class="text-body-1 font-weight-bold mb-3"
               :class="
@@ -2146,6 +2391,15 @@ onUnmounted(() => {
                     periodSummary.total_suspensions === 1 ? "" : "s"
                   }}
                 </VChip>
+                <VChip
+                  v-if="periodSummary.scope_total"
+                  size="small"
+                  color="info"
+                  variant="tonal"
+                  prepend-icon="mdi-account-multiple-check-outline"
+                >
+                  {{ periodSummary.scope_saved }} / {{ periodSummary.scope_total }} saved
+                </VChip>
               </template>
             </div>
 
@@ -2160,6 +2414,20 @@ onUnmounted(() => {
             >
               DTR for {{ saveDtrLabel }} has already been saved. Do you want to
               override the existing data?
+            </VAlert>
+
+            <VAlert
+              v-else-if="periodSummary && periodSummary.scope_saved > 0"
+              type="info"
+              variant="tonal"
+              density="compact"
+              class="mb-3"
+              icon="mdi-information-outline"
+            >
+              {{ periodSummary.scope_saved }} of {{ periodSummary.scope_total }} employees in this
+              scope already have a saved DTR for {{ saveDtrLabel }}.
+              <strong>Save</strong> processes only the {{ periodSummary.scope_unsaved }} unsaved;
+              <strong>Override</strong> recomputes the saved ones.
             </VAlert>
 
             <VAlert
@@ -2231,24 +2499,24 @@ onUnmounted(() => {
         <VCardActions v-if="!savingDtr" class="pa-4 pt-0 gap-2 justify-end">
           <VBtn variant="text" @click="cancelSaveDtr">Cancel</VBtn>
           <VBtn
-            v-if="periodSummary?.already_saved"
+            v-if="periodSummary && periodSummary.scope_saved > 0"
             color="warning"
             variant="tonal"
             prepend-icon="mdi-restore-alert"
+            :disabled="!canSaveDtr || periodSummaryLoading"
             @click="confirmOverrideOpen = true"
-            :disabled="!canSaveDtr"
           >
-            Override
+            Override ({{ periodSummary.scope_saved }})
           </VBtn>
           <VBtn
-            v-else
+            v-if="!periodSummary || periodSummary.scope_unsaved > 0"
             color="success"
             variant="tonal"
             prepend-icon="mdi-content-save-outline"
+            :disabled="!canSaveDtr || periodSummaryLoading || !periodSummary"
             @click="saveDtr"
-            :disabled="!canSaveDtr"
           >
-            Save
+            Save<template v-if="periodSummary"> ({{ periodSummary.scope_unsaved }})</template>
           </VBtn>
         </VCardActions>
       </VCard>
@@ -2262,11 +2530,11 @@ onUnmounted(() => {
             <VIcon icon="mdi-alert-circle-outline" color="warning" size="28" />
             <span class="text-h6 font-weight-bold">Confirm Override</span>
           </div>
-          <p class="text-body-2">
+           <p class="text-body-2">
             Are you sure you want to override the existing DTR for
-            <strong>{{ saveDtrLabel }}</strong
-            >? This will overwrite the previously saved data for all active JO
-            employees and cannot be undone.
+            <strong>{{ saveDtrLabel }}</strong>? This will overwrite the previously saved data for
+            <strong>{{ periodSummary?.scope_saved ?? 0 }}</strong> employee(s) in
+            {{ scopeDescription }} and cannot be undone.
           </p>
         </VCardText>
         <VCardActions class="pa-4 pt-0 gap-2 justify-end">
@@ -2323,6 +2591,22 @@ onUnmounted(() => {
   top: 0;
   z-index: 1;
   background: rgb(var(--v-theme-surface));
+}
+
+.scope-emp-list {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  padding: 4px;
+}
+.assign-row {
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.assign-row:hover {
+  background-color: rgba(var(--v-theme-on-surface), 0.04);
 }
 
 .dtr-table th {

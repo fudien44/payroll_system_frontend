@@ -14,6 +14,7 @@ export interface Holiday {
   label:       string
   type:        HolidayType
   is_half_day: boolean      
+  reference:   string | null
 }
 
 export interface CustomStandardWeekExemptionSummary {
@@ -75,12 +76,64 @@ export interface EmployeeStandardWeekExemption {
   end_date:      string | null
 }
 
+// ── Standard-week section entries ─────────────────────────────────────────
+
+export interface StandardWeekSectionEntry {
+  id:                number
+  section_id:        number
+  section_name:      string
+  section_shortcode: string | null
+  division_id:       number | null
+  division_name:     string | null
+  notes:             string | null
+  batch_count:       number   // batches with weeks in the requested year
+  individual_count:  number   // employees with individual weeks in the requested year
+}
+
+export interface SectionStandardWeekBatch extends StandardWeekBatch {
+  section_entry_id: number | null
+  weeks:            string[]  // Monday ISO dates
+}
+
+export interface SectionIndividualRow {
+  emp_id:           number
+  emp_name:         string
+  position:         string | null
+  still_in_section: boolean
+  weeks:            string[]  // Mondays inside the requested range only
+  week_count:       number
+}
+
+export interface PageMeta {
+  current_page: number
+  last_page:    number
+  per_page:     number
+  total:        number
+}
+
+export interface Paginated<T> {
+  data: T[]
+  meta: PageMeta
+}
+
+export interface SectionListParams {
+  year:      number
+  month?:    number | null
+  search?:   string
+  page?:     number
+  per_page?: number
+}
+
+export interface DivisionOption { id: number; office: string | null; description: string }
+export interface SectionOption  { id: number; office: number; shortcode: string | null; station: string }
+
 export interface SuspensionDay {
   id:          number
   date:        string       // ISO: YYYY-MM-DD
   label:       string
   is_half_day: boolean
   created_at:  string
+  reference:   string | null
 }
 
 export interface MonthSummary {
@@ -121,6 +174,8 @@ const contractBreakBatches = ref<ContractBreakBatch[]>([])
 const batchesFetched = ref(false)
 const standardWeekBatches = ref<StandardWeekBatch[]>([])
 const standardWeekBatchesFetched = ref(false)
+const sectionEntries = ref<StandardWeekSectionEntry[]>([])
+const sectionEntriesLoading = ref(false)
 const holidays    = ref<Holiday[]>([])
 const suspensions = ref<SuspensionDay[]>([])
 const loading     = ref(false)
@@ -460,14 +515,16 @@ async function fetchStandardWeekEmployeePicker(
 }
 
 async function addStandardWeekBatch(
-  label: string, weeks: string[], notes = '',
+  label: string, weeks: string[], notes = '', sectionEntryId: number | null = null,
 ): Promise<true | string> {
   try {
     const res = await axiosInstance.post('/api/calendar/standard-week/batches', {
       label: label.trim(), weeks, notes: notes.trim() || null,
+      section_entry_id: sectionEntryId,
     })
     if (res.data.success) {
-      standardWeekBatches.value.push(res.data.data)
+      // Only legacy (unassigned) batches live in the sidebar list
+      if (!sectionEntryId) standardWeekBatches.value.push(res.data.data)
       return true
     }
     return res.data.message ?? 'Failed to add batch.'
@@ -475,6 +532,166 @@ async function addStandardWeekBatch(
     const errors = err?.response?.data?.errors
     if (errors) return Object.values(errors).flat().join(' ')
     return err?.response?.data?.message ?? 'Failed to add batch.'
+  }
+}
+
+// ── Standard-week section entries ─────────────────────────────────────────
+
+function apiError(err: any, fallback: string): string {
+  const errors = err?.response?.data?.errors
+  if (errors) return Object.values(errors).flat().join(' ')
+  return err?.response?.data?.message ?? fallback
+}
+
+async function fetchSectionEntries(year: number): Promise<void> {
+  sectionEntriesLoading.value = true
+  try {
+    const { data } = await axiosInstance.get('/api/calendar/standard-week/sections', { params: { year } })
+    if (data.success) sectionEntries.value = data.data
+  } catch {
+    // non-fatal
+  } finally {
+    sectionEntriesLoading.value = false
+  }
+}
+
+async function addSectionEntry(sectionId: number, notes = ''): Promise<StandardWeekSectionEntry | string> {
+  try {
+    const { data } = await axiosInstance.post('/api/calendar/standard-week/sections', {
+      section_id: sectionId, notes: notes.trim() || null,
+    })
+    if (data.success) {
+      sectionEntries.value = [...sectionEntries.value, data.data]
+        .sort((a, b) => (a.division_name ?? '').localeCompare(b.division_name ?? '') || a.section_name.localeCompare(b.section_name))
+      return data.data
+    }
+    return data.message ?? 'Failed to create section entry.'
+  } catch (err: any) {
+    return apiError(err, 'Failed to create section entry.')
+  }
+}
+
+async function removeSectionEntry(id: number): Promise<true | string> {
+  try {
+    const { data } = await axiosInstance.post(`/api/calendar/standard-week/sections/delete/${id}`)
+    if (data.success) {
+      sectionEntries.value = sectionEntries.value.filter(e => e.id !== id)
+      return true
+    }
+    return data.message ?? 'Failed to delete section entry.'
+  } catch (err: any) {
+    return apiError(err, 'Failed to delete section entry.')
+  }
+}
+
+function emptyPage<T>(): Paginated<T> {
+  return { data: [], meta: { current_page: 1, last_page: 1, per_page: 10, total: 0 } }
+}
+
+function listParams(p: SectionListParams) {
+  return {
+    year: p.year,
+    month: p.month ?? undefined,
+    search: p.search?.trim() || undefined,
+    page: p.page ?? 1,
+    per_page: p.per_page ?? 10,
+  }
+}
+
+async function fetchSectionBatches(entryId: number, params: SectionListParams): Promise<Paginated<SectionStandardWeekBatch>> {
+  try {
+    const { data } = await axiosInstance.get(`/api/calendar/standard-week/sections/${entryId}/batches`, { params: listParams(params) })
+    return data.success ? { data: data.data, meta: data.meta } : emptyPage()
+  } catch {
+    return emptyPage()
+  }
+}
+
+async function fetchSectionIndividuals(entryId: number, params: SectionListParams): Promise<Paginated<SectionIndividualRow>> {
+  try {
+    const { data } = await axiosInstance.get(`/api/calendar/standard-week/sections/${entryId}/individuals`, { params: listParams(params) })
+    return data.success ? { data: data.data, meta: data.meta } : emptyPage()
+  } catch {
+    return emptyPage()
+  }
+}
+
+async function fetchSectionEmployeePicker(entryId: number, batchId?: number): Promise<ContractBreakEmployeePickerRow[]> {
+  try {
+    const { data } = await axiosInstance.get(`/api/calendar/standard-week/sections/${entryId}/employees-picker`, {
+      params: batchId ? { batch_id: batchId } : {},
+    })
+    return data.success ? data.data : []
+  } catch {
+    return []
+  }
+}
+
+async function fetchSectionIndividualWeeks(entryId: number, empId: number): Promise<string[]> {
+  try {
+    const { data } = await axiosInstance.get(`/api/calendar/standard-week/sections/${entryId}/individuals/weeks`, {
+      params: { emp_id: empId },
+    })
+    return data.success ? data.data : []
+  } catch {
+    return []
+  }
+}
+
+async function syncSectionIndividual(entryId: number, empId: number, weeks: string[]): Promise<true | string> {
+  try {
+    const { data } = await axiosInstance.post(`/api/calendar/standard-week/sections/${entryId}/individuals/sync`, {
+      emp_id: empId, weeks,
+    })
+    return data.success ? true : (data.message ?? 'Failed to update exemption.')
+  } catch (err: any) {
+    return apiError(err, 'Failed to update exemption.')
+  }
+}
+
+async function clearSectionIndividual(
+  entryId: number, empId: number, year?: number, month?: number | null,
+): Promise<true | string> {
+  try {
+    const { data } = await axiosInstance.post(`/api/calendar/standard-week/sections/${entryId}/individuals/clear`, {
+      emp_id: empId, year: year ?? null, month: month ?? null,
+    })
+    return data.success ? true : (data.message ?? 'Failed to remove.')
+  } catch (err: any) {
+    return apiError(err, 'Failed to remove.')
+  }
+}
+
+async function duplicateStandardWeekBatch(
+  batchId: number, label: string, weeks: string[], notes = '',
+): Promise<{ success: true; message: string } | { success: false; message: string }> {
+  try {
+    const { data } = await axiosInstance.post(`/api/calendar/standard-week/sections/batches/${batchId}/duplicate`, {
+      label: label.trim(), weeks, notes: notes.trim() || null,
+    })
+    return data.success
+      ? { success: true, message: data.message }
+      : { success: false, message: data.message ?? 'Failed to duplicate batch.' }
+  } catch (err: any) {
+    return { success: false, message: apiError(err, 'Failed to duplicate batch.') }
+  }
+}
+
+async function fetchDivisionOptions(): Promise<DivisionOption[]> {
+  try {
+    const { data } = await axiosInstance.get('/api/divisions')
+    return data.success ? data.data : []
+  } catch {
+    return []
+  }
+}
+
+async function fetchSectionOptions(divisionId: number): Promise<SectionOption[]> {
+  try {
+    const { data } = await axiosInstance.get(`/api/divisions/${divisionId}/sections`)
+    return data.success ? data.data : []
+  } catch {
+    return []
   }
 }
 
@@ -576,6 +793,7 @@ async function addStandardWeekBatch(
     label:      string,
     type:       HolidayType,
     isHalfDay = false,
+    reference = '',
   ): Promise<true | string> {
     try {
       const res = await axiosInstance.post('/api/calendar/holidays', {
@@ -584,6 +802,7 @@ async function addStandardWeekBatch(
         type,
         // Regular holidays are never half-day; guard here too for safety
         is_half_day: type === 'special' ? isHalfDay : false,
+        reference: reference.trim() || null,
       })
       if (res.data.success) {
         holidays.value.push(res.data.data)
@@ -604,6 +823,7 @@ async function addStandardWeekBatch(
     label:      string,
     type:       HolidayType,
     isHalfDay = false,
+    reference = '',
   ): Promise<true | string> {
     try {
       const res = await axiosInstance.post(`/api/calendar/holidays/update/${id}`, {
@@ -611,6 +831,7 @@ async function addStandardWeekBatch(
         label:       label.trim(),
         type,
         is_half_day: type === 'special' ? isHalfDay : false,
+        reference: reference.trim() || null,
       })
       if (res.data.success) {
         const idx = holidays.value.findIndex(h => h.id === id)
@@ -646,12 +867,14 @@ async function addStandardWeekBatch(
     isoDate:    string,
     label:      string,
     isHalfDay = false,
+    reference = ''
   ): Promise<true | string> {
     try {
       const res = await axiosInstance.post('/api/calendar/suspensions', {
         date:        isoDate,
         label:       label.trim(),
         is_half_day: isHalfDay,
+        reference:   reference.trim() || null,
       })
       if (res.data.success) {
         suspensions.value.push(res.data.data)
@@ -671,12 +894,14 @@ async function addStandardWeekBatch(
     isoDate:    string,
     label:      string,
     isHalfDay = false,
+    reference = ''
   ): Promise<true | string> {
     try {
       const res = await axiosInstance.post(`/api/calendar/suspensions/update/${id}`, {
         date:        isoDate,
         label:       label.trim(),
         is_half_day: isHalfDay,
+        reference:   reference.trim() || null,
       })
       if (res.data.success) {
         const idx = suspensions.value.findIndex(s => s.id === id)
@@ -763,5 +988,20 @@ async function addStandardWeekBatch(
     customStandardWeekExemptions: computed(() => customStandardWeekExemptions.value),
     fetchCustomStandardWeekExemptions,
     clearCustomStandardWeekExemption,
+
+    sectionEntries:        computed(() => sectionEntries.value),
+    sectionEntriesLoading: computed(() => sectionEntriesLoading.value),
+    fetchSectionEntries,
+    addSectionEntry,
+    removeSectionEntry,
+    fetchSectionBatches,
+    fetchSectionIndividuals,
+    fetchSectionEmployeePicker,
+    fetchSectionIndividualWeeks,
+    syncSectionIndividual,
+    clearSectionIndividual,
+    duplicateStandardWeekBatch,
+    fetchDivisionOptions,
+    fetchSectionOptions,
   }
 }
