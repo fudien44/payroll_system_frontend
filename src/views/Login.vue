@@ -1,113 +1,117 @@
 <script setup lang="ts">
-import Logo from '@/components/Logo.vue'
-import { useAuthStore } from '@/stores/auth'
-import authBgDark from '@images/pages/auth-bg-dark.svg'
-import authBgLight from '@images/pages/auth-bg-light.svg'
-import { useRoute, useRouter } from 'vue-router'
-import { useTheme } from 'vuetify'
-import { VForm } from 'vuetify/components/VForm'
+import Logo from "@/components/Logo.vue";
+import { useAuthStore } from "@/stores/auth";
+import authBgDark from "@images/pages/auth-bg-dark.svg";
+import authBgLight from "@images/pages/auth-bg-light.svg";
+import { useRoute, useRouter } from "vue-router";
+import { useTheme } from "vuetify";
+import { VForm } from "vuetify/components/VForm";
 
-const loginForm = ref<VForm>()
-const isPasswordVisible = ref(false)
-const theme = useTheme()
-const router = useRouter()
-const route = useRoute()
-const authStore = useAuthStore()
+const loginForm = ref<VForm>();
+const isPasswordVisible = ref(false);
+const theme = useTheme();
+const router = useRouter();
+const route = useRoute();
+const authStore = useAuthStore();
 
-const isLoading = ref(false)
-const errorMessage = ref('')
+const isLoading = ref(false);
+const errorMessage = ref("");
 
 const loginData = ref({
-  username: '',
-  password: '',
-})
+  username: "",
+  password: "",
+});
 
 const authBgThemeVariant = computed(() => {
-  return theme.current.value.dark ? authBgDark : authBgLight
-})
+  return theme.current.value.dark ? authBgDark : authBgLight;
+});
 
 // Right panel — DOH Deep Navy / Soft Navy Blue brand gradient
 const rightPanelStyle = computed(() => ({
-  background: 'linear-gradient(145deg, #1F2A45 0%, #263A5C 50%, #365175 100%)',
-  blockSize: '38rem',
-}))
+  background: "linear-gradient(145deg, #1F2A45 0%, #263A5C 50%, #365175 100%)",
+  blockSize: "38rem",
+}));
 
 async function handleLogin() {
-  errorMessage.value = ''
+  errorMessage.value = "";
 
-  const { valid } = await loginForm.value!.validate()
-  if (!valid) return
+  const { valid } = await loginForm.value!.validate();
+  if (!valid) return;
 
-  isLoading.value = true
+  isLoading.value = true;
 
   try {
-    await authStore.login(loginData.value)
+    await authStore.login(loginData.value);
 
-    const redirectTo = route.query.redirect as string || '/'
-    router.push(redirectTo)
+    const redirectTo = (route.query.redirect as string) || "/";
+    router.push(redirectTo);
   } catch (e: any) {
-    errorMessage.value = e.response?.data?.message || 'Invalid credentials. Please try again.'
+    errorMessage.value =
+      e.response?.data?.message || "Invalid credentials. Please try again.";
   } finally {
-    isLoading.value = false
+    isLoading.value = false;
   }
 }
 
 const features = [
   {
-    icon: 'mdi-calculator-variant-outline',
-    title: 'Automated Computation',
-    text: 'Accurate payroll processed in seconds',
+    icon: "mdi-calculator-variant-outline",
+    title: "Automated Computation",
+    text: "Accurate payroll processed in seconds",
   },
   {
-    icon: 'mdi-clock-check-outline',
-    title: 'Attendance Tracking',
-    text: 'Real-time monitoring and reporting',
+    icon: "mdi-clock-check-outline",
+    title: "Attendance Tracking",
+    text: "Real-time monitoring and reporting",
   },
   {
-    icon: 'mdi-account-group-outline',
-    title: 'HRMIS Integration',
-    text: 'Synced directly with your HR records',
+    icon: "mdi-account-group-outline",
+    title: "HRMIS Integration",
+    text: "Synced directly with your HR records",
   },
-]
+];
 </script>
 
 <template>
   <div class="auth-wrapper">
-    <VCard
-      max-width="900"
-      :width="$vuetify.display.smAndDown ? '500' : 'auto'"
-    >
+    <VCard max-width="900" :width="$vuetify.display.smAndDown ? '500' : 'auto'">
       <VRow no-gutters class="position-relative">
         <!-- 👈 Left side — login form -->
-          <VCol
+        <VCol
           cols="12"
           md="6"
           theme="light"
           class="d-flex flex-column justify-center pa-10 position-relative"
-          style="block-size: 38rem; background-color: #EEFAF6;"
+          style="block-size: 38rem; background-color: #eefaf6"
         >
           <!-- Logo + System name -->
-           <div class="d-flex align-center gap-3 mb-8">
+          <div class="d-flex align-center gap-3 mb-8">
             <div
               class="d-flex align-center justify-center"
               style="
                 width: 44px;
                 height: 44px;
                 border-radius: 12px;
-                background: linear-gradient(135deg, #0B4BAA, #1F2A45);
+                background: linear-gradient(135deg, #0b4baa, #1f2a45);
                 flex-shrink: 0;
               "
             >
-              <Logo style="width: 26px; height: 26px; color: white;" />
+              <Logo style="width: 26px; height: 26px; color: white" />
             </div>
             <div>
               <h5
                 class="mb-0 font-weight-bold"
-                style="font-size: 25px; line-height: 1.2; color: #333333;"
+                style="font-size: 25px; line-height: 1.2; color: #333333"
               >
-                JO Payroll System
+                COS Payroll System
               </h5>
-              <span style="font-size: 0.7rem; letter-spacing: 0.4px; color: rgba(51, 51, 51, 0.6);">
+              <span
+                style="
+                  font-size: 0.7rem;
+                  letter-spacing: 0.4px;
+                  color: rgba(51, 51, 51, 0.6);
+                "
+              >
                 HRMIS PORTAL
               </span>
             </div>
@@ -117,13 +121,13 @@ const features = [
           <div class="mb-6">
             <h3
               class="font-weight-bold mb-1"
-              style="font-size: 1.5rem; color: #333333;"
+              style="font-size: 1.5rem; color: #333333"
             >
               Welcome... 👋
             </h3>
             <p
               class="mb-0"
-              style="font-size: 0.82rem; color: rgba(51, 51, 51, 0.65);"
+              style="font-size: 0.82rem; color: rgba(51, 51, 51, 0.65)"
             >
               Please sign in with your Employee Portal account to continue.
             </p>
@@ -149,9 +153,13 @@ const features = [
             @submit.prevent="handleLogin"
           >
             <div class="mb-4">
-               <label
+              <label
                 class="d-block mb-1"
-                style="font-size: 0.75rem; letter-spacing: 0.4px; color: rgba(51, 51, 51, 0.65);"
+                style="
+                  font-size: 0.75rem;
+                  letter-spacing: 0.4px;
+                  color: rgba(51, 51, 51, 0.65);
+                "
               >
                 USERNAME
               </label>
@@ -160,20 +168,24 @@ const features = [
                 placeholder="Enter your username"
                 type="text"
                 prepend-inner-icon="mdi-account-outline"
-                :rules="[v => !!v || 'Username is required']"
+                :rules="[(v) => !!v || 'Username is required']"
                 variant="outlined"
                 density="comfortable"
                 color="#0B4BAA"
                 base-color="rgba(51, 51, 51, 0.65)"
                 hide-details="auto"
-                style="border-radius: 10px;"
+                style="border-radius: 10px"
               />
             </div>
 
             <div class="mb-2">
-               <label
+              <label
                 class="d-block mb-1"
-                style="font-size: 0.75rem; letter-spacing: 0.4px; color: rgba(51, 51, 51, 0.65);"
+                style="
+                  font-size: 0.75rem;
+                  letter-spacing: 0.4px;
+                  color: rgba(51, 51, 51, 0.65);
+                "
               >
                 PASSWORD
               </label>
@@ -182,14 +194,16 @@ const features = [
                 placeholder="Enter your password"
                 :type="isPasswordVisible ? 'text' : 'password'"
                 prepend-inner-icon="mdi-lock-outline"
-                :append-inner-icon="isPasswordVisible ? 'mdi-eye-off-outline' : 'mdi-eye-outline'"
-                :rules="[v => !!v || 'Password is required']"
+                :append-inner-icon="
+                  isPasswordVisible ? 'mdi-eye-off-outline' : 'mdi-eye-outline'
+                "
+                :rules="[(v) => !!v || 'Password is required']"
                 variant="outlined"
                 density="comfortable"
                 color="#0B4BAA"
                 base-color="rgba(51, 51, 51, 0.65)"
                 hide-details="auto"
-                style="border-radius: 10px;"
+                style="border-radius: 10px"
                 @click:append-inner="isPasswordVisible = !isPasswordVisible"
               />
             </div>
@@ -212,7 +226,7 @@ const features = [
               :loading="isLoading"
               :disabled="isLoading"
               style="
-                background: linear-gradient(135deg, #0B4BAA, #1F2A45);
+                background: linear-gradient(135deg, #0b4baa, #1f2a45);
                 color: white;
                 border-radius: 10px;
                 font-weight: 600;
@@ -259,7 +273,7 @@ const features = [
               width: 320px;
               height: 320px;
               border-radius: 50%;
-              border: 1.5px solid rgba(255,255,255,0.08);
+              border: 1.5px solid rgba(255, 255, 255, 0.08);
               top: -80px;
               right: -80px;
             "
@@ -270,7 +284,7 @@ const features = [
               width: 200px;
               height: 200px;
               border-radius: 50%;
-              border: 1.5px solid rgba(255,255,255,0.06);
+              border: 1.5px solid rgba(255, 255, 255, 0.06);
               bottom: -50px;
               left: -50px;
             "
@@ -281,7 +295,7 @@ const features = [
               width: 100px;
               height: 100px;
               border-radius: 50%;
-              background: rgba(255,255,255,0.04);
+              background: rgba(255, 255, 255, 0.04);
               top: 60px;
               left: 40px;
             "
@@ -289,21 +303,25 @@ const features = [
 
           <!-- Logo -->
           <div class="mb-4">
-            <Logo style="width: 64px; height: 64px; color: white;" />
+            <Logo style="width: 64px; height: 64px; color: white" />
           </div>
 
           <!-- System name -->
           <h2
             class="text-center font-weight-bold mb-1"
-            style="color: white; font-size: 1.4rem; letter-spacing: 0.5px;"
+            style="color: white; font-size: 1.4rem; letter-spacing: 0.5px"
           >
-            JO Payroll System
+            COS Payroll System
           </h2>
 
           <!-- Tagline -->
           <p
             class="text-center mb-8"
-            style="color: rgba(255,255,255,0.6); font-size: 0.85rem; letter-spacing: 0.3px;"
+            style="
+              color: rgba(255, 255, 255, 0.6);
+              font-size: 0.85rem;
+              letter-spacing: 0.3px;
+            "
           >
             Streamline your payroll, effortlessly.
           </p>
@@ -313,16 +331,18 @@ const features = [
             class="mt-10 px-4 py-2 d-flex align-center gap-2"
             style="
               border-radius: 999px;
-              background: rgba(255,255,255,0.1);
-              border: 1px solid rgba(255,255,255,0.15);
+              background: rgba(255, 255, 255, 0.1);
+              border: 1px solid rgba(255, 255, 255, 0.15);
             "
           >
-            <VIcon
-              icon="mdi-shield-check-outline"
-              size="14"
-              color="white"
-            />
-            <span style="color: rgba(255,255,255,0.7); font-size: 0.72rem; letter-spacing: 0.4px;">
+            <VIcon icon="mdi-shield-check-outline" size="14" color="white" />
+            <span
+              style="
+                color: rgba(255, 255, 255, 0.7);
+                font-size: 0.72rem;
+                letter-spacing: 0.4px;
+              "
+            >
               Secured & integrated with HRMIS
             </span>
           </div>

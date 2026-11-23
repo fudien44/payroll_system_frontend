@@ -2,7 +2,7 @@ import { config } from '@/composable/useConfig'
 
 // default settings
 export const appConfig = config({
-  title: ref('JO Payroll System'),
+  title: ref('COS Payroll System'),
   theme: ref('system'),
   navigationMenu: ref('vertical'), // horizontal or vertical
   isBoxLayout: ref(true),
