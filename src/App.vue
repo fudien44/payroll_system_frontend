@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import BaseAlert from '@/components/base/BaseAlert.vue'; // NEW
-import { useAppConfig } from '@/composable/useAppConfig'
-import Blank from '@/layouts/blank.vue'
-import Default from '@/layouts/default.vue'
+import DevSiteBanner from '@/components/DevSiteBanner.vue';
+import { useAppConfig } from '@/composable/useAppConfig';
+import Blank from '@/layouts/blank.vue';
+import Default from '@/layouts/default.vue';
 import { useSnackbarStore } from '@/stores/snackbar'; // NEW
-import { appConfig } from '@appConfig'
-import { storeToRefs } from 'pinia'
-import { useRouter } from 'vue-router'
+import { appConfig } from '@appConfig';
+import { storeToRefs } from 'pinia';
+import { useRouter } from 'vue-router';
 
 const route = useRouter()
 const { initLoadingTheme, rootClasses } = useAppConfig()
@@ -41,6 +42,8 @@ initLoadingTheme()
 <template>
   <VLocaleProvider v-bind="setAppRtl">
     <VApp :class="classes">
+      <DevSiteBanner />
+
       <Component
         :is="resolveLayoutVariant"
         v-if="resolveLayoutVariant"
