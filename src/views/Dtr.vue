@@ -448,6 +448,100 @@ function handleFlexiSaved(
   alertVisible.value = true;
 }
 
+// ── Employee list filters (client-side) ──────────────────────────────
+const filtersOpen = ref(false);
+const filterDivisionIds = ref<number[]>([]);
+const filterSectionIds = ref<number[]>([]);
+const filterStatuses = ref<Employee["current_period_status"][]>([]);
+
+const STATUS_FILTER_ITEMS = [
+  { title: "Not Saved", value: "not_saved" },
+  { title: "Saved", value: "saved" },
+  { title: "Overridden", value: "overridden" },
+];
+
+const divisionFilterOptions = computed(() => {
+  const map = new Map<number, { name: string; count: number }>();
+  for (const e of employees.value) {
+    if (e.division_id == null) continue;
+    const cur = map.get(e.division_id);
+    if (cur) cur.count++;
+    else
+      map.set(e.division_id, {
+        name: e.division ?? `Division #${e.division_id}`,
+        count: 1,
+      });
+  }
+  return [...map.entries()]
+    .map(([value, { name, count }]) => ({ value, title: `${name} (${count})` }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+});
+
+// Sections narrow to the selected division(s), if any
+const sectionFilterOptions = computed(() => {
+  const map = new Map<number, { name: string; count: number }>();
+  for (const e of employees.value) {
+    if (e.section_id == null) continue;
+    if (
+      filterDivisionIds.value.length &&
+      (e.division_id == null ||
+        !filterDivisionIds.value.includes(e.division_id))
+    )
+      continue;
+    const cur = map.get(e.section_id);
+    if (cur) cur.count++;
+    else
+      map.set(e.section_id, {
+        name: e.section ?? `Section #${e.section_id}`,
+        count: 1,
+      });
+  }
+  return [...map.entries()]
+    .map(([value, { name, count }]) => ({ value, title: `${name} (${count})` }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+});
+
+// Drop selected sections that no longer belong to the chosen divisions
+watch(filterDivisionIds, () => {
+  const valid = new Set(sectionFilterOptions.value.map((o) => o.value));
+  filterSectionIds.value = filterSectionIds.value.filter((id) => valid.has(id));
+});
+
+const activeFilterCount = computed(
+  () =>
+    (filterDivisionIds.value.length ? 1 : 0) +
+    (filterSectionIds.value.length ? 1 : 0) +
+    (filterStatuses.value.length ? 1 : 0),
+);
+
+const filteredEmployees = computed(() =>
+  employees.value.filter((e) => {
+    if (
+      filterDivisionIds.value.length &&
+      (e.division_id == null ||
+        !filterDivisionIds.value.includes(e.division_id))
+    )
+      return false;
+    if (
+      filterSectionIds.value.length &&
+      (e.section_id == null || !filterSectionIds.value.includes(e.section_id))
+    )
+      return false;
+    if (
+      filterStatuses.value.length &&
+      !filterStatuses.value.includes(e.current_period_status)
+    )
+      return false;
+    return true;
+  }),
+);
+
+function clearFilters() {
+  filterDivisionIds.value = [];
+  filterSectionIds.value = [];
+  filterStatuses.value = [];
+}
+
 // ── Save DTR progress (live via Reverb broadcast) ────────────────────
 const saveProgressDone = ref(0);
 const saveProgressTotal = ref(0);
@@ -1151,6 +1245,24 @@ onUnmounted(() => {
             </VList>
           </VMenu>
 
+          <!-- Filter Options -->
+          <VBtn
+            variant="tonal"
+            :color="activeFilterCount ? 'primary' : 'default'"
+            prepend-icon="mdi-filter-variant"
+            :append-icon="filtersOpen ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+            @click="filtersOpen = !filtersOpen"
+          >
+            Filters
+            <VBadge
+              v-if="activeFilterCount"
+              :content="activeFilterCount"
+              color="primary"
+              inline
+              class="ms-2"
+            />
+          </VBtn>
+
           <!-- Set Flexi button — mark/unmark employees on the flexi schedule -->
           <VBtn
             variant="tonal"
@@ -1311,6 +1423,79 @@ onUnmounted(() => {
         </VTooltip>
       </div>
 
+      <VExpandTransition>
+        <VCard
+          v-show="filtersOpen"
+          variant="outlined"
+          rounded="lg"
+          class="mb-4"
+        >
+          <VCardText>
+            <VRow dense align="center">
+              <VCol cols="12" md="4">
+                <VAutocomplete
+                  v-model="filterDivisionIds"
+                  :items="divisionFilterOptions"
+                  label="Division"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                  variant="outlined"
+                  density="compact"
+                  prepend-inner-icon="mdi-domain"
+                  hide-details
+                />
+              </VCol>
+              <VCol cols="12" md="4">
+                <VAutocomplete
+                  v-model="filterSectionIds"
+                  :items="sectionFilterOptions"
+                  label="Section"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                  variant="outlined"
+                  density="compact"
+                  prepend-inner-icon="mdi-sitemap-outline"
+                  hide-details
+                />
+              </VCol>
+              <VCol cols="12" md="3">
+                <VSelect
+                  v-model="filterStatuses"
+                  :items="STATUS_FILTER_ITEMS"
+                  label="DTR Status"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                  variant="outlined"
+                  density="compact"
+                  prepend-inner-icon="mdi-clipboard-check-outline"
+                  hide-details
+                />
+              </VCol>
+              <VCol cols="12" md="1" class="d-flex justify-end">
+                <VBtn
+                  variant="text"
+                  size="small"
+                  :disabled="!activeFilterCount"
+                  @click="clearFilters"
+                >
+                  Clear
+                </VBtn>
+              </VCol>
+            </VRow>
+            <p class="text-caption text-medium-emphasis mt-3 mb-0">
+              Showing {{ filteredEmployees.length }} of {{ employees.length }}
+              employees
+            </p>
+          </VCardText>
+        </VCard>
+      </VExpandTransition>
+
       <!-- ── Employee Table ── -->
       <BaseTable
         search-data-tour="employee-search"
@@ -1320,7 +1505,7 @@ onUnmounted(() => {
             : 'JO Employees DTR'
         "
         :headers="TABLE_HEADERS"
-        :items="employees"
+        :items="filteredEmployees"
         :loading="loading"
         :items-per-page="10"
         searchable
